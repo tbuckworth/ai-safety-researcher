@@ -1,0 +1,8 @@
+{
+  "name": "researcher",
+  "description": "Automated AI Safety R&D Agent — an end-to-end research workflow for systematic literature review, hypothesis generation, experimental design, and knowledge synthesis in AI safety.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Titus"
+  }
+}

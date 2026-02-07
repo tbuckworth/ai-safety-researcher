@@ -1,0 +1,12 @@
+# Research output artefacts (generated per-run)
+output/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# OS files
+.DS_Store
+
+# Environment / secrets
+.env
+.env.*

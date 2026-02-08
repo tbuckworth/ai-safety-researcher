@@ -4,20 +4,23 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 
 ## Project Context
 
-- **Purpose**: End-to-end AI safety research automation — from topic scoping through literature review, hypothesis generation, experimental design, and final synthesis.
-- **Architecture**: Multi-agent pipeline where specialised agents handle each research phase.
+- **Purpose**: End-to-end AI safety research automation — from topic clarification through literature review, novelty assessment, fail-fast experiment design (Steinhardt method), experiment execution, and LaTeX paper compilation.
+- **Architecture**: Hub-and-spoke orchestrator. The `/researcher` command is the sole hub — it handles all user dialogue and dispatches leaf-node agents via Task. Agents never interact with users or spawn other agents.
 - **Entry point**: `/researcher <topic>` slash command.
 
 ## Key Directories
 
-- `agents/` — Agent definitions (one per research phase)
-- `commands/` — Slash command entry points
+- `agents/` — Agent definitions (7 agents: search-planner, search, novelty-analyst, criteria, decomposition, experiment, report)
+- `commands/` — Slash command entry points (orchestrator)
 - `skills/` — Auto-trigger skill definitions
-- `docs/` — Architecture and workflow specifications
+- `docs/` — Architecture and workflow specifications (WORKFLOW.md is the master document)
+- `templates/` — LaTeX templates for paper compilation
 - `output/` — Research artefacts (gitignored)
 
 ## Development Notes
 
-- This plugin has its own isolated settings — it does NOT use the user's universal Claude Code configuration.
-- Agents are designed to be composable: they can run standalone or as part of the pipeline.
-- All research artefacts are written as markdown to `output/`.
+- This plugin has its own isolated settings in `.claude/settings.local.json`.
+- Agents are thin leaf workers: they read input files, do focused work, write output files.
+- The orchestrator writes `state.md` after every step for context recovery.
+- All research artefacts are written to `output/<run-id>/`.
+- The workflow is interactive and iterative — Steps 3, 4, and 6 can loop back to earlier steps.

@@ -2,91 +2,141 @@
 
 ## Overview
 
-The AI Safety R&D Agent is a multi-agent system built as a Claude Code plugin. It orchestrates a structured research workflow through a pipeline of specialised agents, each responsible for a distinct phase of the research process.
+The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 9-step research workflow using a hub-and-spoke architecture. A single orchestrator command manages all user dialogue and dispatches specialised leaf-node agents for focused work.
 
 ## Design Principles
 
-1. **Modularity** — Each research phase is handled by a dedicated agent with a focused system prompt and toolset.
-2. **Composability** — Agents can be invoked independently or as part of the full pipeline.
-3. **Transparency** — Every step produces artefacts (markdown files) that the user can inspect and steer.
-4. **Iterability** — The workflow supports looping back to earlier phases based on review findings.
+1. **Hub-and-spoke** — The orchestrator (`/researcher`) is the sole hub. It handles all user interaction and spawns all agents. Agents are leaf workers that never interact with users or spawn other agents.
+2. **Fail fast** — The Steinhardt decomposition method orders experiments by information rate (lambda), testing the riskiest components first.
+3. **State persistence** — Every step writes to `state.md`, enabling recovery from context compaction.
+4. **Iterative** — The workflow supports looping between steps when the user or the evidence demands it.
+5. **Transparency** — Every step produces markdown artefacts that the user can inspect, steer, and override.
 
-## Agent Pipeline
+## Pipeline
 
 ```
 /researcher <topic>
     │
     ▼
-┌─────────────────────┐
-│  1. Scoping Agent    │  — Refine the research question, define scope & constraints
-└─────────┬───────────┘
-          ▼
-┌─────────────────────┐
-│  2. Literature Agent │  — Discover, retrieve, and synthesise relevant work
-└─────────┬───────────┘
-          ▼
-┌─────────────────────┐
-│  3. Analysis Agent   │  — Identify gaps, tensions, and open problems
-└─────────┬───────────┘
-          ▼
-┌─────────────────────┐
-│  4. Hypothesis Agent │  — Generate and rank candidate hypotheses
-└─────────┬───────────┘
-          ▼
-┌─────────────────────┐
-│  5. Experiment Agent │  — Design experiments / evaluation protocols
-└─────────┬───────────┘
-          ▼
-┌─────────────────────┐
-│  6. Critique Agent   │  — Adversarial review of the full research plan
-└─────────┬───────────┘
-          ▼
-┌─────────────────────┐
-│  7. Synthesis Agent  │  — Compile final report and recommendations
-└─────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATOR                              │
+│  (commands/researcher.md — handles all user dialogue & loops)    │
+│                                                                  │
+│  Step 1: Clarify ◄──────────────────────────────────────────┐    │
+│    │ (direct dialogue)                                      │    │
+│    ▼                                                        │    │
+│  Step 2: Research ──────────────────────────────────────┐    │    │
+│    │ ┌─────────────────┐   ┌──────────┐ x3 parallel    │    │    │
+│    ├─┤ search-planner  ├──►│  search   │───────────►    │    │    │
+│    │ └─────────────────┘   └──────────┘                │    │    │
+│    ▼                                              loop │    │    │
+│  Step 3: Novelty ─────────────────────────────────┘    │    │    │
+│    │ ┌─────────────────┐                               │    │    │
+│    ├─┤ novelty-analyst  │                               │    │    │
+│    │ └─────────────────┘                          loop │    │    │
+│    ▼                                              ┌────┘    │    │
+│  Step 4: Criteria ────────────────────────────────┤         │    │
+│    │ ┌─────────────────┐                          └────┐    │    │
+│    ├─┤    criteria      │                               │    │    │
+│    │ └─────────────────┘                               │    │    │
+│    ▼                                              loop │    │    │
+│  Step 5: Decompose ───────────────────────────────┘    │    │    │
+│    │ ┌─────────────────┐                                    │    │
+│    ├─┤  decomposition   │                                    │    │
+│    │ └─────────────────┘                                    │    │
+│    ▼                                                        │    │
+│  Step 6: Report Plan (direct dialogue) ─────────────────────┘    │
+│    │                                                             │
+│    ▼                                                             │
+│  Step 7: Confirm Fail-Fast (direct dialogue)                     │
+│    │                                                             │
+│    ▼                                                             │
+│  Step 8: Execute ────────────────────────────────────────────────┘
+│    │ ┌─────────────────┐  (one per experiment, lambda order)
+│    ├─┤   experiment     │  fail → stop or pivot
+│    │ └─────────────────┘  pass → continue + write up
+│    ▼
+│  Step 9: Report
+│    │ ┌─────────────────┐
+│    ├─┤     report       │  → LaTeX paper
+│    │ └─────────────────┘
+│    ▼
+│  Done
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+## Agent Inventory
+
+| Agent | File | Step | Model | Purpose |
+|-------|------|------|-------|---------|
+| search-planner | `agents/search-planner.md` | 2 | sonnet | Creates structured search plan from topic + clarifications |
+| search | `agents/search.md` | 2 | sonnet | Executes a single search task (parallelisable, multiple instances) |
+| novelty-analyst | `agents/novelty-analyst.md` | 3 | opus | Assesses whether the idea has been done before |
+| criteria | `agents/criteria.md` | 4 | opus | Identifies SOTA, success criteria, benchmarks |
+| decomposition | `agents/decomposition.md` | 5 | opus | Steinhardt decomposition: components, P_success, T, lambda ordering |
+| experiment | `agents/experiment.md` | 8 | opus | Executes a single experiment, reports pass/fail |
+| report | `agents/report.md` | 9 | opus | Compiles all artefacts into LaTeX paper with real BibTeX |
 
 ## Directory Layout
 
 ```
 researcher/
+├── .claude/
+│   └── settings.local.json         # Plugin-specific permissions
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin manifest
+│   └── plugin.json                  # Plugin manifest
 ├── commands/
-│   └── researcher.md            # Entry-point slash command
+│   └── researcher.md                # Orchestrator slash command (9-step workflow)
 ├── skills/
 │   └── research-workflow/
-│       └── SKILL.md             # Auto-trigger skill definition
+│       └── SKILL.md                 # Auto-trigger skill definition
 ├── agents/
-│   ├── scoping-agent.md         # Phase 1: Scoping
-│   ├── literature-agent.md      # Phase 2: Literature review
-│   ├── analysis-agent.md        # Phase 3: Gap analysis
-│   ├── hypothesis-agent.md      # Phase 4: Hypothesis generation
-│   ├── experiment-agent.md      # Phase 5: Experiment design
-│   ├── critique-agent.md        # Phase 6: Adversarial review
-│   └── synthesis-agent.md       # Phase 7: Final synthesis
+│   ├── search-planner.md            # Step 2: Search plan creation
+│   ├── search.md                    # Step 2: Single search execution
+│   ├── novelty-analyst.md           # Step 3: Novelty assessment
+│   ├── criteria.md                  # Step 4: Success criteria
+│   ├── decomposition.md             # Step 5: Steinhardt decomposition
+│   ├── experiment.md                # Step 8: Experiment execution
+│   └── report.md                    # Step 9: LaTeX paper compilation
+├── templates/
+│   ├── preamble.tex                 # LaTeX preamble
+│   ├── paper.tex                    # Main document template
+│   ├── Makefile                     # LaTeX build file
+│   └── sections/
+│       └── .gitkeep
 ├── hooks/
-│   └── (lifecycle hooks)
 ├── docs/
-│   ├── ARCHITECTURE.md          # This file
-│   └── WORKFLOW.md              # Detailed workflow specification
-├── output/                      # Research artefacts (gitignored)
-├── CLAUDE.md                    # Project-level Claude context
-└── README.md
+│   ├── ARCHITECTURE.md              # This file
+│   └── WORKFLOW.md                  # Detailed 9-step workflow specification
+├── output/                          # Research artefacts (gitignored)
+├── CLAUDE.md                        # Project-level Claude context
+└── .gitignore
 ```
 
-## Settings Isolation
+## State Management
 
-This plugin uses its own project-level settings to avoid inheriting universal Claude Code configuration. The `.claude/settings.local.json` in this repo defines permissions and behaviour specific to the research workflow.
+Every run writes `output/<run-id>/state.md` with YAML frontmatter tracking:
+- Current step and status
+- User clarifications and decisions
+- Novelty verdict
+- Criteria approval
+- Fail-fast agreement
+- Lambda table (component decomposition)
+- Experiment results
+
+The orchestrator re-reads `state.md` at the start of each step and after any context compaction event, enabling seamless recovery.
 
 ## Output Artefacts
 
-Each research run produces artefacts in an `output/<run-id>/` directory:
+Each run produces artefacts in `output/<run-id>/`:
 
-- `scope.md` — Refined research question and constraints
-- `literature.md` — Literature review and synthesis
-- `analysis.md` — Gap analysis and open problems
-- `hypotheses.md` — Ranked candidate hypotheses
-- `experiments.md` — Experimental designs and protocols
-- `critique.md` — Adversarial review notes
-- `report.md` — Final consolidated research report
+- `state.md` — Workflow state and history
+- `search-plan.md` — Approved search plan
+- `literature/` — Search results and synthesis
+- `novelty-assessment.md` — Novelty analysis
+- `success-criteria.md` — SOTA, benchmarks, publishability bar
+- `decomposition.md` — Lambda table and component details
+- `experiments/exp-NNN/` — Experiment plans, results, report sections
+- `references.bib` — Accumulated BibTeX citations
+- `citation-registry.md` — Citation key registry
+- `paper/` — Complete LaTeX project with compiled PDF

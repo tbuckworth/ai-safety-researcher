@@ -1,6 +1,6 @@
 # Research Workflow Specification
 
-This document defines the complete 9-step AI Safety R&D research workflow. The orchestrator (`commands/researcher.md`) reads this document at startup and follows it step by step.
+This document defines the complete 10-step AI Safety R&D research workflow. The orchestrator (`commands/researcher.md`) reads this document at startup and follows it step by step.
 
 ## Architecture Constraints
 
@@ -24,6 +24,10 @@ output/<run-id>/
 ├── novelty-assessment.md
 ├── success-criteria.md
 ├── decomposition.md            # Steinhardt lambda table + component details
+├── challenge/
+│   ├── assumption-analysis.md  # Unstated assumptions surfaced
+│   ├── steelman-review.md      # Senior researcher perspective
+│   └── pre-mortem.md           # Failure scenario analysis
 ├── experiments/
 │   ├── exp-001/
 │   │   ├── plan.md
@@ -238,7 +242,54 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 ---
 
-## Step 6: Report Planned Experiments
+## Step 6: Challenge the Research Plan
+
+**Agents**: `assumption-challenger`, `steelman`, `pre-mortem` (sequential)
+
+This step runs three sequential adversarial review passes on the research plan before committing to experiments. The goal is to catch flawed assumptions, blind spots, and predictable failure modes early.
+
+### Process
+
+1. **Create challenge directory**: `mkdir -p output/<run-id>/challenge/`
+
+2. **Spawn assumption-challenger agent**:
+   - Input: `state.md`, `literature/synthesis.md`, `novelty-assessment.md`, `success-criteria.md`, `decomposition.md`
+   - Output: `challenge/assumption-analysis.md`
+   - Wait for completion before proceeding.
+
+3. **Spawn steelman agent**:
+   - Input: same base artefacts + `challenge/assumption-analysis.md`
+   - Output: `challenge/steelman-review.md`
+   - Wait for completion before proceeding.
+
+4. **Spawn pre-mortem agent**:
+   - Input: same base artefacts + `challenge/assumption-analysis.md` + `challenge/steelman-review.md`
+   - Output: `challenge/pre-mortem.md`
+   - Wait for completion before proceeding.
+
+5. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
+   - Critical assumptions that need testing
+   - The steelman verdict (proceed / minor revisions / major revisions / rethink)
+   - Top failure scenarios and their mitigations
+
+6. **Present to user** via AskUserQuestion with options:
+   - "Proceed to experiment plan" -> Step 7
+   - "Revise the decomposition" -> loop to Step 5
+   - "Revise success criteria" -> loop to Step 4
+   - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3
+
+7. Update `state.md`: `current_step: 6, status: challenge_complete, challenge_outcome: <proceed/revise>`.
+
+### Loop Conditions
+
+- Revise decomposition -> Step 5
+- Revise criteria -> Step 4
+- Re-research -> Step 2
+- Re-scope -> Step 3
+
+---
+
+## Step 7: Report Planned Experiments
 
 **Actor**: Orchestrator (direct user dialogue)
 
@@ -249,6 +300,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
    - Which component it tests
    - Why it's ordered where it is (lambda rationale)
    - What a pass/fail means for the project
+   - **Key risks from the pre-mortem** that relate to this experiment
 3. Identify experiments that can run in parallel (independent components).
 4. Ask user to confirm: "Does each experiment test a crucial component? Any missing?"
 5. Allow user to:
@@ -261,23 +313,24 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 ---
 
-## Step 7: Confirm Fail-Fast Agreement
+## Step 8: Confirm Fail-Fast Agreement
 
 **Actor**: Orchestrator (direct user dialogue)
 
 ### Process
 
 1. State clearly: "If the highest-lambda experiment fails, the project will either terminate or pivot. Do you agree to this protocol?"
-2. Ask user to explicitly agree via AskUserQuestion:
+2. Present the **kill criteria from the pre-mortem** as recommended stopping conditions alongside the standard fail-fast agreement.
+3. Ask user to explicitly agree via AskUserQuestion:
    - "Yes, I agree — fail fast" -> proceed
    - "I want to discuss conditions" -> dialogue about which failures are fatal vs recoverable
    - "No, run all experiments regardless" -> note this, adjust workflow (all experiments run regardless of failure)
 
-3. Record the agreement in `state.md`: `fail_fast_agreement: true/false/conditional`.
+4. Record the agreement in `state.md`: `fail_fast_agreement: true/false/conditional`.
 
 ---
 
-## Step 8: Execute Experiments
+## Step 9: Execute Experiments
 
 **Agent**: `experiment` (one per experiment)
 
@@ -296,7 +349,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
    - Stop further experiments
    - Present failure to user: what failed, why, implications
    - Ask: "Pivot topic?" / "Adjust approach?" / "Write up the failure?"
-   - If "write up failure" -> skip to Step 9 with failure narrative
+   - If "write up failure" -> skip to Step 10 with failure narrative
 
 4. **On PASS**:
    - If possible, split: spawn next experiment AND spawn `experiment` agent to write `experiments/exp-NNN/report-section.md` (parallel execution)
@@ -308,14 +361,14 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 ---
 
-## Step 9: Compile Research Report
+## Step 10: Compile Research Report
 
 **Agent**: `report`
 
 ### Process
 
 1. Spawn `report` agent with:
-   - Input: ALL artefacts from the run directory
+   - Input: ALL artefacts from the run directory (including `challenge/` files)
    - Templates from `${CLAUDE_PLUGIN_ROOT}/templates/`
    - Output: `paper/` directory with complete LaTeX project
 
@@ -328,6 +381,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
    - **Initial Experiments & Results**: From completed experiment reports
    - **Planned Major Experiments**: From experiments not yet run (if any)
    - **Discussion**: Preliminary interpretation of results
+   - **Limitations**: Informed by the pre-mortem risk analysis and residual risks from `challenge/pre-mortem.md`
    - **Conclusion**: Empty section with placeholders for future work
    - **References**: Real BibTeX only — no fabricated citations
 
@@ -400,6 +454,7 @@ decisions:
     decision: "Success = >80% agreement between automated and human labels on top-100 features"
 novelty_verdict: NOVEL
 criteria_approved: true
+challenge_outcome: proceed
 fail_fast_agreement: true
 lambda_table:
   - component: "SAE training convergence"

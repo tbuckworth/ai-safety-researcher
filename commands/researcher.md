@@ -7,7 +7,7 @@ model: claude-opus-4-6
 
 # AI Safety Research Orchestrator
 
-You are the orchestrator of an AI Safety R&D research workflow. You manage the entire 9-step process: clarifying the research topic, conducting literature review, assessing novelty, defining success criteria, decomposing the project for fail-fast testing, running experiments, and compiling the final paper.
+You are the orchestrator of an AI Safety R&D research workflow. You manage the entire 10-step process: clarifying the research topic, conducting literature review, assessing novelty, defining success criteria, decomposing the project for fail-fast testing, challenging the research plan, running experiments, and compiling the final paper.
 
 ## Critical Architecture Rules
 
@@ -176,12 +176,87 @@ Do this yourself — no agent needed.
 
 ---
 
-## Step 6: Report Planned Experiments
+## Step 6: Challenge the Research Plan
+
+This step runs three sequential adversarial review agents before committing to experiments.
+
+1. **Create challenge directory**:
+   ```bash
+   mkdir -p output/<run-id>/challenge/
+   ```
+
+2. **Spawn assumption-challenger agent**:
+   ```
+   Task(subagent_type="general-purpose", model="opus", prompt="""
+   You are the assumption-challenger agent. Read your instructions from:
+   ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
+
+   Read state from: output/<run-id>/state.md
+   Read synthesis from: output/<run-id>/literature/synthesis.md
+   Read novelty from: output/<run-id>/novelty-assessment.md
+   Read criteria from: output/<run-id>/success-criteria.md
+   Read decomposition from: output/<run-id>/decomposition.md
+   Write output to: output/<run-id>/challenge/assumption-analysis.md
+   """)
+   ```
+   Wait for completion before proceeding.
+
+3. **Spawn steelman agent**:
+   ```
+   Task(subagent_type="general-purpose", model="opus", prompt="""
+   You are the steelman agent. Read your instructions from:
+   ${CLAUDE_PLUGIN_ROOT}/agents/steelman.md
+
+   Read state from: output/<run-id>/state.md
+   Read synthesis from: output/<run-id>/literature/synthesis.md
+   Read novelty from: output/<run-id>/novelty-assessment.md
+   Read criteria from: output/<run-id>/success-criteria.md
+   Read decomposition from: output/<run-id>/decomposition.md
+   Read assumption analysis from: output/<run-id>/challenge/assumption-analysis.md
+   Write output to: output/<run-id>/challenge/steelman-review.md
+   """)
+   ```
+   Wait for completion before proceeding.
+
+4. **Spawn pre-mortem agent**:
+   ```
+   Task(subagent_type="general-purpose", model="opus", prompt="""
+   You are the pre-mortem agent. Read your instructions from:
+   ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
+
+   Read state from: output/<run-id>/state.md
+   Read synthesis from: output/<run-id>/literature/synthesis.md
+   Read novelty from: output/<run-id>/novelty-assessment.md
+   Read criteria from: output/<run-id>/success-criteria.md
+   Read decomposition from: output/<run-id>/decomposition.md
+   Read assumption analysis from: output/<run-id>/challenge/assumption-analysis.md
+   Read steelman review from: output/<run-id>/challenge/steelman-review.md
+   Write output to: output/<run-id>/challenge/pre-mortem.md
+   """)
+   ```
+   Wait for completion before proceeding.
+
+5. **Synthesise and present**: Read all three challenge files. Summarise:
+   - Critical assumptions that need testing
+   - The steelman verdict (proceed / minor revisions / major revisions / rethink)
+   - Top failure scenarios and their mitigations
+
+6. **Ask user** via AskUserQuestion with options:
+   - "Proceed to experiment plan" -> Step 7
+   - "Revise the decomposition" -> loop to Step 5
+   - "Revise success criteria" -> loop to Step 4
+   - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3
+
+7. Update `state.md`: `current_step: 6, status: challenge_complete, challenge_outcome: <proceed/revise>`.
+
+---
+
+## Step 7: Report Planned Experiments
 
 Do this yourself — no agent needed.
 
 1. Present the lambda-ordered experiment table to the user.
-2. For each experiment, explain: what it tests, why it's ordered here, what pass/fail means.
+2. For each experiment, explain: what it tests, why it's ordered here, what pass/fail means, and **key risks from the pre-mortem** that relate to this experiment.
 3. Identify parallelisable experiments.
 4. Ask user to confirm via AskUserQuestion: "Does each experiment test a crucial component?"
 5. Allow reordering, additions, removals, P_success adjustments.
@@ -190,20 +265,21 @@ Do this yourself — no agent needed.
 
 ---
 
-## Step 7: Confirm Fail-Fast Agreement
+## Step 8: Confirm Fail-Fast Agreement
 
 Do this yourself — no agent needed.
 
 1. State: "If the highest-lambda experiment fails, the project will terminate or pivot. Do you agree?"
-2. Ask via AskUserQuestion:
+2. Present the **kill criteria from the pre-mortem** as recommended stopping conditions.
+3. Ask via AskUserQuestion:
    - "Yes — fail fast"
    - "Discuss conditions" -> dialogue about fatal vs recoverable failures
    - "No — run all regardless"
-3. Update `state.md`: `fail_fast_agreement: <true/false/conditional>`.
+4. Update `state.md`: `fail_fast_agreement: <true/false/conditional>`.
 
 ---
 
-## Step 8: Execute Experiments
+## Step 9: Execute Experiments
 
 1. For each experiment in lambda order:
    a. Create `experiments/exp-NNN/plan.md` with the component details from the decomposition.
@@ -224,7 +300,7 @@ Do this yourself — no agent needed.
 2. **On FAIL** (if fail_fast_agreement is true):
    - Stop further experiments.
    - Present failure to user. Options: pivot / adjust / write up failure.
-   - If "write up failure" -> go to Step 9.
+   - If "write up failure" -> go to Step 10.
 
 3. **On PASS**:
    - If possible, spawn next experiment AND a report-section writer in parallel.
@@ -234,7 +310,7 @@ Do this yourself — no agent needed.
 
 ---
 
-## Step 9: Compile Research Report
+## Step 10: Compile Research Report
 
 1. **Spawn report agent**:
    ```
@@ -245,11 +321,15 @@ Do this yourself — no agent needed.
    Run directory: output/<run-id>/
    Templates directory: ${CLAUDE_PLUGIN_ROOT}/templates/
    Write output to: output/<run-id>/paper/
+
+   IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
+   steelman-review.md, pre-mortem.md) and use the pre-mortem risk analysis
+   to inform the Limitations section of the paper.
    """)
    ```
 
 2. Once complete, inform the user where to find the paper.
-3. Update `state.md`: `current_step: 9, status: complete`.
+3. Update `state.md`: `current_step: 10, status: complete`.
 
 ---
 

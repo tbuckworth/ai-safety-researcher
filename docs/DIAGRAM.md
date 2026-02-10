@@ -12,10 +12,11 @@ flowchart TD
         S3["Step 3: Assess Novelty"]
         S4["Step 4: Define Success Criteria"]
         S5["Step 5: Steinhardt Decomposition"]
-        S6["Step 6: Report Experiment Plan"]
-        S7["Step 7: Confirm Fail-Fast"]
-        S8["Step 8: Execute Experiments"]
-        S9["Step 9: Compile Paper"]
+        S6["Step 6: Challenge Research Plan"]
+        S7["Step 7: Report Experiment Plan"]
+        S8["Step 8: Confirm Fail-Fast"]
+        S9["Step 9: Execute Experiments"]
+        S10["Step 10: Compile Paper"]
         Done(["Done — paper.pdf"])
 
         S1 -->|"user answers 3-5 Qs"| S2
@@ -26,7 +27,8 @@ flowchart TD
         S6 --> S7
         S7 --> S8
         S8 --> S9
-        S9 --> Done
+        S9 --> S10
+        S10 --> Done
     end
 
     %% Loop-backs
@@ -34,7 +36,10 @@ flowchart TD
     S4 -.->|"disagree w/ SOTA"| S2
     S4 -.->|"disagree w/ benchmarks"| S3
     S6 -.->|"revise decomposition"| S5
-    S8 -.->|"FAIL → pivot topic"| S1
+    S6 -.->|"revise criteria"| S4
+    S6 -.->|"re-research"| S2
+    S7 -.->|"revise decomposition"| S5
+    S9 -.->|"FAIL → pivot topic"| S1
 
     %% Agents
     SP["search-planner ⚡"]:::agent --> S2
@@ -42,17 +47,21 @@ flowchart TD
     NA["novelty-analyst"]:::agent --> S3
     CR["criteria"]:::agent --> S4
     DE["decomposition"]:::agent --> S5
-    EX["experiment ×N"]:::agent --> S8
-    RE["report"]:::agent --> S9
+    AC["assumption-challenger"]:::agent --> S6
+    SM2["steelman"]:::agent --> S6
+    PM["pre-mortem"]:::agent --> S6
+    EX["experiment ×N"]:::agent --> S9
+    RE["report"]:::agent --> S10
 
     %% User interaction points
     S1 ~~~ U1(["🗣 User dialogue"]):::user
     S2 ~~~ U2(["🗣 Approve search plan"]):::user
     S3 ~~~ U3(["🗣 Novelty verdict review"]):::user
     S4 ~~~ U4(["🗣 Criteria approval"]):::user
-    S6 ~~~ U6(["🗣 Experiment plan review"]):::user
-    S7 ~~~ U7(["🗣 Fail-fast agreement"]):::user
-    S8 ~~~ U8(["🗣 Failure triage"]):::user
+    S6 ~~~ U6c(["🗣 Challenge outcome"]):::user
+    S7 ~~~ U7(["🗣 Experiment plan review"]):::user
+    S8 ~~~ U8(["🗣 Fail-fast agreement"]):::user
+    S9 ~~~ U9(["🗣 Failure triage"]):::user
 
     classDef agent fill:#4a9eff,stroke:#2670c2,color:#fff
     classDef user fill:#f5a623,stroke:#d48b0c,color:#fff
@@ -72,8 +81,11 @@ flowchart LR
         A3["novelty-analyst\n(opus)"]
         A4["criteria\n(opus)"]
         A5["decomposition\n(opus)"]
-        A6["experiment\n(opus)"]
-        A7["report\n(opus)"]
+        A6["assumption-challenger\n(opus)"]
+        A7["steelman\n(opus)"]
+        A8["pre-mortem\n(opus)"]
+        A9["experiment\n(opus)"]
+        A10["report\n(opus)"]
     end
 
     subgraph State["Persistent State"]
@@ -87,8 +99,11 @@ flowchart LR
     O -->|"Task()"| A3
     O -->|"Task()"| A4
     O -->|"Task()"| A5
-    O -->|"Task() ×N"| A6
+    O -->|"Task()"| A6
     O -->|"Task()"| A7
+    O -->|"Task()"| A8
+    O -->|"Task() ×N"| A9
+    O -->|"Task()"| A10
 
     A1 -->|writes| AR
     A2 -->|writes| AR
@@ -97,6 +112,9 @@ flowchart LR
     A5 -->|writes| AR
     A6 -->|writes| AR
     A7 -->|writes| AR
+    A8 -->|writes| AR
+    A9 -->|writes| AR
+    A10 -->|writes| AR
 
     O <-->|"read/write"| SM
     O <-->|"read"| AR
@@ -136,6 +154,7 @@ flowchart TD
     OUT --> NOV["novelty-assessment.md"]
     OUT --> SC["success-criteria.md"]
     OUT --> DEC["decomposition.md"]
+    OUT --> CHL["challenge/"]
     OUT --> EXP["experiments/"]
     OUT --> REF["references.bib"]
     OUT --> CIT["citation-registry.md"]
@@ -145,6 +164,10 @@ flowchart TD
     LIT --> L2["search-002-blogs.md"]
     LIT --> L3["search-003-community.md"]
     LIT --> L4["synthesis.md"]
+
+    CHL --> CH1["assumption-analysis.md"]
+    CHL --> CH2["steelman-review.md"]
+    CHL --> CH3["pre-mortem.md"]
 
     EXP --> E1["exp-001/"]
     EXP --> E2["exp-002/"]

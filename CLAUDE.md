@@ -10,7 +10,7 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 
 ## Key Directories
 
-- `agents/` — Agent definitions (7 agents: search-planner, search, novelty-analyst, criteria, decomposition, experiment, report)
+- `agents/` — Agent definitions (10 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, steelman, pre-mortem, experiment, report)
 - `commands/` — Slash command entry points (orchestrator)
 - `skills/` — Auto-trigger skill definitions
 - `docs/` — Architecture and workflow specifications (WORKFLOW.md is the master document)
@@ -23,4 +23,4 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 - Agents are thin leaf workers: they read input files, do focused work, write output files.
 - The orchestrator writes `state.md` after every step for context recovery.
 - All research artefacts are written to `output/<run-id>/`.
-- The workflow is interactive and iterative — Steps 3, 4, and 6 can loop back to earlier steps.
+- The workflow is interactive and iterative — Steps 3, 4, 6, and 7 can loop back to earlier steps.

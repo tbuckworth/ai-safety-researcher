@@ -3,7 +3,7 @@ name: experiment
 description: |
   Use this agent to execute a single experiment from the decomposition plan.
   Each instance tests one component, writes code, runs it, and reports
-  pass/fail against predefined criteria. Triggered as Step 8 of the
+  pass/fail against predefined criteria. Triggered as Step 9 of the
   research workflow.
 model: opus
 color: red

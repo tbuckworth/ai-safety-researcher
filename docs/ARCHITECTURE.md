@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 9-step research workflow using a hub-and-spoke architecture. A single orchestrator command manages all user dialogue and dispatches specialised leaf-node agents for focused work.
+The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 10-step research workflow using a hub-and-spoke architecture. A single orchestrator command manages all user dialogue and dispatches specialised leaf-node agents for focused work.
 
 ## Design Principles
 
@@ -41,22 +41,29 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 9-step resea
 │    │ └─────────────────┘                               │    │    │
 │    ▼                                              loop │    │    │
 │  Step 5: Decompose ───────────────────────────────┘    │    │    │
-│    │ ┌─────────────────┐                                    │    │
-│    ├─┤  decomposition   │                                    │    │
-│    │ └─────────────────┘                                    │    │
+│    │ ┌─────────────────┐                               │    │    │
+│    ├─┤  decomposition   │                               │    │    │
+│    │ └─────────────────┘                               │    │    │
+│    ▼                                              loop │    │    │
+│  Step 6: Challenge ───────────────────────────────┘    │    │    │
+│    │ ┌──────────────────────┐  (sequential)            │    │    │
+│    ├─┤ assumption-challenger │                          │    │    │
+│    ├─┤ steelman             │                          │    │    │
+│    ├─┤ pre-mortem           │                               │    │
+│    │ └──────────────────────┘                               │    │
 │    ▼                                                        │    │
-│  Step 6: Report Plan (direct dialogue) ─────────────────────┘    │
+│  Step 7: Report Plan (direct dialogue) ─────────────────────┘    │
 │    │                                                             │
 │    ▼                                                             │
-│  Step 7: Confirm Fail-Fast (direct dialogue)                     │
+│  Step 8: Confirm Fail-Fast (direct dialogue)                     │
 │    │                                                             │
 │    ▼                                                             │
-│  Step 8: Execute ────────────────────────────────────────────────┘
+│  Step 9: Execute ────────────────────────────────────────────────┘
 │    │ ┌─────────────────┐  (one per experiment, lambda order)
 │    ├─┤   experiment     │  fail → stop or pivot
 │    │ └─────────────────┘  pass → continue + write up
 │    ▼
-│  Step 9: Report
+│  Step 10: Report
 │    │ ┌─────────────────┐
 │    ├─┤     report       │  → LaTeX paper
 │    │ └─────────────────┘
@@ -74,8 +81,11 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 9-step resea
 | novelty-analyst | `agents/novelty-analyst.md` | 3 | opus | Assesses whether the idea has been done before |
 | criteria | `agents/criteria.md` | 4 | opus | Identifies SOTA, success criteria, benchmarks |
 | decomposition | `agents/decomposition.md` | 5 | opus | Steinhardt decomposition: components, P_success, T, lambda ordering |
-| experiment | `agents/experiment.md` | 8 | opus | Executes a single experiment, reports pass/fail |
-| report | `agents/report.md` | 9 | opus | Compiles all artefacts into LaTeX paper with real BibTeX |
+| assumption-challenger | `agents/assumption-challenger.md` | 6 | opus | Surfaces unstated assumptions in the research plan |
+| steelman | `agents/steelman.md` | 6 | opus | Senior researcher review — simpler paths, blind spots, honest feedback |
+| pre-mortem | `agents/pre-mortem.md` | 6 | opus | Failure scenario analysis — root causes, early warnings, mitigations |
+| experiment | `agents/experiment.md` | 9 | opus | Executes a single experiment, reports pass/fail |
+| report | `agents/report.md` | 10 | opus | Compiles all artefacts into LaTeX paper with real BibTeX |
 
 ## Directory Layout
 
@@ -86,7 +96,7 @@ researcher/
 ├── .claude-plugin/
 │   └── plugin.json                  # Plugin manifest
 ├── commands/
-│   └── researcher.md                # Orchestrator slash command (9-step workflow)
+│   └── researcher.md                # Orchestrator slash command (10-step workflow)
 ├── skills/
 │   └── research-workflow/
 │       └── SKILL.md                 # Auto-trigger skill definition
@@ -96,8 +106,11 @@ researcher/
 │   ├── novelty-analyst.md           # Step 3: Novelty assessment
 │   ├── criteria.md                  # Step 4: Success criteria
 │   ├── decomposition.md             # Step 5: Steinhardt decomposition
-│   ├── experiment.md                # Step 8: Experiment execution
-│   └── report.md                    # Step 9: LaTeX paper compilation
+│   ├── assumption-challenger.md     # Step 6: Assumption analysis
+│   ├── steelman.md                  # Step 6: Senior researcher review
+│   ├── pre-mortem.md                # Step 6: Failure scenario analysis
+│   ├── experiment.md                # Step 9: Experiment execution
+│   └── report.md                    # Step 10: LaTeX paper compilation
 ├── templates/
 │   ├── preamble.tex                 # LaTeX preamble
 │   ├── paper.tex                    # Main document template
@@ -107,7 +120,7 @@ researcher/
 ├── hooks/
 ├── docs/
 │   ├── ARCHITECTURE.md              # This file
-│   └── WORKFLOW.md                  # Detailed 9-step workflow specification
+│   └── WORKFLOW.md                  # Detailed 10-step workflow specification
 ├── output/                          # Research artefacts (gitignored)
 ├── CLAUDE.md                        # Project-level Claude context
 └── .gitignore
@@ -136,6 +149,7 @@ Each run produces artefacts in `output/<run-id>/`:
 - `novelty-assessment.md` — Novelty analysis
 - `success-criteria.md` — SOTA, benchmarks, publishability bar
 - `decomposition.md` — Lambda table and component details
+- `challenge/` — Assumption analysis, steelman review, pre-mortem
 - `experiments/exp-NNN/` — Experiment plans, results, report sections
 - `references.bib` — Accumulated BibTeX citations
 - `citation-registry.md` — Citation key registry

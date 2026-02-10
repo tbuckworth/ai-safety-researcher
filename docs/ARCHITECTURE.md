@@ -120,6 +120,7 @@ researcher/
 ├── hooks/
 ├── docs/
 │   ├── ARCHITECTURE.md              # This file
+│   ├── DIAGRAM.md                   # Mermaid architecture diagrams
 │   └── WORKFLOW.md                  # Detailed 10-step workflow specification
 ├── output/                          # Research artefacts (gitignored)
 ├── CLAUDE.md                        # Project-level Claude context

@@ -3,7 +3,7 @@ name: report
 description: |
   Use this agent to compile all research artefacts into a LaTeX paper.
   Produces a complete paper with title, abstract, sections, real BibTeX
-  references, and optionally compiles to PDF. Triggered as Step 9 of the
+  references, and optionally compiles to PDF. Triggered as Step 10 of the
   research workflow.
 model: opus
 color: white

@@ -96,7 +96,11 @@ researcher/
 ├── .claude-plugin/
 │   └── plugin.json                  # Plugin manifest
 ├── commands/
-│   └── researcher.md                # Orchestrator slash command (10-step workflow)
+│   ├── researcher.md                # Interactive orchestrator (10-step workflow)
+│   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
+│   └── researcher-auto-email.md     # Autonomous email composer (sends results)
+├── scripts/
+│   └── researcher-cron.sh           # Cron wrapper: issue pickup, step loop, repo creation
 ├── skills/
 │   └── research-workflow/
 │       └── SKILL.md                 # Auto-trigger skill definition
@@ -120,9 +124,11 @@ researcher/
 ├── hooks/
 ├── docs/
 │   ├── ARCHITECTURE.md              # This file
+│   ├── AUTONOMOUS.md                # Autonomous mode setup and reference
 │   ├── DIAGRAM.md                   # Mermaid architecture diagrams
 │   └── WORKFLOW.md                  # Detailed 10-step workflow specification
 ├── output/                          # Research artefacts (gitignored)
+├── logs/                            # Autonomous mode logs (gitignored)
 ├── CLAUDE.md                        # Project-level Claude context
 └── .gitignore
 ```

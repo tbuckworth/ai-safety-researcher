@@ -335,7 +335,7 @@ send_email() {
     cd "$REPO_DIR"
     claude --print \
         --dangerously-skip-permissions \
-        --model claude-sonnet-4-6 \
+        --model claude-opus-4-6 \
         --allowedTools 'Read,Glob,Bash,mcp__gmail__send_email,mcp__claude_ai_Gmail__gmail_get_profile' \
         "/researcher-auto-email ${RUN_DIR}" \
         2>&1 | tee "${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"

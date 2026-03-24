@@ -2,7 +2,7 @@
 description: Compose and send autonomous research results email
 argument-hint: <run-directory>
 allowed-tools: [Read, Glob, Bash, mcp__gmail__send_email, mcp__claude_ai_Gmail__gmail_get_profile]
-model: claude-sonnet-4-6
+model: claude-opus-4-6
 ---
 
 # Autonomous Research Email Composer
@@ -15,7 +15,7 @@ The run directory is: **{{argument}}**
 
 ## Instructions
 
-1. **Get user email**: Use `mcp__claude_ai_Gmail__gmail_get_profile` to get the authenticated user's email address.
+1. **Get recipient email**: Use `mcp__claude_ai_Gmail__gmail_get_profile` to get the authenticated user's email address. Send ONLY to this address — never to anyone else.
 
 2. **Read artifacts** from the run directory:
    - `state.md` — run status, topic, novelty verdict, experiment results summary

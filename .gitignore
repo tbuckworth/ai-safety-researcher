@@ -1,6 +1,9 @@
 # Research output artefacts (generated per-run)
 output/
 
+# Autonomous mode logs
+logs/
+
 # Claude Code local settings
 .claude/settings.local.json
 

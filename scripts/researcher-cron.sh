@@ -16,13 +16,21 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-LOG_DIR="${REPO_DIR}/logs"
-OUTPUT_DIR="${REPO_DIR}/output"
+
+# Research output goes on the HDD (2.7TB) to avoid filling the SSD
+HDD="/media/titus/big"
+OUTPUT_DIR="${HDD}/researcher-output"
+LOG_DIR="${OUTPUT_DIR}/logs"
+
 LOCKFILE="/tmp/researcher-auto.lock"
 TIMEOUT_HOURS=4
 TOPIC="${1:-}"
 
-mkdir -p "$LOG_DIR" "$OUTPUT_DIR"
+mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
+
+# Symlink logs and output into the plugin dir for convenience
+ln -sfn "$OUTPUT_DIR" "${REPO_DIR}/output"
+ln -sfn "$LOG_DIR" "${REPO_DIR}/logs"
 
 log() { echo "$(date -Iseconds) $*"; }
 
@@ -51,12 +59,16 @@ if ! command -v claude &>/dev/null; then
     exit 1
 fi
 
+if [ ! -d "$HDD" ]; then
+    log "ERROR: HDD not mounted at ${HDD}. Exiting."
+    exit 1
+fi
+
 # --- Find or create run ---
 RUN_DIR=""
 ISSUE_NUMBER=""
 
 find_in_progress_run() {
-    # Look for most recent run with non-terminal status
     for state_file in $(ls -1t "$OUTPUT_DIR"/*/state.md 2>/dev/null); do
         local status
         status=$(grep '^status:' "$state_file" | head -1 | awk '{print $2}')
@@ -69,7 +81,6 @@ find_in_progress_run() {
 }
 
 pick_issue() {
-    # Get research ideas that aren't already being researched or processed
     local issues
     issues=$(gh issue list --repo tbuckworth/tasks \
         --label "list:research-ideas" \
@@ -77,7 +88,6 @@ pick_issue() {
         --json number,title,body,labels \
         --limit 50)
 
-    # Filter out issues with status:claude-researching or status:claude-processed
     local picked
     picked=$(echo "$issues" | jq -r '
         [.[] | select(
@@ -97,7 +107,6 @@ pick_issue() {
 
     log "Picked issue #${ISSUE_NUMBER}: ${title}"
 
-    # Tag the issue — create label if needed (idempotent)
     gh label create "status:claude-researching" \
         --repo tbuckworth/tasks \
         --color "0E8A16" \
@@ -105,7 +114,6 @@ pick_issue() {
         2>/dev/null || true
     gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks --add-label "status:claude-researching"
 
-    # Set TOPIC from issue
     TOPIC="$title"
     if [ -n "$body" ] && [ "$body" != "null" ]; then
         TOPIC="${title}
@@ -124,7 +132,6 @@ create_run_dir() {
 
     mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge"
 
-    # Write initial state.md
     cat > "${RUN_DIR}/state.md" << STATEEOF
 ---
 run_id: ${run_id}
@@ -141,151 +148,11 @@ Autonomous research run initialized.
 Topic: $(echo "$TOPIC" | head -1)
 STATEEOF
 
-    # Write the full topic (including issue body) to a separate file
     echo "$TOPIC" > "${RUN_DIR}/topic.txt"
 
-    log "Created run directory: ${RUN_DIR}"
-}
-
-# Check for in-progress run first
-if IN_PROGRESS=$(find_in_progress_run); then
-    RUN_DIR="$IN_PROGRESS"
-    ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | awk '{print $2}')
-    [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
-    log "Resuming in-progress run: ${RUN_DIR}"
-elif [ -n "$TOPIC" ]; then
-    create_run_dir
-else
-    pick_issue
-    create_run_dir
-fi
-
-# --- Step loop ---
-START_TIME=$(date +%s)
-
-get_current_step() {
-    grep '^current_step:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
-}
-
-get_status() {
-    grep '^status:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
-}
-
-build_step_prompt() {
-    local step="$1"
-    local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
-    # Read the command file, strip YAML frontmatter, inject arguments
-    local cmd_body
-    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
-    # Replace placeholders with actual values
-    echo "$cmd_body" | sed "s|{{argument}}|${step} ${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
-}
-
-build_email_prompt() {
-    local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
-    local cmd_body
-    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
-    echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
-}
-
-run_step() {
-    local step="$1"
-    local run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
-    local prev_step
-    prev_step=$(get_current_step)
-
-    log "Starting step ${step}..."
-
-    cd "$REPO_DIR"
-    build_step_prompt "$step" | claude --print \
-        --dangerously-skip-permissions \
-        --model claude-opus-4-6 \
-        --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
-        2>&1 | tee "$run_log"
-
-    local exit_code=${PIPESTATUS[0]}
-    local new_step
-    new_step=$(get_current_step)
-    local new_status
-    new_status=$(get_status)
-
-    # Check if state actually advanced
-    if [ "$new_step" = "$prev_step" ] && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ]; then
-        log "ERROR: Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
-        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
-        return 1
-    fi
-
-    log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
-    return 0
-}
-
-# Main step loop
-while true; do
-    CURRENT_STEP=$(get_current_step)
-    STATUS=$(get_status)
-
-    # Terminal states
-    case "$STATUS" in
-        complete|failed|aborted_rethink)
-            log "Run reached terminal state: ${STATUS}"
-            break
-            ;;
-    esac
-
-    # Timeout check
-    ELAPSED=$(( $(date +%s) - START_TIME ))
-    if [ $ELAPSED -gt $(( TIMEOUT_HOURS * 3600 )) ]; then
-        log "WARN: Timeout (${TIMEOUT_HOURS}h) reached at step ${CURRENT_STEP}. Fast-tracking to report."
-        if [ "$CURRENT_STEP" -ge 5 ]; then
-            run_step 10 || true
-        fi
-        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
-        break
-    fi
-
-    # Determine next step
-    NEXT_STEP=$((CURRENT_STEP + 1))
-    [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
-
-    # Step 10 is the last research step
-    if [ "$NEXT_STEP" -gt 10 ]; then
-        log "All steps completed."
-        break
-    fi
-
-    if ! run_step "$NEXT_STEP"; then
-        log "ERROR: Step ${NEXT_STEP} failed. Stopping."
-        break
-    fi
-done
-
-# --- Post-completion: Create GitHub repo ---
-STATUS=$(get_status)
-RUN_ID=$(grep '^run_id:' "${RUN_DIR}/state.md" | head -1 | sed 's/run_id: *//')
-TOPIC_LINE=$(grep '^topic:' "${RUN_DIR}/state.md" | head -1 | sed 's/topic: *"*//;s/"*$//')
-REPO_URL=""
-
-create_github_repo() {
-    local slug
-    slug="research-$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 40)"
-
-    log "Creating GitHub repo: tbuckworth/${slug}"
-
-    gh repo create "tbuckworth/${slug}" --public \
-        --description "AI safety research: ${TOPIC_LINE} (autonomous)" 2>/dev/null || true
-
-    local tmp_repo="/tmp/researcher-repo-$$"
-    rm -rf "$tmp_repo"
-
-    if ! gh repo clone "tbuckworth/${slug}" "$tmp_repo" 2>/dev/null; then
-        log "ERROR: Could not clone repo. Skipping GitHub push."
-        return 1
-    fi
-
-    # Generate .gitignore — exclude large binary files (GitHub 100MB hard limit)
-    cat > "${tmp_repo}/.gitignore" << 'GIEOF'
-# Model checkpoints and weights
+    # .gitignore for when we git-init this directory later
+    cat > "${RUN_DIR}/.gitignore" << 'GIEOF'
+# Model checkpoints and weights (GitHub 100MB hard limit)
 *.pt
 *.pth
 *.bin
@@ -321,29 +188,137 @@ tensorboard/
 *.parquet
 *.arrow
 
-# OS files
+# OS / temp files
 .DS_Store
 Thumbs.db
-
-# Temp files
 *.tmp
 *.bak
 *.swp
 GIEOF
 
-    # Copy artifacts — skip files over 50MB (GitHub warns at 50MB, blocks at 100MB)
-    rsync -a \
-        --max-size=50M \
-        --exclude='venv/' \
-        --exclude='.venv/' \
-        --exclude='__pycache__/' \
-        --exclude='*.pt' \
-        --exclude='*.pth' \
-        --exclude='*.bin' \
-        --exclude='*.safetensors' \
-        --exclude='*.ckpt' \
-        --exclude='wandb/' \
-        "${RUN_DIR}/" "$tmp_repo/" 2>/dev/null || true
+    log "Created run directory: ${RUN_DIR}"
+}
+
+# Check for in-progress run first
+if IN_PROGRESS=$(find_in_progress_run); then
+    RUN_DIR="$IN_PROGRESS"
+    ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | awk '{print $2}')
+    [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
+    log "Resuming in-progress run: ${RUN_DIR}"
+elif [ -n "$TOPIC" ]; then
+    create_run_dir
+else
+    pick_issue
+    create_run_dir
+fi
+
+# --- Step loop ---
+START_TIME=$(date +%s)
+
+get_current_step() {
+    grep '^current_step:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
+}
+
+get_status() {
+    grep '^status:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
+}
+
+build_step_prompt() {
+    local step="$1"
+    local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
+    local cmd_body
+    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    echo "$cmd_body" | sed "s|{{argument}}|${step} ${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
+build_email_prompt() {
+    local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
+    local cmd_body
+    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
+run_step() {
+    local step="$1"
+    local run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
+    local prev_step
+    prev_step=$(get_current_step)
+
+    log "Starting step ${step}..."
+
+    cd "$REPO_DIR"
+    build_step_prompt "$step" | claude --print \
+        --dangerously-skip-permissions \
+        --model claude-opus-4-6 \
+        --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
+        2>&1 | tee "$run_log"
+
+    local exit_code=${PIPESTATUS[0]}
+    local new_step
+    new_step=$(get_current_step)
+    local new_status
+    new_status=$(get_status)
+
+    if [ "$new_step" = "$prev_step" ] && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ]; then
+        log "ERROR: Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
+        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+        return 1
+    fi
+
+    log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
+    return 0
+}
+
+# Main step loop
+while true; do
+    CURRENT_STEP=$(get_current_step)
+    STATUS=$(get_status)
+
+    case "$STATUS" in
+        complete|failed|aborted_rethink)
+            log "Run reached terminal state: ${STATUS}"
+            break
+            ;;
+    esac
+
+    ELAPSED=$(( $(date +%s) - START_TIME ))
+    if [ $ELAPSED -gt $(( TIMEOUT_HOURS * 3600 )) ]; then
+        log "WARN: Timeout (${TIMEOUT_HOURS}h) reached at step ${CURRENT_STEP}. Fast-tracking to report."
+        if [ "$CURRENT_STEP" -ge 5 ]; then
+            run_step 10 || true
+        fi
+        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+        break
+    fi
+
+    NEXT_STEP=$((CURRENT_STEP + 1))
+    [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
+
+    if [ "$NEXT_STEP" -gt 10 ]; then
+        log "All steps completed."
+        break
+    fi
+
+    if ! run_step "$NEXT_STEP"; then
+        log "ERROR: Step ${NEXT_STEP} failed. Stopping."
+        break
+    fi
+done
+
+# --- Post-completion: Create GitHub repo (git init in place, no copying) ---
+STATUS=$(get_status)
+RUN_ID=$(grep '^run_id:' "${RUN_DIR}/state.md" | head -1 | sed 's/run_id: *//')
+TOPIC_LINE=$(grep '^topic:' "${RUN_DIR}/state.md" | head -1 | sed 's/topic: *"*//;s/"*$//')
+REPO_URL=""
+
+create_github_repo() {
+    local slug
+    slug="research-$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 40)"
+
+    log "Creating GitHub repo: tbuckworth/${slug}"
+
+    gh repo create "tbuckworth/${slug}" --public \
+        --description "AI safety research: ${TOPIC_LINE} (autonomous)" 2>/dev/null || true
 
     # Generate README
     local abstract=""
@@ -351,7 +326,7 @@ GIEOF
         abstract=$(sed 's/\\[a-zA-Z]*{[^}]*}//g; s/\\[a-zA-Z]*//g; s/[{}]//g' "${RUN_DIR}/paper/sections/abstract.tex" | head -20)
     fi
 
-    cat > "${tmp_repo}/README.md" << READMEEOF
+    cat > "${RUN_DIR}/README.md" << READMEEOF
 # ${TOPIC_LINE}
 
 **Status**: ${STATUS}
@@ -376,28 +351,24 @@ ${abstract:-See paper/ directory for full results.}
 *Generated by the autonomous AI safety researcher agent.*
 READMEEOF
 
-    cd "$tmp_repo"
+    # Git init in place — .gitignore already excludes large files
+    cd "$RUN_DIR"
+    git init
+    git remote add origin "https://github.com/tbuckworth/${slug}.git"
     git add -A
-    git commit -m "$(cat <<'COMMITEOF'
-Research artifacts: automated research run
+    git commit -m "$(cat <<COMMITEOF
+Research artifacts: ${TOPIC_LINE}
+
+Autonomous research run (${STATUS}).
+Run ID: ${RUN_ID}
 
 Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
 COMMITEOF
 )" || true
 
-    git push origin main || true
-
-    # PR for audit trail
-    git checkout -b research/artifacts
-    git push -u origin research/artifacts 2>/dev/null || true
-    gh pr create \
-        --title "Research: ${TOPIC_LINE}" \
-        --body "Autonomous research run (${STATUS}). See paper/ for results." \
-        2>/dev/null || true
-    gh pr merge --squash --auto 2>/dev/null || true
+    git push -u origin main || true
 
     cd "$REPO_DIR"
-    rm -rf "$tmp_repo"
 
     REPO_URL="https://github.com/tbuckworth/${slug}"
     echo "$REPO_URL" > "${RUN_DIR}/.repo_url"

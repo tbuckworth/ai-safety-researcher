@@ -343,6 +343,14 @@ Do this yourself — no agent needed. This is trivial in autonomous mode.
       - NEVER run commands that delete files outside the experiment directory.
       - NEVER modify files outside the run directory: <run-dir>
       - Keep experiments concise and focused. Target < 30 minutes runtime.
+      - Do NOT create Python virtual environments inside the experiment directory.
+        Use the system Python or an existing venv.
+      - CLEAN UP after experiments: delete intermediate model checkpoints, keeping
+        only the final checkpoint if needed. Delete any .pt/.pth/.bin/.safetensors
+        files that are not essential to the results. The results.md and any small
+        CSV/JSON metric files are what matter — not multi-GB model weights.
+      - GitHub has a 100MB per-file hard limit. No single file in the experiment
+        directory should exceed 50MB.
       """)
       ```
    c. Read results.

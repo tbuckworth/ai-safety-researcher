@@ -119,3 +119,14 @@ Both produce valuable output: "here's why this idea doesn't work, and here's the
 
 **Experiment OOM on RTX 3090**:
 - The 24GB VRAM limit is enforced via agent prompts, not hardware. If an experiment OOMs, the agent logs it as a FAIL and continues.
+
+## Reviewing Results
+
+After a run completes, use the interactive review command:
+
+```bash
+/researcher-review                    # most recent run
+/researcher-review /path/to/run-dir   # specific run
+```
+
+This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand — experiment code, challenge analysis, literature, paper sections — to answer your questions.

@@ -246,10 +246,10 @@ This step runs three sequential adversarial review agents.
    Read criteria from: <run-dir>/success-criteria.md
    Read decomposition from: <run-dir>/decomposition.md
    Read assumption analysis from: <run-dir>/challenge/assumption-analysis.md
-   Write output to: <run-dir>/challenge/steelman-review.md
+   Return your review as text. Do NOT write any files.
    """)
    ```
-   Wait for completion.
+   Wait for completion. **Save the agent's returned text** to `<run-dir>/challenge/steelman-review.md` using the Write tool.
 
 4. **Spawn pre-mortem agent**:
    ```
@@ -403,7 +403,54 @@ Do this yourself — no agent needed. This is trivial in autonomous mode.
    cd <run-dir>/paper && tectonic paper.tex
    ```
 
-4. Update `state.md`: `current_step: 10, status: complete`.
+4. **Generate `briefing.md`** — a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:
+
+   ```markdown
+   # Research Briefing: <topic>
+
+   **Run ID**: <run-id>
+   **Status**: <complete/failed/negative result>
+   **Date**: <from run-id>
+
+   ## Topic & Motivation
+   <1-2 paragraphs from state.md clarifications>
+
+   ## Literature Findings
+   <Top 5 most relevant papers/sources from synthesis.md, with 1-line summaries>
+   <Key insight or gap identified>
+
+   ## Novelty
+   <Verdict: NOVEL/PARTIALLY_NOVEL/ALREADY_DONE>
+   <1-2 sentences on closest existing work and differentiation>
+
+   ## Experiment Design
+   <Lambda table from decomposition.md — component, P_success, T, lambda>
+   <Number of experiments planned vs executed>
+
+   ## Challenge Highlights
+   - **Critical assumptions**: <top 2-3 from assumption-analysis.md>
+   - **Steelman verdict**: <verdict + 1-sentence rationale>
+   - **Top failure scenario**: <#1 from pre-mortem.md>
+
+   ## Results
+   | # | Component | Result | Key Finding |
+   |---|-----------|--------|-------------|
+   <from experiment results>
+
+   <If negative result: 1-paragraph summary of why the approach doesn't work>
+
+   ## Paper Abstract
+   <from paper/sections/abstract.tex, stripped of LaTeX commands>
+
+   ## Surprises & Non-Obvious Findings
+   <Anything unexpected — results that contradicted assumptions, surprising
+    literature findings, experiments that passed/failed contrary to predictions>
+
+   ## Open Questions & Suggested Follow-Ups
+   <2-3 bullet points on what to investigate next>
+   ```
+
+5. Update `state.md`: `current_step: 10, status: complete`.
 
 ---
 

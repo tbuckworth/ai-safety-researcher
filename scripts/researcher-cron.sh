@@ -283,8 +283,67 @@ create_github_repo() {
         return 1
     fi
 
-    # Copy artifacts
-    cp -r "${RUN_DIR}"/* "$tmp_repo/" 2>/dev/null || true
+    # Generate .gitignore — exclude large binary files (GitHub 100MB hard limit)
+    cat > "${tmp_repo}/.gitignore" << 'GIEOF'
+# Model checkpoints and weights
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.h5
+*.onnx
+
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Training artifacts
+wandb/
+runs/
+tensorboard/
+*.tfevents*
+
+# Large data files
+*.tar
+*.tar.gz
+*.zip
+*.hdf5
+*.pkl
+*.npy
+*.npz
+*.parquet
+*.arrow
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.bak
+*.swp
+GIEOF
+
+    # Copy artifacts — skip files over 50MB (GitHub warns at 50MB, blocks at 100MB)
+    rsync -a \
+        --max-size=50M \
+        --exclude='venv/' \
+        --exclude='.venv/' \
+        --exclude='__pycache__/' \
+        --exclude='*.pt' \
+        --exclude='*.pth' \
+        --exclude='*.bin' \
+        --exclude='*.safetensors' \
+        --exclude='*.ckpt' \
+        --exclude='wandb/' \
+        "${RUN_DIR}/" "$tmp_repo/" 2>/dev/null || true
 
     # Generate README
     local abstract=""

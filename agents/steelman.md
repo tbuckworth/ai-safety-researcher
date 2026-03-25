@@ -8,7 +8,7 @@ description: |
   research workflow (second of three sequential challenge passes).
 model: opus
 color: red
-tools: ["Read", "Write"]
+tools: ["Read"]
 ---
 
 # Steelman Review Agent
@@ -56,7 +56,7 @@ Answer each of these questions with specificity and honesty:
 
 ## Output
 
-Write `challenge/steelman-review.md` to the run directory:
+Return your review as text (do NOT write any files). Use this exact format:
 
 ```markdown
 # Steelman Review

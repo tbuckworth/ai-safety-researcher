@@ -213,10 +213,10 @@ This step runs three sequential adversarial review agents before committing to e
    Read criteria from: output/<run-id>/success-criteria.md
    Read decomposition from: output/<run-id>/decomposition.md
    Read assumption analysis from: output/<run-id>/challenge/assumption-analysis.md
-   Write output to: output/<run-id>/challenge/steelman-review.md
+   Return your review as text. Do NOT write any files.
    """)
    ```
-   Wait for completion before proceeding.
+   Wait for completion. **Save the agent's returned text** to `output/<run-id>/challenge/steelman-review.md` using the Write tool.
 
 4. **Spawn pre-mortem agent**:
    ```

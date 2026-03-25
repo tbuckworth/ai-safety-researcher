@@ -178,11 +178,10 @@ run_step() {
     log "Starting step ${step}..."
 
     cd "$REPO_DIR"
-    claude --print \
+    echo "/researcher-auto-step ${step} ${RUN_DIR}" | claude --print \
         --dangerously-skip-permissions \
         --model claude-opus-4-6 \
         --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
-        "/researcher-auto-step ${step} ${RUN_DIR}" \
         2>&1 | tee "$run_log"
 
     local exit_code=${PIPESTATUS[0]}
@@ -333,11 +332,10 @@ create_github_repo || log "WARN: GitHub repo creation failed. Continuing to emai
 send_email() {
     log "Sending results email..."
     cd "$REPO_DIR"
-    claude --print \
+    echo "/researcher-auto-email ${RUN_DIR}" | claude --print \
         --dangerously-skip-permissions \
         --model claude-opus-4-6 \
         --allowedTools 'Read,Glob,Bash,mcp__gmail__send_email,mcp__claude_ai_Gmail__gmail_get_profile' \
-        "/researcher-auto-email ${RUN_DIR}" \
         2>&1 | tee "${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then

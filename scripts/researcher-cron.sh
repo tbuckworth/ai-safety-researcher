@@ -171,33 +171,52 @@ get_status() {
     grep '^status:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
 }
 
+build_step_prompt() {
+    local step="$1"
+    local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
+    # Read the command file, strip YAML frontmatter, inject arguments
+    local cmd_body
+    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    # Replace placeholders with actual values
+    echo "$cmd_body" | sed "s|{{argument}}|${step} ${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
+build_email_prompt() {
+    local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
+    local cmd_body
+    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
 run_step() {
     local step="$1"
     local run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
+    local prev_step
+    prev_step=$(get_current_step)
 
     log "Starting step ${step}..."
 
     cd "$REPO_DIR"
-    echo "/researcher-auto-step ${step} ${RUN_DIR}" | claude --print \
+    build_step_prompt "$step" | claude --print \
         --dangerously-skip-permissions \
         --model claude-opus-4-6 \
         --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
         2>&1 | tee "$run_log"
 
     local exit_code=${PIPESTATUS[0]}
+    local new_step
+    new_step=$(get_current_step)
+    local new_status
+    new_status=$(get_status)
 
-    if [ $exit_code -ne 0 ]; then
-        log "WARN: Step ${step} exited with code ${exit_code}"
-        local new_step
-        new_step=$(get_current_step)
-        if [ "$new_step" = "$step" ] || [ "$new_step" = "$((step - 1))" ]; then
-            log "ERROR: Step ${step} failed without advancing state. Marking as failed."
-            sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
-            return 1
-        fi
+    # Check if state actually advanced
+    if [ "$new_step" = "$prev_step" ] && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ]; then
+        log "ERROR: Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
+        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+        return 1
     fi
 
-    log "Step ${step} completed."
+    log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
     return 0
 }
 
@@ -332,7 +351,7 @@ create_github_repo || log "WARN: GitHub repo creation failed. Continuing to emai
 send_email() {
     log "Sending results email..."
     cd "$REPO_DIR"
-    echo "/researcher-auto-email ${RUN_DIR}" | claude --print \
+    build_email_prompt | claude --print \
         --dangerously-skip-permissions \
         --model claude-opus-4-6 \
         --allowedTools 'Read,Glob,Bash,mcp__gmail__send_email,mcp__claude_ai_Gmail__gmail_get_profile' \

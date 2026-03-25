@@ -9,6 +9,7 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 - **Entry points**:
   - `/researcher <topic>` — Interactive mode (human-in-the-loop)
   - `scripts/researcher-cron.sh [topic]` — Autonomous mode (no human interaction, for cron)
+  - `/researcher-review [run-dir]` — Review completed research interactively
 
 ## Key Directories
 

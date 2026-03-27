@@ -59,6 +59,18 @@ if ! command -v claude &>/dev/null; then
     exit 1
 fi
 
+# Check if GPU is busy (>500MB VRAM used by any single process = busy)
+if command -v nvidia-smi &>/dev/null; then
+    GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null || true)
+    if [ -n "$GPU_PROCS" ]; then
+        MAX_MEM=$(echo "$GPU_PROCS" | awk -F', ' '{print $2}' | sort -n | tail -1)
+        if [ "$MAX_MEM" -gt 500 ] 2>/dev/null; then
+            log "GPU busy (process using ${MAX_MEM} MiB). Skipping this run."
+            exit 0
+        fi
+    fi
+fi
+
 if [ ! -d "$HDD" ]; then
     log "ERROR: HDD not mounted at ${HDD}. Exiting."
     exit 1

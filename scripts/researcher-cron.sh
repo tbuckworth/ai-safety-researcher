@@ -325,7 +325,12 @@ REPO_URL=""
 
 create_github_repo() {
     local slug
-    slug="research-$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 40)"
+    # Truncate at word boundary (max ~40 chars for the topic portion)
+    local topic_slug
+    topic_slug=$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+    # Cut to 40 chars then remove any trailing partial word
+    topic_slug=$(echo "$topic_slug" | head -c 40 | sed 's/-[^-]*$//')
+    slug="research-${topic_slug}"
 
     log "Creating GitHub repo: tbuckworth/${slug}"
 

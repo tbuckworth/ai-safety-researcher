@@ -47,6 +47,8 @@ The run directory is: **{{argument}}**
        </h1>
        <div style="font-size: 14px; color: #64748b;">
          Autonomous AI Safety Research Report · <date>
+         <!-- If issue_number exists in state.md and is not "none", add the link -->
+         · <a href="https://github.com/tbuckworth/tasks/issues/N" style="color: #64748b;">Original idea</a>
        </div>
      </div>
 

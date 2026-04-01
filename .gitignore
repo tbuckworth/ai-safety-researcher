@@ -1,7 +1,9 @@
-# Research output artefacts (generated per-run)
+# Research output artefacts (generated per-run, may be symlinks)
+output
 output/
 
-# Autonomous mode logs
+# Autonomous mode logs (may be symlinks)
+logs
 logs/
 
 # Claude Code local settings

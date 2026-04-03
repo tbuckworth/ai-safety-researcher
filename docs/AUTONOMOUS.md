@@ -130,3 +130,61 @@ After a run completes, use the interactive review command:
 ```
 
 This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand — experiment code, challenge analysis, literature, paper sections — to answer your questions.
+
+## Follow-Up Runs
+
+The review command can create follow-up research issues. During a review session, say "create a follow-up" or describe what to investigate next, and the command will create a GitHub Issue tagged for follow-up.
+
+### How Follow-Ups Work
+
+1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas` and `type:follow-up`.
+
+2. **Autonomous pickup**: The cron wrapper picks the follow-up issue like any other research idea. When it detects the `type:follow-up` label, it:
+   - Clones the prior repo to copy key artifacts into a `prior/` subdirectory
+   - Creates a `followup-context.md` with the feedback
+   - Creates a fresh run directory (not inside the prior repo)
+
+3. **Smart fast-forward**: Step 1 reads the prior context and feedback, then decides how much of the workflow to skip:
+   - "Re-run experiments differently" → skips to Step 9 (copies prior literature, decomposition, challenge)
+   - "Redesign the approach" → skips to Step 5 (copies prior literature)
+   - "Wrong framing, needs new literature" → runs full workflow from Step 2
+
+4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo. Both the follow-up issue and the parent issue get completion comments with cross-links.
+
+### Issue Labels
+
+| Label | Purpose |
+|-------|---------|
+| `list:research-ideas` | Eligible for pickup (same as fresh ideas) |
+| `type:follow-up` | Marks issue as a follow-up with prior context |
+| `source:claude` | Created by the review command |
+| `status:claude-researching` | Currently being worked on |
+| `status:claude-processed` | Completed |
+
+### Follow-Up Issue Format
+
+The issue body is pure free-text feedback. Metadata is in a single footer line:
+```
+---
+Parent: #42 | Repo: https://github.com/tbuckworth/research-foo | Run: 2026-04-03-foo
+```
+
+### Follow-Up Run Directory
+
+```
+output/<date>-followup-<slug>/
+├── prior/                      # Copied from the prior run's GitHub repo
+│   ├── state.md
+│   ├── briefing.md
+│   ├── literature/synthesis.md
+│   ├── decomposition.md
+│   ├── challenge/
+│   └── experiments/exp-*/results.md
+├── followup-context.md         # Feedback + metadata
+├── followup-summary.md         # Written by Step 1: what changed and why
+├── state.md                    # Fresh state for this run
+├── topic.txt
+├── experiments/
+│   └── exp-f01/                # Follow-up experiments use f-prefix numbering
+└── ...                         # Other artifacts as normal
+```

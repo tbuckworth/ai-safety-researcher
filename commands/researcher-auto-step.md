@@ -55,7 +55,44 @@ Do this yourself — no agent needed.
 
 1. Read `topic.txt` from the run directory to get the full topic (may include GitHub issue body).
 
-2. **Self-generate clarifications.** Since this is autonomous mode, generate reasonable answers to the 5 standard questions by inferring from the topic text:
+2. **Check for follow-up context.** If `<run-directory>/followup-context.md` exists, this is a follow-up run:
+
+   a. Read `followup-context.md` to get the user's feedback and parent metadata.
+   b. Read `prior/state.md` to get the prior run's clarifications, decisions, experiment results, and novelty verdict.
+   c. Read `prior/briefing.md` (if it exists) to get the full picture of the prior run.
+   d. Read any prior experiment results mentioned in the feedback — check `prior/experiments/exp-*/results.md`.
+
+   **Generate AMENDED clarifications** that incorporate:
+   - The prior run's clarifications (as a starting point, updated where feedback changes them)
+   - What was learned from the prior experiments (key results, surprises, failures)
+   - The user's specific feedback (this is the primary driver of the follow-up)
+   - What needs to change in this run vs the prior run
+
+   The clarifications should explicitly state:
+   - "This is a follow-up to run \<prior_run_id\>."
+   - "The prior run found: \<1-2 sentence summary of key results\>."
+   - "The user's feedback: \<feedback summary\>."
+   - "This run should focus on: \<what's different this time\>."
+
+   **Determine follow-up scope** from the feedback. Set `followup_focus` in state.md to one of:
+   - `experiments_only` — feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` to jump to experiments
+   - `from_decomposition` — feedback changes the research design (e.g., "add a new component", "different approach") → set `current_step: 4` to redo decomposition onward
+   - `from_literature` — feedback suggests the framing or literature is wrong → set `current_step: 1` to redo from Step 2
+   - `full` — feedback is a substantial pivot → set `current_step: 1` (normal Step 1 flow)
+
+   **For skipped steps**, copy prior artifacts into the run directory so downstream steps can read them. For example, if `followup_focus: experiments_only`:
+   - Copy `prior/literature/synthesis.md` → `literature/synthesis.md`
+   - Copy `prior/novelty-assessment.md` → `novelty-assessment.md`
+   - Copy `prior/success-criteria.md` → `success-criteria.md`
+   - Copy `prior/decomposition.md` → `decomposition.md`
+   - Copy `prior/challenge/` files → `challenge/`
+   - Copy `prior/references.bib` → `references.bib` (if exists)
+
+   Write a `followup-summary.md` file summarizing: what the prior run did, what changed, which artifacts are reused vs regenerated. This helps downstream steps understand the context.
+
+   **Skip to step 3 below** (write state.md with follow-up metadata preserved).
+
+2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers to the 5 standard questions by inferring from the topic text:
 
    - **Key terms**: Define key technical terms from the topic in the AI safety context.
    - **Prior work**: If the topic.txt includes references or context from the issue body, note them. Otherwise: "None specified — literature review will discover relevant prior work."
@@ -67,15 +104,20 @@ Do this yourself — no agent needed.
 
 3. The run directory and subdirectories already exist (created by the cron wrapper). Verify they exist.
 
-4. Write `state.md` with:
+4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups):
    ```yaml
    ---
    run_id: <from existing state.md>
    topic: <topic title>
-   current_step: 1
+   current_step: <1, or higher if fast-forwarding>
    status: clarified
    mode: autonomous
    issue_number: <from existing state.md>
+   is_followup: <true/false, from existing state.md>
+   parent_issue: <from existing state.md, if follow-up>
+   prior_repo: <from existing state.md, if follow-up>
+   prior_run_id: <from existing state.md, if follow-up>
+   followup_focus: <experiments_only/from_decomposition/from_literature/full, if follow-up>
    clarifications:
      - q: "What do key terms mean?"
        a: "<your generated answer>"
@@ -96,6 +138,16 @@ Do this yourself — no agent needed.
 ---
 
 ## Step 2: Research the Literature
+
+### Follow-Up Handling
+
+If `state.md` contains `is_followup: true`:
+1. Read `followup-context.md` for the user's feedback.
+2. Read `prior/literature/synthesis.md` for the prior literature review.
+3. Your literature search should BUILD ON the prior work. Focus new searches on what the feedback asks for — don't repeat the same broad sweep. If the prior literature is sufficient for the new direction, produce an abbreviated synthesis noting "Prior literature remains relevant, added N targeted searches for \<new direction\>."
+4. When spawning search agents, include in the prompt: "Prior literature synthesis is at \<run-dir\>/prior/literature/synthesis.md. Read it first. Focus searches on: \<feedback summary\>."
+
+### Process
 
 1. **Spawn search-planner agent**:
    ```
@@ -188,6 +240,16 @@ Do this yourself — no agent needed.
 
 ## Step 5: Fail Quickly — Steinhardt Decomposition
 
+### Follow-Up Handling
+
+If `state.md` contains `is_followup: true`:
+1. Read `followup-context.md` for the user's feedback.
+2. Read `prior/decomposition.md` for the prior lambda table and component breakdown.
+3. Read `prior/experiments/exp-*/results.md` for prior experiment outcomes.
+4. Your decomposition should account for what was already tested. Prior PASS components can have their P_success raised (or marked SKIP). Focus new components on what the feedback asks for. Include in the decomposition agent prompt: "Prior decomposition is at \<run-dir\>/prior/decomposition.md and prior experiment results are in \<run-dir\>/prior/experiments/. Read them first. The user's feedback for this follow-up: \<feedback summary\>."
+
+### Process
+
 1. **Spawn decomposition agent**:
    ```
    Task(subagent_type="researcher:decomposition", prompt="""
@@ -212,6 +274,15 @@ Do this yourself — no agent needed.
 ---
 
 ## Step 6: Challenge the Research Plan
+
+### Follow-Up Handling
+
+If `state.md` contains `is_followup: true`:
+1. Read `followup-context.md` for the user's feedback.
+2. Read `prior/challenge/` files for the prior challenge analysis.
+3. The challenge agents should focus on NEW risks introduced by the follow-up direction. Include in each agent prompt: "Prior challenge analysis is in \<run-dir\>/prior/challenge/. The user's follow-up feedback: \<feedback summary\>. Focus on risks specific to the changed approach."
+
+### Process
 
 This step runs three sequential adversarial review agents.
 
@@ -321,6 +392,16 @@ Do this yourself — no agent needed. This is trivial in autonomous mode.
 ---
 
 ## Step 9: Execute Experiments
+
+### Follow-Up Handling
+
+If `state.md` contains `is_followup: true`:
+1. Read `followup-context.md` for the user's feedback.
+2. Read `prior/experiments/exp-*/results.md` for prior experiment outcomes. Do NOT re-run experiments that already passed unless the feedback specifically asks for it.
+3. **Number new experiments starting at `exp-f01/`, `exp-f02/`, etc.** to avoid collision with prior experiment directories.
+4. When spawning experiment agents, include in the prompt: "Prior experiment results are in \<run-dir\>/prior/experiments/. The user's follow-up feedback: \<feedback summary\>. Build on prior work — reference prior results where relevant."
+
+### Process
 
 1. Read the approved experiment plan from `state.md`.
 

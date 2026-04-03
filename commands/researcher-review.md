@@ -63,3 +63,28 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 - **Compare with literature**: "How does this relate to the Anthropic paper on routing?" → read literature files
 - **Debug experiments**: "Show me the code for experiment 5" → read exp-005/*.py files
 - **Assess confidence**: "How confident should I be in these results?" → cross-reference assumption analysis, experiment methodology, pre-mortem risks
+
+## Creating Follow-Ups
+
+When the user wants to create a follow-up research task (e.g., "create a follow-up", "investigate this further", "re-run with...", "next time do X"):
+
+1. **Summarize the feedback** and confirm with the user via AskUserQuestion: "I'll create a follow-up issue with this feedback: \<summary\>. Want to adjust anything?"
+
+2. **Gather metadata** from the current run:
+   - Read `state.md` for `issue_number` and `run_id`
+   - Read `.repo_url` (if it exists) for the prior GitHub repo URL
+   - If `issue_number` is `none` or missing, tell the user — the follow-up will still work but won't link to a parent issue
+
+3. **Write the feedback** to a temp file and call the helper script:
+   ```bash
+   echo '<feedback text>' > /tmp/followup-feedback.txt
+   bash ${CLAUDE_PLUGIN_ROOT}/scripts/create-followup-issue.sh \
+     --parent <issue_number> \
+     --repo-url <repo_url> \
+     --run-id <run_id> \
+     --feedback-file /tmp/followup-feedback.txt
+   ```
+
+4. **Report** the new issue URL to the user.
+
+You can create multiple follow-ups in one session if the user has different directions to explore.

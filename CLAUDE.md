@@ -34,5 +34,6 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 - **Architecture**: Multi-session state machine. The bash wrapper reads `state.md`, launches one Claude session per step, and loops until complete.
 - **Commands**: `researcher-auto-step` (per-step executor), `researcher-auto-email` (email composer).
 - **GitHub Issues**: Picks from `tbuckworth/tasks` with label `list:research-ideas`, tags with `status:claude-researching`, updates to `status:claude-processed` on completion.
+- **Follow-ups**: Issues with label `type:follow-up` trigger follow-up mode — clones prior artifacts into `prior/`, fast-forwards past unchanged steps, pushes results to a branch on the existing repo. Created via `/researcher-review` during interactive review sessions.
 - **Constraints**: Local RTX 3090 only (no cloud GPU), max 5 experiments, all loops capped at 1 iteration.
-- **Setup**: See `docs/AUTONOMOUS.md` for cron configuration and prerequisites.
+- **Setup**: See `docs/AUTONOMOUS.md` for cron configuration, prerequisites, and follow-up workflow.

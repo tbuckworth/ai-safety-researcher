@@ -79,6 +79,11 @@ fi
 # --- Find or create run ---
 RUN_DIR=""
 ISSUE_NUMBER=""
+IS_FOLLOWUP=false
+PARENT_ISSUE=""
+PRIOR_REPO_URL=""
+PRIOR_RUN_ID=""
+FEEDBACK=""
 
 find_in_progress_run() {
     for state_file in $(ls -1t "$OUTPUT_DIR"/*/state.md 2>/dev/null); do
@@ -132,6 +137,17 @@ pick_issue() {
 
 Context from issue body:
 ${body}"
+    fi
+
+    # Detect follow-up issues
+    if echo "$picked" | jq -e '.labels[] | select(.name == "type:follow-up")' > /dev/null 2>&1; then
+        IS_FOLLOWUP=true
+        PRIOR_REPO_URL=$(echo "$body" | grep -oP '(?<=Repo: )https://\S+' || true)
+        PARENT_ISSUE=$(echo "$body" | grep -oP '(?<=Parent: #)\d+' || true)
+        PRIOR_RUN_ID=$(echo "$body" | grep -oP '(?<=Run: )\S+' || true)
+        # Feedback is the body minus the metadata footer
+        FEEDBACK=$(echo "$body" | sed '/^---$/,$d')
+        log "Follow-up detected. Parent: #${PARENT_ISSUE}, Prior repo: ${PRIOR_REPO_URL}"
     fi
 }
 
@@ -211,17 +227,120 @@ GIEOF
     log "Created run directory: ${RUN_DIR}"
 }
 
+setup_followup_run() {
+    local date_prefix slug run_id
+    date_prefix=$(date +%Y-%m-%d)
+    slug=$(echo "$TOPIC" | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 50)
+    run_id="${date_prefix}-followup-${slug}"
+    RUN_DIR="${OUTPUT_DIR}/${run_id}"
+
+    mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge" "${RUN_DIR}/prior"
+
+    # Clone the prior repo into a temp dir and copy key artifacts
+    if [ -n "$PRIOR_REPO_URL" ]; then
+        local tmp_clone
+        tmp_clone=$(mktemp -d)
+        log "Cloning prior repo ${PRIOR_REPO_URL} for context..."
+        if gh repo clone "$PRIOR_REPO_URL" "$tmp_clone" -- --depth 1 2>/dev/null; then
+            # Copy key prior artifacts
+            [ -f "$tmp_clone/state.md" ] && cp "$tmp_clone/state.md" "${RUN_DIR}/prior/state.md"
+            [ -f "$tmp_clone/briefing.md" ] && cp "$tmp_clone/briefing.md" "${RUN_DIR}/prior/briefing.md"
+            [ -f "$tmp_clone/decomposition.md" ] && cp "$tmp_clone/decomposition.md" "${RUN_DIR}/prior/decomposition.md"
+            [ -f "$tmp_clone/novelty-assessment.md" ] && cp "$tmp_clone/novelty-assessment.md" "${RUN_DIR}/prior/novelty-assessment.md"
+            [ -f "$tmp_clone/success-criteria.md" ] && cp "$tmp_clone/success-criteria.md" "${RUN_DIR}/prior/success-criteria.md"
+            [ -d "$tmp_clone/literature" ] && cp -r "$tmp_clone/literature" "${RUN_DIR}/prior/literature"
+            [ -d "$tmp_clone/challenge" ] && cp -r "$tmp_clone/challenge" "${RUN_DIR}/prior/challenge"
+            # Copy experiment results (not full code) to keep it lightweight
+            if [ -d "$tmp_clone/experiments" ]; then
+                mkdir -p "${RUN_DIR}/prior/experiments"
+                for exp_dir in "$tmp_clone"/experiments/exp-*/; do
+                    [ -d "$exp_dir" ] || continue
+                    local exp_name
+                    exp_name=$(basename "$exp_dir")
+                    mkdir -p "${RUN_DIR}/prior/experiments/${exp_name}"
+                    [ -f "${exp_dir}/results.md" ] && cp "${exp_dir}/results.md" "${RUN_DIR}/prior/experiments/${exp_name}/"
+                    [ -f "${exp_dir}/plan.md" ] && cp "${exp_dir}/plan.md" "${RUN_DIR}/prior/experiments/${exp_name}/"
+                done
+            fi
+            if [ -d "$tmp_clone/paper/sections" ]; then
+                mkdir -p "${RUN_DIR}/prior/paper/sections"
+                cp "$tmp_clone"/paper/sections/*.tex "${RUN_DIR}/prior/paper/sections/" 2>/dev/null || true
+            fi
+            log "Prior artifacts copied to ${RUN_DIR}/prior/"
+        else
+            log "WARN: Failed to clone ${PRIOR_REPO_URL}. Proceeding without prior context."
+        fi
+        rm -rf "$tmp_clone"
+    fi
+
+    # Write followup-context.md
+    cat > "${RUN_DIR}/followup-context.md" << CTXEOF
+---
+is_followup: true
+parent_issue: ${PARENT_ISSUE}
+prior_repo: ${PRIOR_REPO_URL}
+prior_run_id: ${PRIOR_RUN_ID}
+---
+
+## User Feedback
+
+${FEEDBACK}
+CTXEOF
+
+    # Write topic.txt — original topic (from issue title, minus [Follow-up] prefix) + feedback
+    local original_topic
+    original_topic=$(echo "$TOPIC" | head -1 | sed 's/^\[Follow-up\] *//')
+    echo "$original_topic" > "${RUN_DIR}/topic.txt"
+    echo "" >> "${RUN_DIR}/topic.txt"
+    echo "Follow-up feedback:" >> "${RUN_DIR}/topic.txt"
+    echo "$FEEDBACK" >> "${RUN_DIR}/topic.txt"
+
+    # Write fresh state.md
+    cat > "${RUN_DIR}/state.md" << STATEEOF
+---
+run_id: ${run_id}
+topic: "$(echo "$original_topic" | sed 's/"/\\"/g')"
+current_step: 0
+status: initialized
+mode: autonomous
+issue_number: ${ISSUE_NUMBER:-none}
+is_followup: true
+parent_issue: ${PARENT_ISSUE:-none}
+prior_repo: ${PRIOR_REPO_URL}
+prior_run_id: ${PRIOR_RUN_ID}
+clarifications: []
+decisions: []
+---
+
+Follow-up research run initialized.
+Topic: ${original_topic}
+Parent issue: #${PARENT_ISSUE}
+STATEEOF
+
+    log "Follow-up run directory ready: ${RUN_DIR}"
+}
+
 # Check for in-progress run first
 if IN_PROGRESS=$(find_in_progress_run); then
     RUN_DIR="$IN_PROGRESS"
     ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | awk '{print $2}')
     [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
+    # Check if the in-progress run is a follow-up
+    if grep -q '^is_followup: true' "${RUN_DIR}/state.md" 2>/dev/null; then
+        IS_FOLLOWUP=true
+        PRIOR_REPO_URL=$(grep '^prior_repo:' "${RUN_DIR}/state.md" | sed 's/prior_repo: *//')
+        PARENT_ISSUE=$(grep '^parent_issue:' "${RUN_DIR}/state.md" | awk '{print $2}')
+    fi
     log "Resuming in-progress run: ${RUN_DIR}"
 elif [ -n "$TOPIC" ]; then
     create_run_dir
 else
     pick_issue
-    create_run_dir
+    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]; then
+        setup_followup_run
+    else
+        create_run_dir
+    fi
 fi
 
 # --- Step loop ---
@@ -324,6 +443,12 @@ TOPIC_LINE=$(grep '^topic:' "${RUN_DIR}/state.md" | head -1 | sed 's/topic: *"*/
 REPO_URL=""
 
 create_github_repo() {
+    # Follow-up runs push to the existing repo on a new branch
+    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]; then
+        push_followup_results
+        return
+    fi
+
     local slug
     # Truncate at word boundary (max ~40 chars for the topic portion)
     local topic_slug
@@ -392,6 +517,53 @@ COMMITEOF
     log "GitHub repo: ${REPO_URL}"
 }
 
+push_followup_results() {
+    local date_slug branch tmp_clone
+    date_slug=$(date +%Y-%m-%d)
+    branch="followup-${date_slug}-$(echo "$RUN_ID" | tail -c 20 | sed 's/^-//')"
+
+    log "Pushing follow-up results to ${PRIOR_REPO_URL} on branch ${branch}"
+
+    tmp_clone=$(mktemp -d)
+    if ! gh repo clone "$PRIOR_REPO_URL" "$tmp_clone" -- --depth 1 2>/dev/null; then
+        log "WARN: Failed to clone ${PRIOR_REPO_URL} for push. Results stay local."
+        rm -rf "$tmp_clone"
+        return 1
+    fi
+
+    cd "$tmp_clone"
+    git checkout -b "$branch"
+
+    # Copy new artifacts from the run directory (excluding prior/ to avoid duplication)
+    for item in "$RUN_DIR"/*; do
+        local basename
+        basename=$(basename "$item")
+        [ "$basename" = "prior" ] && continue
+        [ "$basename" = ".git" ] && continue
+        cp -r "$item" "$tmp_clone/" 2>/dev/null || true
+    done
+
+    git add -A
+    git commit -m "$(cat <<COMMITEOF
+Follow-up research: ${TOPIC_LINE}
+
+Follow-up run (${STATUS}).
+Run ID: ${RUN_ID}
+Parent issue: #${PARENT_ISSUE}
+
+Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+COMMITEOF
+)" || true
+
+    git push -u origin "$branch" || true
+    cd "$REPO_DIR"
+
+    REPO_URL="${PRIOR_REPO_URL}/tree/${branch}"
+    echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
+    rm -rf "$tmp_clone"
+    log "Follow-up pushed: ${REPO_URL}"
+}
+
 create_github_repo || log "WARN: GitHub repo creation failed. Continuing to email."
 
 # --- Post-completion: Send email ---
@@ -417,10 +589,23 @@ send_email || log "WARN: Email failed. Results in ${RUN_DIR} and GitHub repo."
 if [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
     REPO_URL=$(cat "${RUN_DIR}/.repo_url" 2>/dev/null || echo "N/A")
 
-    gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-        --body "Autonomous research complete (${STATUS}).
+    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
+        # Follow-up: comment on both the follow-up issue and the parent
+        gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
+            --body "Follow-up research complete (${STATUS}).
+Branch: ${REPO_URL}
+Run: ${RUN_ID}
+Parent: #${PARENT_ISSUE}" 2>/dev/null || true
+
+        gh issue comment "$PARENT_ISSUE" --repo tbuckworth/tasks \
+            --body "Follow-up #${ISSUE_NUMBER} completed (${STATUS}).
+Branch: ${REPO_URL}" 2>/dev/null || true
+    else
+        gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
+            --body "Autonomous research complete (${STATUS}).
 Repo: ${REPO_URL}
 Run: ${RUN_ID}" 2>/dev/null || true
+    fi
 
     gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks \
         --remove-label "status:claude-researching" 2>/dev/null || true

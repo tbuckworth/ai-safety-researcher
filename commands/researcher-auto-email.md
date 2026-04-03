@@ -198,14 +198,12 @@ The run directory is: **{{argument}}**
 
 4. **Plain text fallback**: Also provide a `body` field with a plain-text version (markdown-style) that mirrors the same structure: Research Question, Bottom Line, Approach, Results, Surprises, Limitations, Links. Same rules about expanding acronyms and defining metrics apply.
 
-5. **Attach the PDF** if `paper/paper.pdf` exists — use the `attachments` parameter with the absolute file path.
-
-6. **Send the email** using `mcp__gmail__send_email` with:
+5. **Send the email** using `mcp__gmail__send_email` with:
    - `to`: authenticated user's email
    - `subject`: as above
    - `body`: plain text fallback
    - `htmlBody`: the HTML version
    - `mimeType`: `"multipart/alternative"`
-   - `attachments`: `["<run-dir>/paper/paper.pdf"]` if the PDF exists
+   - Do NOT attach the PDF — the HTML email is self-contained and the GitHub repo link provides access to the full paper.
 
-7. If email sending fails, write the composed HTML to `<run-dir>/email-draft.html` and the plain text to `<run-dir>/email-draft.md` as fallback.
+6. If email sending fails, write the composed HTML to `<run-dir>/email-draft.html` and the plain text to `<run-dir>/email-draft.md` as fallback.

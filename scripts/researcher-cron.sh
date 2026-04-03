@@ -142,9 +142,9 @@ ${body}"
     # Detect follow-up issues
     if echo "$picked" | jq -e '.labels[] | select(.name == "type:follow-up")' > /dev/null 2>&1; then
         IS_FOLLOWUP=true
-        PRIOR_REPO_URL=$(echo "$body" | grep -oP '(?<=Repo: )https://\S+' || true)
-        PARENT_ISSUE=$(echo "$body" | grep -oP '(?<=Parent: #)\d+' || true)
-        PRIOR_RUN_ID=$(echo "$body" | grep -oP '(?<=Run: )\S+' || true)
+        PRIOR_REPO_URL=$(echo "$body" | sed -n 's/.*Repo: \(https:\/\/[^ ]*\).*/\1/p' | head -1)
+        PARENT_ISSUE=$(echo "$body" | sed -n 's/.*Parent: #\([0-9]*\).*/\1/p' | head -1)
+        PRIOR_RUN_ID=$(echo "$body" | sed -n 's/.*Run: \([^ ]*\).*/\1/p' | head -1)
         # Feedback is the body minus the metadata footer
         FEEDBACK=$(echo "$body" | sed '/^---$/,$d')
         log "Follow-up detected. Parent: #${PARENT_ISSUE}, Prior repo: ${PRIOR_REPO_URL}"

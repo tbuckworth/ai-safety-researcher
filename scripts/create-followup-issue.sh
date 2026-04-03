@@ -63,7 +63,7 @@ ISSUE_URL=$(gh issue create --repo tbuckworth/tasks \
     --label "source:claude" \
     --body "$BODY")
 
-ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oP '\d+$')
+ISSUE_NUMBER=$(echo "$ISSUE_URL" | sed 's/.*\///')
 
 # Comment on the parent issue linking to the follow-up
 if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
@@ -72,7 +72,7 @@ if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
 fi
 
 # Validate: read back the issue to confirm
-CREATED=$(gh issue view "$ISSUE_NUMBER" --repo tbuckworth/tasks --json number,title,labels --jq '.number')
+CREATED=$(gh issue view "$ISSUE_NUMBER" --repo tbuckworth/tasks --json number --jq '.number')
 if [ "$CREATED" != "$ISSUE_NUMBER" ]; then
     echo "ERROR: Issue validation failed" >&2
     exit 1

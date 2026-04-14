@@ -1,7 +1,7 @@
 ---
 description: Compose and send autonomous research results email
 argument-hint: <run-directory>
-allowed-tools: [Read, Glob, Bash, mcp__gmail__send_email, mcp__claude_ai_Gmail__gmail_get_profile, mcp__gmail__get_or_create_label, mcp__gmail__modify_email, mcp__gmail__search_emails]
+allowed-tools: [Read, Glob, Bash, mcp__claude_ai_Gmail__gmail_get_profile]
 model: claude-opus-4-6
 ---
 
@@ -30,7 +30,7 @@ The run directory is: **{{argument}}**
    - `rethink-rationale.md` — why the approach doesn't work (if exists)
    - `.repo_url` — GitHub repo URL (if exists)
 
-3. **Compose the email as HTML** using `mimeType: "multipart/alternative"` with both `body` (plain text fallback) and `htmlBody` (rich HTML).
+3. **Compose the email as HTML**.
 
    **Subject**: `[Auto-Research] <short plain-English topic> — <verdict> — <N pass, M fail>`
    If RETHINK_APPROACH: `[Auto-Research] <short plain-English topic> — Negative Result`
@@ -196,20 +196,17 @@ The run directory is: **{{argument}}**
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
    - **GitHub repo names**: Keep the repo slug under 40 characters to avoid URL truncation. If the `.repo_url` file contains a truncated URL, read the actual URL from the file and use it as-is.
 
-4. **Plain text fallback**: Also provide a `body` field with a plain-text version (markdown-style) that mirrors the same structure: Research Question, Bottom Line, Approach, Results, Surprises, Limitations, Links. Same rules about expanding acronyms and defining metrics apply.
+4. **Write the HTML to a temp file**: Save the composed HTML to `/tmp/researcher_report.html`.
 
-5. **Send the email** using `mcp__gmail__send_email` with:
-   - `to`: authenticated user's email
-   - `subject`: as above
-   - `body`: plain text fallback
-   - `htmlBody`: the HTML version
-   - `mimeType`: `"multipart/alternative"`
+5. **Send the email** using the shared report-email script, which sends via the Gmail API and applies the label atomically:
+   ```bash
+   SEND_SCRIPT=$(find ~/.claude/plugins -name send_report_email.py -path "*/report-email/*" 2>/dev/null | head -1)
+   python3 "$SEND_SCRIPT" \
+     --to <authenticated user's email> \
+     --subject "<subject as above>" \
+     --html /tmp/researcher_report.html \
+     --label Researcher
+   ```
    - Do NOT attach the PDF — the HTML email is self-contained and the GitHub repo link provides access to the full paper.
 
-6. **Label the sent email** with the Gmail label `Researcher`:
-   - Use `mcp__gmail__get_or_create_label` with name `Researcher` to get (or create) the label ID
-   - Use `mcp__gmail__search_emails` with query `subject:<the exact subject you used> newer_than:1d` to find the just-sent message ID
-   - Use `mcp__gmail__modify_email` to add the label ID to the message
-   - If labeling fails, continue without error — the email was already sent successfully.
-
-7. If email sending fails, write the composed HTML to `<run-dir>/email-draft.html` and the plain text to `<run-dir>/email-draft.md` as fallback.
+6. If email sending fails, save the HTML to `<run-dir>/email-draft.html` as fallback.

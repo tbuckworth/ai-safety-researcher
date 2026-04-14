@@ -1,7 +1,7 @@
 ---
 description: Compose and send autonomous research results email
 argument-hint: <run-directory>
-allowed-tools: [Read, Glob, Bash, mcp__gmail__send_email, mcp__claude_ai_Gmail__gmail_get_profile]
+allowed-tools: [Read, Glob, Bash, mcp__gmail__send_email, mcp__claude_ai_Gmail__gmail_get_profile, mcp__gmail__get_or_create_label, mcp__gmail__modify_email, mcp__gmail__search_emails]
 model: claude-opus-4-6
 ---
 
@@ -206,4 +206,10 @@ The run directory is: **{{argument}}**
    - `mimeType`: `"multipart/alternative"`
    - Do NOT attach the PDF — the HTML email is self-contained and the GitHub repo link provides access to the full paper.
 
-6. If email sending fails, write the composed HTML to `<run-dir>/email-draft.html` and the plain text to `<run-dir>/email-draft.md` as fallback.
+6. **Label the sent email** with the Gmail label `Researcher`:
+   - Use `mcp__gmail__get_or_create_label` with name `Researcher` to get (or create) the label ID
+   - Use `mcp__gmail__search_emails` with query `subject:<the exact subject you used> newer_than:1d` to find the just-sent message ID
+   - Use `mcp__gmail__modify_email` to add the label ID to the message
+   - If labeling fails, continue without error — the email was already sent successfully.
+
+7. If email sending fails, write the composed HTML to `<run-dir>/email-draft.html` and the plain text to `<run-dir>/email-draft.md` as fallback.

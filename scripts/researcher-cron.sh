@@ -26,6 +26,10 @@ LOCKFILE="/tmp/researcher-auto.lock"
 TIMEOUT_HOURS=4
 TOPIC="${1:-}"
 
+# Model alias resolves to the latest (strongest) Opus automatically — no version pinning.
+# Override per-run with e.g. RESEARCHER_MODEL='opus[1m]' or a full model id.
+MODEL="${RESEARCHER_MODEL:-opus}"
+
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 
 # Symlink logs and output into the plugin dir for convenience
@@ -380,7 +384,7 @@ run_step() {
     cd "$REPO_DIR"
     build_step_prompt "$step" | claude --print \
         --dangerously-skip-permissions \
-        --model claude-opus-4-6 \
+        --model "$MODEL" \
         --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
         2>&1 | tee "$run_log"
 
@@ -504,7 +508,7 @@ Research artifacts: ${TOPIC_LINE}
 Autonomous research run (${STATUS}).
 Run ID: ${RUN_ID}
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>
 COMMITEOF
 )" || true
 
@@ -551,7 +555,7 @@ Follow-up run (${STATUS}).
 Run ID: ${RUN_ID}
 Parent issue: #${PARENT_ISSUE}
 
-Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>
+Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>
 COMMITEOF
 )" || true
 
@@ -572,7 +576,7 @@ send_email() {
     cd "$REPO_DIR"
     build_email_prompt | claude --print \
         --dangerously-skip-permissions \
-        --model claude-opus-4-6 \
+        --model "$MODEL" \
         --allowedTools 'Read,Glob,Bash,mcp__gmail__send_email,mcp__claude_ai_Gmail__gmail_get_profile' \
         2>&1 | tee "${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
 

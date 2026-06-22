@@ -2,7 +2,7 @@
 
 A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that automates end-to-end AI safety research — from topic scoping through literature review, experiment execution, and LaTeX paper compilation.
 
-It implements a **10-step research workflow** based on the [Steinhardt fail-fast methodology](https://cs.nyu.edu/~welleck/episode32.html): decompose the project into testable components, estimate each one's probability of success and time cost, then test the riskiest component first. If it fails, stop early rather than sinking time into doomed work.
+It implements an **11-step research workflow** based on the [Steinhardt fail-fast methodology](https://cs.nyu.edu/~welleck/episode32.html): decompose the project into testable components, estimate each one's probability of success and time cost, then test the riskiest component first. If it fails, stop early rather than sinking time into doomed work.
 
 ## What It Does
 
@@ -17,7 +17,8 @@ Given a research topic, the agent:
 7. **Reports experiment plan** — presents the lambda-ordered experiment table for approval
 8. **Confirms fail-fast agreement** — explicit agreement that the project stops or pivots if the riskiest experiment fails
 9. **Runs experiments** — executes experiments in lambda order, stopping on failure if agreed
-10. **Compiles a LaTeX paper** — produces a full paper with real BibTeX citations, including negative results
+10. **Audits the results** — an independent results-auditor red-teams the outputs (re-derives numbers from raw logs, re-runs the load-bearing experiment, checks for leakage, overclaiming, and reward-hacking), looping to fix genuine methodology defects before write-up
+11. **Compiles a LaTeX paper** — produces a full paper with real BibTeX citations, including negative results
 
 ## Prerequisites
 
@@ -73,7 +74,7 @@ Or let it pick from your GitHub Issues (label `list:research-ideas` on `tbuckwor
 ./scripts/researcher-cron.sh
 ```
 
-Autonomous mode runs the same 10-step workflow but makes all decisions automatically using built-in heuristics (see `docs/AUTONOMOUS.md`). On completion it:
+Autonomous mode runs the same 11-step workflow but makes all decisions automatically using built-in heuristics (see `docs/AUTONOMOUS.md`). On completion it:
 - Creates a public GitHub repo with all artifacts
 - Sends an HTML email with results summary
 - Updates the source GitHub issue
@@ -112,7 +113,8 @@ This loads the run's briefing and lets you ask questions — it reads experiment
     ├── Step 7:  Report experiment plan (direct dialogue)
     ├── Step 8:  Confirm fail-fast (direct dialogue)
     ├── Step 9:  experiment ×N (lambda order, fail-fast)
-    └── Step 10: report → LaTeX paper
+    ├── Step 10: results-auditor (audit-remediation loop)
+    └── Step 11: report → LaTeX paper
 ```
 
 Steps 2-6 can loop back to earlier steps when evidence demands it (e.g., novelty assessment reveals overlapping work → refine search).
@@ -141,7 +143,10 @@ output/<run-id>/
 │   └── exp-NNN/
 │       ├── plan.md
 │       ├── results.md
+│       ├── run.log
 │       └── report-section.md
+├── audit/
+│   └── results-audit.md
 ├── references.bib
 ├── citation-registry.md
 └── paper/
@@ -168,6 +173,7 @@ researcher/
 │   ├── steelman.md                # Senior researcher perspective
 │   ├── pre-mortem.md              # Failure scenario analysis
 │   ├── experiment.md              # Executes a single experiment
+│   ├── results-auditor.md         # Independently audits the results (Step 10)
 │   └── report.md                  # Compiles LaTeX paper
 ├── scripts/
 │   └── researcher-cron.sh         # Cron wrapper for autonomous mode
@@ -175,9 +181,10 @@ researcher/
 │   └── research-workflow/         # Auto-trigger skill definition
 ├── templates/                     # LaTeX templates (preamble, paper, Makefile)
 ├── docs/
-│   ├── WORKFLOW.md                # Detailed 10-step specification
+│   ├── WORKFLOW.md                # Detailed 11-step specification
 │   ├── ARCHITECTURE.md            # Architecture and agent inventory
 │   ├── AUTONOMOUS.md              # Autonomous mode setup and reference
+│   ├── STANCE.md                  # Truth-seeking Voice block + KEEP/REFRAME rubric
 │   └── DIAGRAM.md                 # Mermaid architecture diagrams
 ├── output/                        # Research artifacts (gitignored)
 ├── logs/                          # Autonomous mode logs (gitignored)
@@ -195,6 +202,8 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Adversarial challenge phase** (Step 6): Three sequential reviews before committing to experiments — catches flawed assumptions and predictable failures early.
 - **Lambda ordering**: Experiments are sorted by `lambda = -ln(P_success) / T` — the component most likely to fail per hour of work gets tested first.
 - **Negative results are results**: If experiments fail, the agent compiles a "here's why this doesn't work" paper rather than producing nothing.
+- **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
+- **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
 
 ## License
 

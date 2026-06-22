@@ -2,7 +2,7 @@
 # researcher-cron.sh — Autonomous research runner
 #
 # Picks a research idea from GitHub Issues (or takes one as argument),
-# runs the 10-step research workflow via per-step Claude sessions,
+# runs the 11-step research workflow via per-step Claude sessions,
 # creates a GitHub repo with artifacts, and emails results.
 #
 # Usage:
@@ -349,6 +349,9 @@ fi
 
 # --- Step loop ---
 START_TIME=$(date +%s)
+# Bash-owned ceiling for the Step 10 audit-remediation loop, independent of any
+# agent-written field — so a missing or garbage audit_round can never wedge the run.
+AUDIT_ROUNDS=0
 
 get_current_step() {
     grep '^current_step:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
@@ -394,8 +397,12 @@ run_step() {
     local new_status
     new_status=$(get_status)
 
-    if [ "$new_step" = "$prev_step" ] && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ]; then
-        log "ERROR: Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
+    # audit_remediating / audit_complete legitimately keep current_step at 10 across
+    # rounds, so they are not "stuck"; the bash-owned AUDIT_ROUNDS ceiling bounds that loop.
+    if [ "$new_step" = "$prev_step" ] \
+        && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ] \
+        && [ "$new_status" != "audit_remediating" ] && [ "$new_status" != "audit_complete" ]; then
+        log "Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
         sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
         return 1
     fi
@@ -418,24 +425,42 @@ while true; do
 
     ELAPSED=$(( $(date +%s) - START_TIME ))
     if [ $ELAPSED -gt $(( TIMEOUT_HOURS * 3600 )) ]; then
-        log "WARN: Timeout (${TIMEOUT_HOURS}h) reached at step ${CURRENT_STEP}. Fast-tracking to report."
+        log "Timeout (${TIMEOUT_HOURS}h) reached at step ${CURRENT_STEP}. Fast-tracking to the report."
         if [ "$CURRENT_STEP" -ge 5 ]; then
-            run_step 10 || true
+            # Bypass the audit (Step 10) on a timed-out run — never re-enter a
+            # multi-hour remediation re-run — and compile whatever exists (Step 11).
+            sed -i.bak "s/^status:.*/status: audit_complete/" "${RUN_DIR}/state.md"
+            run_step 11 || true
         fi
         sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
         break
     fi
 
-    NEXT_STEP=$((CURRENT_STEP + 1))
-    [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
+    # Audit-remediation re-entry: stay on Step 10 while the auditor asks for another
+    # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
+    if [ "$CURRENT_STEP" -eq 10 ] && [ "$STATUS" = "audit_remediating" ]; then
+        AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
+        if [ "$AUDIT_ROUNDS" -ge 4 ]; then
+            log "Audit-remediation ceiling reached (${AUDIT_ROUNDS} rounds). Forcing the report."
+            sed -i.bak "s/^status:.*/status: audit_complete/" "${RUN_DIR}/state.md"
+            run_step 11 || true
+            sed -i.bak "s/^status:.*/status: complete/" "${RUN_DIR}/state.md"
+            break
+        fi
+        NEXT_STEP=10
+    else
+        AUDIT_ROUNDS=0
+        NEXT_STEP=$((CURRENT_STEP + 1))
+        [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
+    fi
 
-    if [ "$NEXT_STEP" -gt 10 ]; then
+    if [ "$NEXT_STEP" -gt 11 ]; then
         log "All steps completed."
         break
     fi
 
     if ! run_step "$NEXT_STEP"; then
-        log "ERROR: Step ${NEXT_STEP} failed. Stopping."
+        log "Step ${NEXT_STEP} did not complete. Stopping."
         break
     fi
 done
@@ -568,7 +593,7 @@ COMMITEOF
     log "Follow-up pushed: ${REPO_URL}"
 }
 
-create_github_repo || log "WARN: GitHub repo creation failed. Continuing to email."
+create_github_repo || log "Note: GitHub repo creation did not complete. Continuing to email."
 
 # --- Post-completion: Send email ---
 send_email() {
@@ -581,13 +606,13 @@ send_email() {
         2>&1 | tee "${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
 
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
-        log "WARN: Email sending failed."
+        log "Note: email sending did not complete."
         return 1
     fi
     log "Email sent."
 }
 
-send_email || log "WARN: Email failed. Results in ${RUN_DIR} and GitHub repo."
+send_email || log "Note: email did not send. Results in ${RUN_DIR} and GitHub repo."
 
 # --- Post-completion: Update GitHub issue ---
 if [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then

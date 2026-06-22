@@ -28,6 +28,7 @@ The run directory is: **{{argument}}**
    - `experiments/*/results.md` — individual experiment results
    - `paper/sections/abstract.tex` — paper abstract (if exists)
    - `rethink-rationale.md` — why the approach doesn't work (if exists)
+   - `audit/results-audit.md` — the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
    - `.repo_url` — GitHub repo URL (if exists)
 
 3. **Compose the email as HTML**.
@@ -80,12 +81,13 @@ The run directory is: **{{argument}}**
               what they mean. Include the overall verdict: positive / negative / mixed.
               Example: "Mixed results. The pipeline partially works at 7B scale: Expert
               Iteration (a filtered fine-tuning method) successfully induced goal-pursuing
-              behavior, but standard reinforcement learning (GRPO) failed entirely due to
-              insufficient training signal." -->
+              behavior, but standard reinforcement learning (GRPO) did not produce the effect,
+              due to insufficient training signal." -->
        </p>
        <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
          <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Novelty</td><td style="padding: 4px 0;"><!-- verdict WITH context: what exists, what's new --></td></tr>
          <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Experiments</td><td style="padding: 4px 0;">N pass, M fail</td></tr>
+         <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Results audit</td><td style="padding: 4px 0;"><!-- overall disposition + audit_exit_reason from audit/results-audit.md, e.g. "converged-positive (all-supported)" or "honest-negative (true-null)". Note in-line that this is an automated self-check by the same model family — NOT independent verification. --></td></tr>
          <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Repo</td><td style="padding: 4px 0;"><a href="URL" style="color: #2563eb;">GitHub link</a> (includes paper PDF)</td></tr>
        </table>
      </div>
@@ -165,7 +167,9 @@ The run directory is: **{{argument}}**
        <h2 style="font-size: 16px; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;">Limitations</h2>
        <ol style="font-size: 14px; padding-left: 20px;">
          <!-- Top 2-3 risks/limitations. Each gets 1-2 sentences with context.
-              Do NOT use internal labels (like "Unfalsifiable Middle") without explaining them. -->
+              Include any UNRESOLVED findings from audit/results-audit.md (e.g. a defect the
+              loop could not fully fix, or a narrowed-claim residual) so the reader sees what
+              the audit flagged. Do NOT use internal labels (like "Unfalsifiable Middle") without explaining them. -->
          <li style="margin-bottom: 8px;">...</li>
        </ol>
      </div>
@@ -193,6 +197,7 @@ The run directory is: **{{argument}}**
    - **Define every metric before using it in a table** — the reader must know what "good" vs "bad" looks like
    - Keep it scannable — the "Bottom Line" box should answer the research question in 10 seconds
    - For negative results / RETHINK, the "What We Investigated" section should still explain the idea, and add a prominent "Why It Failed" section after the results
+   - **The results audit is an automated self-check by the same model family — frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
    - **GitHub repo names**: Keep the repo slug under 40 characters to avoid URL truncation. If the `.repo_url` file contains a truncated URL, read the actual URL from the file and use it as-is.
 

@@ -16,7 +16,8 @@ flowchart TD
         S7["Step 7: Report Experiment Plan"]
         S8["Step 8: Confirm Fail-Fast"]
         S9["Step 9: Execute Experiments"]
-        S10["Step 10: Compile Paper"]
+        S10["Step 10: Audit Results"]
+        S11["Step 11: Compile Paper"]
         Done(["Done — paper.pdf"])
 
         S1 -->|"user answers 3-5 Qs"| S2
@@ -28,7 +29,8 @@ flowchart TD
         S7 --> S8
         S8 --> S9
         S9 --> S10
-        S10 --> Done
+        S10 --> S11
+        S11 --> Done
     end
 
     %% Loop-backs
@@ -40,6 +42,7 @@ flowchart TD
     S6 -.->|"re-research"| S2
     S7 -.->|"revise decomposition"| S5
     S9 -.->|"FAIL → pivot topic"| S1
+    S10 -.->|"FIXABLE-DEFECT → re-run flagged exp"| S9
 
     %% Agents
     SP["search-planner ⚡"]:::agent --> S2
@@ -51,7 +54,8 @@ flowchart TD
     SM2["steelman"]:::agent --> S6
     PM["pre-mortem"]:::agent --> S6
     EX["experiment ×N"]:::agent --> S9
-    RE["report"]:::agent --> S10
+    RA["results-auditor ×rounds"]:::agent --> S10
+    RE["report"]:::agent --> S11
 
     %% User interaction points
     S1 ~~~ U1(["🗣 User dialogue"]):::user
@@ -85,7 +89,8 @@ flowchart LR
         A7["steelman\n(opus)"]
         A8["pre-mortem\n(opus)"]
         A9["experiment\n(opus)"]
-        A10["report\n(opus)"]
+        A10["results-auditor\n(opus)"]
+        A11["report\n(opus)"]
     end
 
     subgraph State["Persistent State"]
@@ -103,7 +108,8 @@ flowchart LR
     O -->|"Task()"| A7
     O -->|"Task()"| A8
     O -->|"Task() ×N"| A9
-    O -->|"Task()"| A10
+    O -->|"Task() ×rounds"| A10
+    O -->|"Task()"| A11
 
     A1 -->|writes| AR
     A2 -->|writes| AR
@@ -115,6 +121,7 @@ flowchart LR
     A8 -->|writes| AR
     A9 -->|writes| AR
     A10 -->|writes| AR
+    A11 -->|writes| AR
 
     O <-->|"read/write"| SM
     O <-->|"read"| AR
@@ -156,6 +163,7 @@ flowchart TD
     OUT --> DEC["decomposition.md"]
     OUT --> CHL["challenge/"]
     OUT --> EXP["experiments/"]
+    OUT --> AUD["audit/"]
     OUT --> REF["references.bib"]
     OUT --> CIT["citation-registry.md"]
     OUT --> PAP["paper/"]
@@ -173,7 +181,11 @@ flowchart TD
     EXP --> E2["exp-002/"]
     E1 --> E1P["plan.md"]
     E1 --> E1R["results.md"]
+    E1 --> E1L["run.log"]
     E1 --> E1S["report-section.md"]
+
+    AUD --> AU1["results-audit.md"]
+    AUD --> AU2["claim-anchor-*.md"]
 
     PAP --> PT["paper.tex"]
     PAP --> PP["preamble.tex"]

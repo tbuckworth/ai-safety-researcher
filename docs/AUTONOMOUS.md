@@ -1,6 +1,6 @@
 # Autonomous Research Mode
 
-Run the full 10-step AI safety research workflow without human interaction. Designed for cron execution on the desktop.
+Run the full 11-step AI safety research workflow without human interaction. Designed for cron execution on the desktop.
 
 ## How It Works
 
@@ -17,6 +17,7 @@ cron → researcher-cron.sh
          ├─ Tag issue: status:claude-researching
          ├─ Loop: claude /researcher-auto-step <N> <run-dir>
          │    └─ Step N: spawn agents, make decisions, update state.md
+         │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
          ├─ Create GitHub repo (gh CLI)
          ├─ Send email (claude /researcher-auto-email <run-dir>)
          └─ Update issue: status:claude-processed
@@ -67,6 +68,7 @@ The autonomous mode replaces 8 human interaction points:
 | 7. Experiment plan | User confirms | Auto-approve, cap at 5 experiments |
 | 8. Fail-fast agreement | User agrees | Always yes |
 | 9. On failure | User decides | Write up negative result |
+| 10. Results audit | User steers the loop | Loop on FIXABLE-DEFECT up to 3 rounds; exit on SUPPORTED / TRUE-NULL / cap; unresolved findings → Limitations |
 
 ### RETHINK_APPROACH Handling
 
@@ -81,7 +83,7 @@ Both produce valuable output: "here's why this idea doesn't work, and here's the
 
 - **Local GPU only** — no Modal, Lambda, or cloud compute
 - **Max 5 experiments** per run
-- **All loops capped at 1 iteration** — prevents infinite cycles
+- **All loops capped at 1 iteration** — except the Step 10 audit-remediation loop, which allows up to 3 rounds (bash-owned ceiling at 4 + the 4-hour timeout as backstops)
 - **4-hour timeout** — wrapper kills the run and compiles whatever exists
 - **Lockfile** — prevents concurrent runs
 - **Read-only outside run dir** — agent can search `~/pyg/` but never modifies other repos

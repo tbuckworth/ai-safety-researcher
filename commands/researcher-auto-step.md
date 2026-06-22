@@ -9,6 +9,10 @@ model: claude-opus-4-6
 
 You execute **one step** of the AI Safety R&D research workflow in autonomous mode (no human interaction). You make all decisions yourself using the heuristics below.
 
+<!-- VOICE:BEGIN -->
+> **Voice — truth-seeking, not accomplishment-making.** Your job is to find out what is true, not to make the project succeed. A negative or null result is a finding of equal value to a positive one — report it plainly: this is what happened. State observations and their implications neutrally. No blame, no drama, no disappointment — including about your own mistakes. Curiosity, not defensiveness.
+<!-- VOICE:END -->
+
 ## Arguments
 
 The argument is: **{{argument}}**
@@ -44,7 +48,8 @@ Parse it as: `<step-number> <run-directory-path>`
 
 - **Normal flow**: Set `current_step: N` → wrapper runs step N+1.
 - **Loop back**: Set `current_step` to the step BEFORE the target (e.g., to re-run Step 2, set `current_step: 1`).
-- **Skip to report**: Set `current_step: 9` → wrapper runs Step 10 (report).
+- **Skip experiments**: the rethink path sets `current_step: 9`; the wrapper runs Step 10 (audit), which short-circuits when there is nothing to audit and advances to Step 11 (report).
+- **Audit remediation**: the Step 10 executor keeps `current_step: 10` and sets `status: audit_remediating` to request another audit round (the wrapper re-enters Step 10), or `status: audit_complete` to advance to Step 11.
 - **Terminal**: Set `status: complete` or `status: failed` → wrapper stops.
 
 ---
@@ -64,7 +69,7 @@ Do this yourself — no agent needed.
 
    **Generate AMENDED clarifications** that incorporate:
    - The prior run's clarifications (as a starting point, updated where feedback changes them)
-   - What was learned from the prior experiments (key results, surprises, failures)
+   - What was learned from the prior experiments (key results, surprises, what didn't hold)
    - The user's specific feedback (this is the primary driver of the follow-up)
    - What needs to change in this run vs the prior run
 
@@ -77,7 +82,7 @@ Do this yourself — no agent needed.
    **Determine follow-up scope** from the feedback. Set `followup_focus` in state.md to one of:
    - `experiments_only` — feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` to jump to experiments
    - `from_decomposition` — feedback changes the research design (e.g., "add a new component", "different approach") → set `current_step: 4` to redo decomposition onward
-   - `from_literature` — feedback suggests the framing or literature is wrong → set `current_step: 1` to redo from Step 2
+   - `from_literature` — feedback suggests the framing or literature needs to change → set `current_step: 1` to redo from Step 2
    - `full` — feedback is a substantial pivot → set `current_step: 1` (normal Step 1 flow)
 
    **For skipped steps**, copy prior artifacts into the run directory so downstream steps can read them. For example, if `followup_focus: experiments_only`:
@@ -353,7 +358,7 @@ This step runs three sequential adversarial review agents.
      1. Read the challenge files carefully. Determine: is the theoretical argument for why this won't work **sufficient on its own**, or would a **quick disproof experiment** make the case stronger and more convincing?
      2. If theory alone is sufficient (the flaw is obvious):
         - Write a summary of why the approach won't work to `<run-dir>/rethink-rationale.md`
-        - Set `current_step: 9, status: rethink_theory_only, challenge_outcome: rethink`. This skips to Step 10 (report) which will compile a "negative result" paper.
+        - Set `current_step: 9, status: rethink_theory_only, challenge_outcome: rethink`. The wrapper runs Step 10 (audit), which short-circuits a theory-only rethink (nothing to audit) straight through to Step 11 (report) to compile a negative-result paper.
      3. If a simple disproof experiment would strengthen the case:
         - Write a minimal `decomposition.md` with ONLY the disproof experiment
         - Write `<run-dir>/rethink-rationale.md` explaining the theoretical argument
@@ -438,9 +443,9 @@ If `state.md` contains `is_followup: true`:
 
 3. **On FAIL** (fail_fast_agreement is true):
    - Stop further experiments.
-   - Log the failure details in state.md.
+   - Record the result details in state.md.
    - Set `status: experiments_done_with_failure`.
-   - The wrapper will advance to Step 10 to compile whatever results exist.
+   - The wrapper advances to Step 10 (audit); the auditor triages whether the FAIL is a genuine null or a botched run, then Step 11 compiles whatever results exist.
 
 4. **On PASS**:
    - Continue to next experiment in lambda order.
@@ -451,7 +456,53 @@ If `state.md` contains `is_followup: true`:
 
 ---
 
-## Step 10: Compile Research Report
+## Step 10: Audit the Results (Audit-Remediation Loop)
+
+An independent **results-auditor** red-teams the experiment outputs before write-up. Autonomous cap: **R_MAX = 3** remediation rounds. The wrapper re-enters this step while `status: audit_remediating`, and stops the loop when you set `status: audit_complete`.
+
+### Short-circuit cases (no remediation loop)
+
+1. **Zero completed experiments, or `status: rethink_theory_only`** — there is nothing to audit. Write a minimal `<run-dir>/audit/results-audit.md` (disposition `NO-EXPERIMENTS`). Then write state.md atomically with `current_step: 10, status: audit_complete, audit_exit_reason: no-experiments-to-audit`. Stop. (The wrapper advances to Step 11.)
+
+2. **`status: experiments_done_with_failure`** (a fail-fast stop) — run a SINGLE audit pass to triage the result (genuine `TRUE-NULL` vs a botched run), but do NOT enter the remediation loop (the run already decided to write up). Write `current_step: 10, status: audit_complete, audit_exit_reason: <true-null | botched-run-noted>`.
+
+### Normal audit round (`status: experiments_complete`, ≥1 experiment)
+
+1. `mkdir -p <run-dir>/audit/`. Read `audit_round` from state.md (default 0); this round is `n = audit_round + 1`.
+
+2. **Freeze the round-1 claim anchor**: for each experiment, if `<run-dir>/audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. This preserves the original claim across remediation re-runs (a defence against narrowing-the-claim-to-pass).
+
+3. **Spawn the results-auditor** (a fresh agent each round, for independence):
+   ```
+   Task(subagent_type="researcher:results-auditor", prompt="""
+   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
+
+   Run directory: <run-dir>/
+   Frozen anchor: <run-dir>/success-criteria.md  (on a follow-up: <run-dir>/prior/success-criteria.md)
+   Audit only this run's experiments: <run-dir>/experiments/exp-*  (IGNORE the prior/ directory)
+   This is audit round <n>.
+   If <n> > 1: also read every prior <run-dir>/audit/results-audit.md and the
+   round-1 claim anchors <run-dir>/audit/claim-anchor-*.md, and run the stuck-detector.
+   Write output to: <run-dir>/audit/results-audit.md
+   """)
+   ```
+   (On a follow-up, prior experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
+
+4. **Read `audit/results-audit.md` overall disposition and decide.** Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
+
+   - **CONVERGED-POSITIVE** or **HONEST-NEGATIVE**: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <all-supported | true-null>`.
+   - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
+   - **NEEDS-REMEDIATION**:
+     - If `n >= 3` (R_MAX) **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
+     - Otherwise: re-run ONLY the flagged experiment — re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
+
+### Atomicity
+
+`status` and `audit_round` must always be written in the **same** `state.md.tmp`→`mv`. A crash that leaves `status: audit_remediating` without an updated `audit_round` could otherwise wedge the loop.
+
+---
+
+## Step 11: Compile Research Report
 
 1. **Spawn report agent**:
    ```
@@ -463,8 +514,10 @@ If `state.md` contains `is_followup: true`:
    Write output to: <run-dir>/paper/
 
    IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
-   steelman-review.md, pre-mortem.md) and use the pre-mortem risk analysis
-   to inform the Limitations section of the paper.
+   steelman-review.md, pre-mortem.md) and audit/results-audit.md. Use the
+   pre-mortem risk analysis plus any unresolved audit findings (and the
+   audit_exit_reason) to inform the Limitations section. Present positive and
+   negative/null results with the same framing.
 
    If <run-dir>/rethink-rationale.md exists, this is a NEGATIVE RESULT paper.
    Frame the paper around why the approach doesn't work and what was learned.
@@ -531,7 +584,7 @@ If `state.md` contains `is_followup: true`:
    <2-3 bullet points on what to investigate next>
    ```
 
-5. Update `state.md`: `current_step: 10, status: complete`.
+5. Update `state.md`: `current_step: 11, status: complete`.
 
 ---
 
@@ -539,6 +592,6 @@ If `state.md` contains `is_followup: true`:
 
 - When spawning agents, always use absolute paths for all files.
 - After each agent completes, read its output to verify it produced what was expected.
-- If an agent fails or produces empty output, retry ONCE with the same prompt. If it fails again, log the failure in state.md and continue.
+- If an agent produces no output or errors out, retry ONCE with the same prompt. If it still produces nothing, note it in state.md and continue.
 - Write `state.md` updates atomically: write to `state.md.tmp`, then use bash `mv` to rename.
 - Keep state.md updates concise but include all decision rationale for debugging.

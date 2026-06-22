@@ -1,7 +1,7 @@
 {
   "name": "researcher",
-  "description": "AI Safety R&D Agent — a 10-step interactive research workflow using Steinhardt fail-fast methodology. Includes literature search (arXiv, Semantic Scholar, lab blogs, community), novelty assessment, adversarial plan challenge, lambda-ordered experiment execution, and LaTeX paper compilation.",
-  "version": "0.2.0",
+  "description": "AI Safety R&D Agent — an 11-step interactive research workflow using Steinhardt fail-fast methodology. Includes literature search (arXiv, Semantic Scholar, lab blogs, community), novelty assessment, adversarial plan challenge, lambda-ordered experiment execution, an independent results audit, and LaTeX paper compilation.",
+  "version": "0.3.0",
   "author": {
     "name": "Titus"
   }

@@ -45,7 +45,8 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 | Steelman review | `challenge/steelman-review.md` | Questions about what a senior researcher would say |
 | Pre-mortem | `challenge/pre-mortem.md` | Questions about failure modes, what could go wrong |
 | Experiment plans | `experiments/exp-NNN/plan.md` | Questions about specific experiment setup |
-| Experiment results | `experiments/exp-NNN/results.md` | Questions about what happened, why something passed/failed |
+| Experiment results | `experiments/exp-NNN/results.md` | Questions about what happened, why a result came out as it did |
+| Results audit | `audit/results-audit.md` | Whether results are supported by the evidence, reproducibility, what the auditor flagged, why the audit loop stopped |
 | Experiment code | `experiments/exp-NNN/*.py` | Questions about implementation details |
 | Rethink rationale | `rethink-rationale.md` | If run was a negative result — why the approach doesn't work |
 | Paper | `paper/sections/*.tex` | Questions about the write-up, conclusions |
@@ -56,13 +57,13 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 
 ## Things You Can Help With
 
-- **Explain results**: "Why did experiment 3 fail?" → read exp-003/results.md
+- **Explain results**: "What did experiment 3 show?" → read exp-003/results.md
 - **Challenge findings**: "Is the steelman's objection valid?" → read steelman-review.md, cross-reference with experiment results
 - **Suggest follow-ups**: "What should I try next?" → synthesize from pre-mortem, experiment results, open questions
 - **Summarize for others**: "Write a 2-paragraph summary for my supervisor" → use briefing + paper abstract
 - **Compare with literature**: "How does this relate to the Anthropic paper on routing?" → read literature files
 - **Debug experiments**: "Show me the code for experiment 5" → read exp-005/*.py files
-- **Assess confidence**: "How confident should I be in these results?" → cross-reference assumption analysis, experiment methodology, pre-mortem risks
+- **Assess confidence**: "How confident should I be in these results?" → cross-reference the results audit (`audit/results-audit.md`), assumption analysis, experiment methodology, pre-mortem risks
 
 ## Creating Follow-Ups
 

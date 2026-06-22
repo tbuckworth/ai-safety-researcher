@@ -2,7 +2,7 @@
 
 ## Overview
 
-The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 10-step research workflow using a hub-and-spoke architecture. A single orchestrator command manages all user dialogue and dispatches specialised leaf-node agents for focused work.
+The AI Safety R&D Agent is a Claude Code plugin that orchestrates an 11-step research workflow using a hub-and-spoke architecture. A single orchestrator command manages all user dialogue and dispatches specialised leaf-node agents for focused work.
 
 ## Design Principles
 
@@ -63,7 +63,12 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 10-step rese
 │    ├─┤   experiment     │  fail → stop or pivot
 │    │ └─────────────────┘  pass → continue + write up
 │    ▼
-│  Step 10: Report
+│  Step 10: Audit ◄────────────────┐  (re-run flagged exp, re-audit; ≤ R_MAX)
+│    │ ┌─────────────────┐         │
+│    ├─┤ results-auditor  │─────────┘  FIXABLE-DEFECT → loop
+│    │ └─────────────────┘            SUPPORTED / TRUE-NULL → exit
+│    ▼
+│  Step 11: Report
 │    │ ┌─────────────────┐
 │    ├─┤     report       │  → LaTeX paper
 │    │ └─────────────────┘
@@ -85,7 +90,8 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates a 10-step rese
 | steelman | `agents/steelman.md` | 6 | opus | Senior researcher review — simpler paths, blind spots, honest feedback |
 | pre-mortem | `agents/pre-mortem.md` | 6 | opus | Failure scenario analysis — root causes, early warnings, mitigations |
 | experiment | `agents/experiment.md` | 9 | opus | Executes a single experiment, reports pass/fail |
-| report | `agents/report.md` | 10 | opus | Compiles all artefacts into LaTeX paper with real BibTeX |
+| results-auditor | `agents/results-auditor.md` | 10 | opus | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
+| report | `agents/report.md` | 11 | opus | Compiles all artefacts into LaTeX paper with real BibTeX |
 
 ## Directory Layout
 
@@ -96,7 +102,7 @@ researcher/
 ├── .claude-plugin/
 │   └── plugin.json                  # Plugin manifest
 ├── commands/
-│   ├── researcher.md                # Interactive orchestrator (10-step workflow)
+│   ├── researcher.md                # Interactive orchestrator (11-step workflow)
 │   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
 │   └── researcher-auto-email.md     # Autonomous email composer (sends results)
 ├── scripts/
@@ -114,7 +120,8 @@ researcher/
 │   ├── steelman.md                  # Step 6: Senior researcher review
 │   ├── pre-mortem.md                # Step 6: Failure scenario analysis
 │   ├── experiment.md                # Step 9: Experiment execution
-│   └── report.md                    # Step 10: LaTeX paper compilation
+│   ├── results-auditor.md           # Step 10: Independent results audit
+│   └── report.md                    # Step 11: LaTeX paper compilation
 ├── templates/
 │   ├── preamble.tex                 # LaTeX preamble
 │   ├── paper.tex                    # Main document template
@@ -126,7 +133,8 @@ researcher/
 │   ├── ARCHITECTURE.md              # This file
 │   ├── AUTONOMOUS.md                # Autonomous mode setup and reference
 │   ├── DIAGRAM.md                   # Mermaid architecture diagrams
-│   └── WORKFLOW.md                  # Detailed 10-step workflow specification
+│   ├── STANCE.md                    # Canonical truth-seeking Voice block + KEEP/REFRAME rubric
+│   └── WORKFLOW.md                  # Detailed 11-step workflow specification
 ├── output/                          # Research artefacts (gitignored)
 ├── logs/                            # Autonomous mode logs (gitignored)
 ├── CLAUDE.md                        # Project-level Claude context
@@ -157,7 +165,8 @@ Each run produces artefacts in `output/<run-id>/`:
 - `success-criteria.md` — SOTA, benchmarks, publishability bar
 - `decomposition.md` — Lambda table and component details
 - `challenge/` — Assumption analysis, steelman review, pre-mortem
-- `experiments/exp-NNN/` — Experiment plans, results, report sections
+- `experiments/exp-NNN/` — Experiment plans, results, `run.log`, report sections
+- `audit/` — Results auditor findings (`results-audit.md`) and round-1 claim anchors
 - `references.bib` — Accumulated BibTeX citations
 - `citation-registry.md` — Citation key registry
 - `paper/` — Complete LaTeX project with compiled PDF

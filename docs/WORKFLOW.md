@@ -1,6 +1,6 @@
 # Research Workflow Specification
 
-This document defines the complete 10-step AI Safety R&D research workflow. The orchestrator (`commands/researcher.md`) reads this document at startup and follows it step by step.
+This document defines the complete 11-step AI Safety R&D research workflow. The orchestrator (`commands/researcher.md`) reads this document at startup and follows it step by step.
 
 ## Architecture Constraints
 
@@ -32,8 +32,12 @@ output/<run-id>/
 │   ├── exp-001/
 │   │   ├── plan.md
 │   │   ├── results.md
+│   │   ├── run.log             # Full raw stdout/stderr — the auditor re-derives from this
 │   │   └── report-section.md
 │   └── exp-002/ ...
+├── audit/
+│   ├── results-audit.md        # Results auditor's findings (Step 10)
+│   └── claim-anchor-*.md        # Round-1 results, frozen across remediation rounds
 ├── references.bib              # Accumulated throughout workflow
 ├── citation-registry.md        # cite_key -> one-line description
 └── paper/
@@ -222,7 +226,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 | 0.7 - 0.9 | Similar work succeeded; minor adaptations needed. |
 | 0.5 - 0.7 | Related work exists but not directly comparable. |
 | 0.3 - 0.5 | Theoretical arguments exist but no empirical validation. |
-| 0.1 - 0.3 | Known difficulties; previous failures documented. |
+| 0.1 - 0.3 | Known difficulties; prior attempts documented. |
 | < 0.05    | Mark `[SHOWSTOPPER]`. Ask user before proceeding. |
 
 ### Edge Cases
@@ -347,9 +351,9 @@ This step runs three sequential adversarial review passes on the research plan b
 
 3. **On FAIL** (and fail_fast_agreement is true):
    - Stop further experiments
-   - Present failure to user: what failed, why, implications
-   - Ask: "Pivot topic?" / "Adjust approach?" / "Write up the failure?"
-   - If "write up failure" -> skip to Step 10 with failure narrative
+   - Present the result to the user: what was found, why, implications
+   - Ask: "Pivot topic?" / "Adjust approach?" / "Write up the result?"
+   - In every case the next step is Step 10 (audit), which triages whether the FAIL is a genuine null or a botched run before write-up
 
 4. **On PASS**:
    - If possible, split: spawn next experiment AND spawn `experiment` agent to write `experiments/exp-NNN/report-section.md` (parallel execution)
@@ -361,14 +365,50 @@ This step runs three sequential adversarial review passes on the research plan b
 
 ---
 
-## Step 10: Compile Research Report
+## Step 10: Audit the Results (Audit-Remediation Loop)
+
+**Agent**: `results-auditor` (one per round)
+
+An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints — a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there) — and loops only on genuinely fixable methodology defects.
+
+### Process
+
+1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11.
+
+2. **For each round** (cap: R_MAX ≈ 3; autonomous mode = 3), spawn a FRESH `results-auditor` with:
+   - The frozen anchor: original topic + `success-criteria.md` (the pre-registration — goalposts may not move)
+   - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log` and code files
+   - On round > 1: the prior `audit/results-audit.md` reports + the round-1 `claim-anchor-*.md`
+
+3. The auditor re-derives every number from the raw logs (and re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
+   - `SUPPORTED` — the claim is backed by the evidence
+   - `FIXABLE-DEFECT` — a defect that could plausibly flip PASS/FAIL (leakage, missing baseline, too few seeds, grader/harness gaming). **Loop on these.**
+   - `TRUE-NULL` — sound setup, effect absent. **Exit to an honest negative** (do not loop — that would be p-hacking).
+   - `UNSALVAGEABLE` — the framing itself is broken → write up "why this doesn't work".
+
+4. **Orchestrator/executor acts on the disposition**:
+   - All `SUPPORTED`, or only `TRUE-NULL` → record `audit_exit_reason`, go to Step 11.
+   - `FIXABLE-DEFECT` and round < R_MAX and not stuck → re-run ONLY the flagged experiment (handing back the defect *class*, not a fix; requiring a reported seed), then re-audit.
+   - round == R_MAX or stuck → go to Step 11 with the unresolved findings carried into Limitations.
+
+5. **Stuck-detector**: if the defect set isn't shrinking, or a claim has narrowed while its verdict improved, exit with `audit_exit_reason: narrowed-claim-residual`.
+
+6. **Independence**: the auditor is a fresh agent each round, re-derives from primary artefacts (never `results.md`'s summary), and keeps a neutral tone but a maximally suspicious stance. It audits; it never edits experiment code.
+
+### Loop Condition
+
+Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_MAX times. It can also surface an `UNSALVAGEABLE` framing that loops back to Step 5/4.
+
+---
+
+## Step 11: Compile Research Report
 
 **Agent**: `report`
 
 ### Process
 
 1. Spawn `report` agent with:
-   - Input: ALL artefacts from the run directory (including `challenge/` files)
+   - Input: ALL artefacts from the run directory (including `challenge/` files and `audit/results-audit.md`)
    - Templates from `${CLAUDE_PLUGIN_ROOT}/templates/`
    - Output: `paper/` directory with complete LaTeX project
 
@@ -381,7 +421,7 @@ This step runs three sequential adversarial review passes on the research plan b
    - **Initial Experiments & Results**: From completed experiment reports
    - **Planned Major Experiments**: From experiments not yet run (if any)
    - **Discussion**: Preliminary interpretation of results
-   - **Limitations**: Informed by the pre-mortem risk analysis and residual risks from `challenge/pre-mortem.md`
+   - **Limitations**: Informed by the pre-mortem risk analysis and residual risks from `challenge/pre-mortem.md`, plus any unresolved findings and the `audit_exit_reason` from `audit/results-audit.md`
    - **Conclusion**: Empty section with placeholders for future work
    - **References**: Real BibTeX only — no fabricated citations
 
@@ -436,6 +476,8 @@ Three source groups are searched in parallel:
 
 `state.md` uses YAML frontmatter for machine-readable state and a narrative body for human readability.
 
+`status` values include: `clarified`, `research_complete`, `decomposition_complete`, `challenge_complete`, `experiments_complete`, `audit_remediating` (the auditor requested another remediation round — the autonomous wrapper re-enters Step 10), `audit_complete` (audit done, ready for the report), `complete`, and `failed`. The audit-remediation loop also carries `audit_round` (int) and `audit_exit_reason` (string).
+
 ```yaml
 ---
 run_id: "2026-02-07-interpretability-of-sparse-autoencoders"
@@ -469,6 +511,8 @@ lambda_table:
     status: PENDING
 experiments_completed: []
 experiments_failed: []
+audit_round: 0
+audit_exit_reason: ""
 ---
 
 # Workflow Progress

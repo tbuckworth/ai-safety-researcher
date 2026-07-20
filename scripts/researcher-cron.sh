@@ -23,7 +23,11 @@ OUTPUT_DIR="${HDD}/researcher-output"
 LOG_DIR="${OUTPUT_DIR}/logs"
 
 LOCKFILE="/tmp/researcher-auto.lock"
-TIMEOUT_HOURS=4
+TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
+# Per-step retry: a connection drop mid-step (more likely on slow Fable turns)
+# leaves state.md un-advanced; re-running the step from current state recovers it.
+# Bounded so a genuinely stuck step still fails instead of looping forever.
+STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 TOPIC="${1:-}"
 
 # Default model for all researcher sessions. Fable 5 is the most capable model (highest quality, ~2x Opus token cost, thinking always on).
@@ -378,37 +382,46 @@ build_email_prompt() {
 
 run_step() {
     local step="$1"
-    local run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
     local prev_step
     prev_step=$(get_current_step)
 
-    log "Starting step ${step}..."
+    local attempt exit_code new_step new_status run_log
+    for attempt in $(seq 1 "$STEP_MAX_ATTEMPTS"); do
+        run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
+        if [ "$attempt" -eq 1 ]; then
+            log "Starting step ${step}..."
+        else
+            log "Retrying step ${step} (attempt ${attempt}/${STEP_MAX_ATTEMPTS}) after an incomplete run (e.g. a dropped connection)..."
+            sleep 15
+        fi
 
-    cd "$REPO_DIR"
-    build_step_prompt "$step" | claude --print \
-        --dangerously-skip-permissions \
-        --model "$MODEL" \
-        --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
-        2>&1 | tee "$run_log"
+        cd "$REPO_DIR"
+        build_step_prompt "$step" | claude --print \
+            --dangerously-skip-permissions \
+            --model "$MODEL" \
+            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
+            2>&1 | tee "$run_log"
 
-    local exit_code=${PIPESTATUS[0]}
-    local new_step
-    new_step=$(get_current_step)
-    local new_status
-    new_status=$(get_status)
+        exit_code=${PIPESTATUS[0]}
+        new_step=$(get_current_step)
+        new_status=$(get_status)
 
-    # audit_remediating / audit_complete legitimately keep current_step at 10 across
-    # rounds, so they are not "stuck"; the bash-owned AUDIT_ROUNDS ceiling bounds that loop.
-    if [ "$new_step" = "$prev_step" ] \
-        && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ] \
-        && [ "$new_status" != "audit_remediating" ] && [ "$new_status" != "audit_complete" ]; then
-        log "Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
-        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
-        return 1
-    fi
+        # Success = the step advanced, OR reached a legitimate terminal / audit status.
+        # audit_remediating / audit_complete keep current_step at 10 across rounds by
+        # design (bounded by the bash-owned AUDIT_ROUNDS ceiling), so they are not "stuck".
+        if [ "$new_step" != "$prev_step" ] \
+            || [ "$new_status" = "complete" ] || [ "$new_status" = "failed" ] \
+            || [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; then
+            log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
+            return 0
+        fi
 
-    log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
-    return 0
+        log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
+    done
+
+    log "Step ${step} failed after ${STEP_MAX_ATTEMPTS} attempts. Marking run failed."
+    sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+    return 1
 }
 
 # Main step loop

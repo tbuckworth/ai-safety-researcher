@@ -6,7 +6,7 @@ description: |
   do differently, what's being avoided, and whether a simpler path exists.
   Triggered as one of three independent, parallel challenge passes in Step 6 of
   the research workflow.
-model: claude-fable-5
+model: fable
 color: red
 tools: ["Read"]
 ---

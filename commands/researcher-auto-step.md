@@ -2,7 +2,7 @@
 description: Execute one step of the autonomous research workflow
 argument-hint: <step-number> <run-directory>
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch, Task]
-model: claude-fable-5
+model: fable
 ---
 
 # Autonomous Research Step Executor

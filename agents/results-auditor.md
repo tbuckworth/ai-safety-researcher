@@ -9,7 +9,7 @@ description: |
   gaming, and statistical validity. It classifies each finding and reports
   whether the results honestly earn the claims. It audits; it never edits
   experiment code.
-model: claude-fable-5
+model: fable
 color: red
 tools: ["Read", "Write", "Bash", "Glob", "Grep"]
 ---

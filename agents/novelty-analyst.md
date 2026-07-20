@@ -5,7 +5,7 @@ description: |
   Triggered as Step 3 of the research workflow. Analyses the literature
   findings to determine if the proposed research is novel, partially novel,
   or already done.
-model: claude-fable-5
+model: fable
 color: yellow
 tools: ["Read", "Write"]
 ---

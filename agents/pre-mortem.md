@@ -6,7 +6,7 @@ description: |
   specific failure scenarios with root causes, early warning signs, and
   mitigations. Ranked by likelihood x severity. Triggered as one of three
   independent, parallel challenge passes in Step 6 of the research workflow.
-model: claude-fable-5
+model: fable
 color: red
 tools: ["Read", "Write"]
 ---

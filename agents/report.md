@@ -5,7 +5,7 @@ description: |
   Produces a complete paper with title, abstract, sections, real BibTeX
   references, and optionally compiles to PDF. Triggered as Step 10 of the
   research workflow.
-model: claude-fable-5
+model: fable
 color: white
 tools: ["Read", "Write", "Bash", "WebSearch", "WebFetch"]
 ---

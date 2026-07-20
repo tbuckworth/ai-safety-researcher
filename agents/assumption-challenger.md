@@ -5,7 +5,7 @@ description: |
   assumption, states it explicitly, rates confidence, describes consequences if
   wrong, and suggests how to test it. Triggered as one of three independent,
   parallel challenge passes in Step 6 of the research workflow.
-model: claude-fable-5
+model: fable
 color: red
 tools: ["Read", "Write"]
 ---

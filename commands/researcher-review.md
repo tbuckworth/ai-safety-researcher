@@ -2,7 +2,7 @@
 description: Interactively review and explore autonomous research results
 argument-hint: [run-directory]
 allowed-tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, AskUserQuestion]
-model: claude-fable-5
+model: fable
 ---
 
 # Research Review — Interactive Explorer

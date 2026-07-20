@@ -26,9 +26,9 @@ LOCKFILE="/tmp/researcher-auto.lock"
 TIMEOUT_HOURS=4
 TOPIC="${1:-}"
 
-# Default model for all researcher sessions. Pinned to Fable 5 (fast/low-cost).
+# Default model for all researcher sessions. Fable 5 is the most capable model (highest quality, ~2x Opus token cost, thinking always on).
 # Override per-run with e.g. RESEARCHER_MODEL='opus[1m]' or a full model id.
-MODEL="${RESEARCHER_MODEL:-claude-fable-5}"
+MODEL="${RESEARCHER_MODEL:-fable}"
 
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 

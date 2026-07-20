@@ -2,7 +2,7 @@
 description: Compose and send autonomous research results email
 argument-hint: <run-directory>
 allowed-tools: [Read, Glob, Bash, mcp__claude_ai_Gmail__gmail_get_profile]
-model: claude-fable-5
+model: fable
 ---
 
 # Autonomous Research Email Composer

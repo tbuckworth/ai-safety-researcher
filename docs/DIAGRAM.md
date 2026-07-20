@@ -51,7 +51,7 @@ flowchart TD
     CR["criteria"]:::agent --> S4
     DE["decomposition"]:::agent --> S5
     AC["assumption-challenger"]:::agent --> S6
-    SM2["steelman"]:::agent --> S6
+    SM2["mentor-review"]:::agent --> S6
     PM["pre-mortem"]:::agent --> S6
     EX["experiment ×N"]:::agent --> S9
     RA["results-auditor ×rounds"]:::agent --> S10
@@ -82,15 +82,15 @@ flowchart LR
     subgraph Agents["Leaf-Node Agents"]
         A1["search-planner\n(sonnet)"]
         A2["search\n(sonnet)"]
-        A3["novelty-analyst\n(opus)"]
-        A4["criteria\n(opus)"]
-        A5["decomposition\n(opus)"]
-        A6["assumption-challenger\n(opus)"]
-        A7["steelman\n(opus)"]
-        A8["pre-mortem\n(opus)"]
-        A9["experiment\n(opus)"]
-        A10["results-auditor\n(opus)"]
-        A11["report\n(opus)"]
+        A3["novelty-analyst\n(fable)"]
+        A4["criteria\n(fable)"]
+        A5["decomposition\n(fable)"]
+        A6["assumption-challenger\n(fable)"]
+        A7["mentor-review\n(fable)"]
+        A8["pre-mortem\n(fable)"]
+        A9["experiment\n(fable)"]
+        A10["results-auditor\n(fable)"]
+        A11["report\n(fable)"]
     end
 
     subgraph State["Persistent State"]
@@ -174,7 +174,7 @@ flowchart TD
     LIT --> L4["synthesis.md"]
 
     CHL --> CH1["assumption-analysis.md"]
-    CHL --> CH2["steelman-review.md"]
+    CHL --> CH2["mentor-review.md"]
     CHL --> CH3["pre-mortem.md"]
 
     EXP --> E1["exp-001/"]

@@ -13,7 +13,7 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 
 ## Key Directories
 
-- `agents/` — Agent definitions (10 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, steelman, pre-mortem, experiment, report)
+- `agents/` — Agent definitions (10 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, mentor-review, pre-mortem, experiment, report)
 - `commands/` — Slash command entry points (orchestrator)
 - `skills/` — Auto-trigger skill definitions
 - `docs/` — Architecture and workflow specifications (WORKFLOW.md is the master document)

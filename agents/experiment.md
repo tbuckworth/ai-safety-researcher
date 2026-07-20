@@ -5,7 +5,7 @@ description: |
   Each instance tests one component, writes code, runs it, and reports
   pass/fail against predefined criteria. Triggered as Step 9 of the
   research workflow.
-model: opus
+model: claude-fable-5
 color: red
 tools: ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
 ---

@@ -26,7 +26,7 @@ output/<run-id>/
 ├── decomposition.md            # Steinhardt lambda table + component details
 ├── challenge/
 │   ├── assumption-analysis.md  # Unstated assumptions surfaced
-│   ├── steelman-review.md      # Senior researcher perspective
+│   ├── mentor-review.md        # Senior researcher perspective
 │   └── pre-mortem.md           # Failure scenario analysis
 ├── experiments/
 │   ├── exp-001/
@@ -248,35 +248,27 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 ## Step 6: Challenge the Research Plan
 
-**Agents**: `assumption-challenger`, `steelman`, `pre-mortem` (sequential)
+**Agents**: `assumption-challenger`, `mentor-review`, `pre-mortem` (independent, parallel)
 
-This step runs three sequential adversarial review passes on the research plan before committing to experiments. The goal is to catch flawed assumptions, blind spots, and predictable failure modes early.
+This step runs three **independent** adversarial review passes on the research plan before committing to experiments. They do not build on each other — all three are dispatched in a single message and run in parallel, each forming its own view from the base artefacts. The goal is to catch flawed assumptions, blind spots, and predictable failure modes early; independence keeps the later passes from anchoring on the earlier ones.
 
 ### Process
 
 1. **Create challenge directory**: `mkdir -p output/<run-id>/challenge/`
 
-2. **Spawn assumption-challenger agent**:
-   - Input: `state.md`, `literature/synthesis.md`, `novelty-assessment.md`, `success-criteria.md`, `decomposition.md`
-   - Output: `challenge/assumption-analysis.md`
-   - Wait for completion before proceeding.
+2. **Spawn all three challenge agents in parallel** (one message, three Task calls). Each reads only the base artefacts — `state.md`, `literature/synthesis.md`, `novelty-assessment.md`, `success-criteria.md`, `decomposition.md` — and no agent reads another's output:
+   - `assumption-challenger` → `challenge/assumption-analysis.md`
+   - `mentor-review` → returns text; orchestrator saves it to `challenge/mentor-review.md`
+   - `pre-mortem` → `challenge/pre-mortem.md`
 
-3. **Spawn steelman agent**:
-   - Input: same base artefacts + `challenge/assumption-analysis.md`
-   - Output: `challenge/steelman-review.md`
-   - Wait for completion before proceeding.
+   Wait for all three to complete.
 
-4. **Spawn pre-mortem agent**:
-   - Input: same base artefacts + `challenge/assumption-analysis.md` + `challenge/steelman-review.md`
-   - Output: `challenge/pre-mortem.md`
-   - Wait for completion before proceeding.
-
-5. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
+3. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
    - Critical assumptions that need testing
-   - The steelman verdict (proceed / minor revisions / major revisions / rethink)
+   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink)
    - Top failure scenarios and their mitigations
 
-6. **Present to user** via AskUserQuestion with options:
+4. **Present to user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
    - "Revise the decomposition" -> loop to Step 5
    - "Revise success criteria" -> loop to Step 4

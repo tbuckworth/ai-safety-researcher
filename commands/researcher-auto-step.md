@@ -2,7 +2,7 @@
 description: Execute one step of the autonomous research workflow
 argument-hint: <step-number> <run-directory>
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch, Task]
-model: claude-opus-4-6
+model: claude-fable-5
 ---
 
 # Autonomous Research Step Executor
@@ -289,14 +289,14 @@ If `state.md` contains `is_followup: true`:
 
 ### Process
 
-This step runs three sequential adversarial review agents.
+This step runs three **independent** adversarial review passes on the same plan. They do **not** build on each other — dispatch all three in a single message so they run in parallel, each forming its own view from the base artefacts. Independence is the point: it stops the later passes from anchoring on the earlier ones.
 
 1. **Create challenge directory** (if not exists):
    ```bash
    mkdir -p <run-dir>/challenge/
    ```
 
-2. **Spawn assumption-challenger agent**:
+2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```
    Task(subagent_type="researcher:assumption-challenger", prompt="""
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
@@ -308,27 +308,18 @@ This step runs three sequential adversarial review agents.
    Read decomposition from: <run-dir>/decomposition.md
    Write output to: <run-dir>/challenge/assumption-analysis.md
    """)
-   ```
-   Wait for completion.
 
-3. **Spawn steelman agent**:
-   ```
-   Task(subagent_type="researcher:steelman", prompt="""
-   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/steelman.md
+   Task(subagent_type="researcher:mentor-review", prompt="""
+   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/mentor-review.md
 
    Read state from: <run-dir>/state.md
    Read synthesis from: <run-dir>/literature/synthesis.md
    Read novelty from: <run-dir>/novelty-assessment.md
    Read criteria from: <run-dir>/success-criteria.md
    Read decomposition from: <run-dir>/decomposition.md
-   Read assumption analysis from: <run-dir>/challenge/assumption-analysis.md
    Return your review as text. Do NOT write any files.
    """)
-   ```
-   Wait for completion. **Save the agent's returned text** to `<run-dir>/challenge/steelman-review.md` using the Write tool.
 
-4. **Spawn pre-mortem agent**:
-   ```
    Task(subagent_type="researcher:pre-mortem", prompt="""
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
 
@@ -337,16 +328,14 @@ This step runs three sequential adversarial review agents.
    Read novelty from: <run-dir>/novelty-assessment.md
    Read criteria from: <run-dir>/success-criteria.md
    Read decomposition from: <run-dir>/decomposition.md
-   Read assumption analysis from: <run-dir>/challenge/assumption-analysis.md
-   Read steelman review from: <run-dir>/challenge/steelman-review.md
    Write output to: <run-dir>/challenge/pre-mortem.md
    """)
    ```
-   Wait for completion.
+   Wait for all three to complete. **Save the mentor-review agent's returned text** to `<run-dir>/challenge/mentor-review.md` using the Write tool (assumption-challenger and pre-mortem write their own files).
 
-5. **Read all three challenge files.** Extract the steelman verdict.
+3. **Read all three challenge files.** Extract the mentor-review verdict.
 
-6. **Autonomous decision based on steelman verdict**:
+4. **Autonomous decision based on mentor-review verdict**:
 
    - **PROCEED_AS_IS**: Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed`.
    - **MINOR_REVISIONS**: Log the suggested revisions in state.md. Proceed. Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed_with_notes`.
@@ -514,7 +503,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Write output to: <run-dir>/paper/
 
    IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
-   steelman-review.md, pre-mortem.md) and audit/results-audit.md. Use the
+   mentor-review.md, pre-mortem.md) and audit/results-audit.md. Use the
    pre-mortem risk analysis plus any unresolved audit findings (and the
    audit_exit_reason) to inform the Limitations section. Present positive and
    negative/null results with the same framing.
@@ -563,7 +552,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
    ## Challenge Highlights
    - **Critical assumptions**: <top 2-3 from assumption-analysis.md>
-   - **Steelman verdict**: <verdict + 1-sentence rationale>
+   - **Mentor-review verdict**: <verdict + 1-sentence rationale>
    - **Top failure scenario**: <#1 from pre-mortem.md>
 
    ## Results

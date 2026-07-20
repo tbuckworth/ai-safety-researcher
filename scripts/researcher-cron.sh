@@ -26,9 +26,9 @@ LOCKFILE="/tmp/researcher-auto.lock"
 TIMEOUT_HOURS=4
 TOPIC="${1:-}"
 
-# Model alias resolves to the latest (strongest) Opus automatically — no version pinning.
+# Default model for all researcher sessions. Pinned to Fable 5 (fast/low-cost).
 # Override per-run with e.g. RESEARCHER_MODEL='opus[1m]' or a full model id.
-MODEL="${RESEARCHER_MODEL:-opus}"
+MODEL="${RESEARCHER_MODEL:-claude-fable-5}"
 
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 
@@ -513,7 +513,7 @@ ${abstract:-See paper/ directory for full results.}
 - \`paper/\` — LaTeX paper and compiled PDF
 - \`literature/\` — Literature review artifacts
 - \`experiments/\` — Experiment code and results
-- \`challenge/\` — Adversarial review (assumptions, steelman, pre-mortem)
+- \`challenge/\` — Adversarial review (assumptions, mentor-review, pre-mortem)
 - \`decomposition.md\` — Steinhardt fail-fast decomposition
 - \`state.md\` — Workflow state log
 

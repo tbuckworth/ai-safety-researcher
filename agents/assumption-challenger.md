@@ -3,9 +3,9 @@ name: assumption-challenger
 description: |
   Use this agent to surface unstated assumptions in the research plan. For each
   assumption, states it explicitly, rates confidence, describes consequences if
-  wrong, and suggests how to test it. Triggered as Step 6a of the research
-  workflow (first of three sequential challenge passes).
-model: opus
+  wrong, and suggests how to test it. Triggered as one of three independent,
+  parallel challenge passes in Step 6 of the research workflow.
+model: claude-fable-5
 color: red
 tools: ["Read", "Write"]
 ---

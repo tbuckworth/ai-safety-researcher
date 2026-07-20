@@ -2,7 +2,7 @@
 description: Run the AI Safety R&D research workflow end-to-end
 argument-hint: <research-topic-or-question>
 allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch, Task, AskUserQuestion]
-model: claude-opus-4-6
+model: claude-fable-5
 ---
 
 # AI Safety Research Orchestrator
@@ -112,7 +112,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn novelty-analyst agent**:
    ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the novelty-analyst agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/novelty-analyst.md
 
@@ -138,7 +138,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn criteria agent**:
    ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the criteria agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/criteria.md
 
@@ -163,7 +163,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn decomposition agent**:
    ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the decomposition agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/decomposition.md
 
@@ -182,16 +182,16 @@ Do this yourself — no agent needed.
 
 ## Step 6: Challenge the Research Plan
 
-This step runs three sequential adversarial review agents before committing to experiments.
+This step runs three **independent** adversarial review passes before committing to experiments. They do **not** build on each other — dispatch all three in a single message so they run in parallel, each forming its own view from the base artefacts. Independence stops the later passes from anchoring on the earlier ones.
 
 1. **Create challenge directory**:
    ```bash
    mkdir -p output/<run-id>/challenge/
    ```
 
-2. **Spawn assumption-challenger agent**:
+2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the assumption-challenger agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
 
@@ -202,29 +202,20 @@ This step runs three sequential adversarial review agents before committing to e
    Read decomposition from: output/<run-id>/decomposition.md
    Write output to: output/<run-id>/challenge/assumption-analysis.md
    """)
-   ```
-   Wait for completion before proceeding.
 
-3. **Spawn steelman agent**:
-   ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
-   You are the steelman agent. Read your instructions from:
-   ${CLAUDE_PLUGIN_ROOT}/agents/steelman.md
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
+   You are the mentor-review agent. Read your instructions from:
+   ${CLAUDE_PLUGIN_ROOT}/agents/mentor-review.md
 
    Read state from: output/<run-id>/state.md
    Read synthesis from: output/<run-id>/literature/synthesis.md
    Read novelty from: output/<run-id>/novelty-assessment.md
    Read criteria from: output/<run-id>/success-criteria.md
    Read decomposition from: output/<run-id>/decomposition.md
-   Read assumption analysis from: output/<run-id>/challenge/assumption-analysis.md
    Return your review as text. Do NOT write any files.
    """)
-   ```
-   Wait for completion. **Save the agent's returned text** to `output/<run-id>/challenge/steelman-review.md` using the Write tool.
 
-4. **Spawn pre-mortem agent**:
-   ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the pre-mortem agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
 
@@ -233,25 +224,23 @@ This step runs three sequential adversarial review agents before committing to e
    Read novelty from: output/<run-id>/novelty-assessment.md
    Read criteria from: output/<run-id>/success-criteria.md
    Read decomposition from: output/<run-id>/decomposition.md
-   Read assumption analysis from: output/<run-id>/challenge/assumption-analysis.md
-   Read steelman review from: output/<run-id>/challenge/steelman-review.md
    Write output to: output/<run-id>/challenge/pre-mortem.md
    """)
    ```
-   Wait for completion before proceeding.
+   Wait for all three to complete. **Save the mentor-review agent's returned text** to `output/<run-id>/challenge/mentor-review.md` using the Write tool (assumption-challenger and pre-mortem write their own files).
 
-5. **Synthesise and present**: Read all three challenge files. Summarise:
+3. **Synthesise and present**: Read all three challenge files. Summarise:
    - Critical assumptions that need testing
-   - The steelman verdict (proceed / minor revisions / major revisions / rethink)
+   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink)
    - Top failure scenarios and their mitigations
 
-6. **Ask user** via AskUserQuestion with options:
+4. **Ask user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
    - "Revise the decomposition" -> loop to Step 5
    - "Revise success criteria" -> loop to Step 4
    - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3
 
-7. Update `state.md`: `current_step: 6, status: challenge_complete, challenge_outcome: <proceed/revise>`.
+5. Update `state.md`: `current_step: 6, status: challenge_complete, challenge_outcome: <proceed/revise>`.
 
 ---
 
@@ -289,7 +278,7 @@ Do this yourself — no agent needed.
    a. Create `experiments/exp-NNN/plan.md` with the component details from the decomposition.
    b. **Spawn experiment agent**:
       ```
-      Task(subagent_type="general-purpose", model="opus", prompt="""
+      Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
       You are the experiment agent. Read your instructions from:
       ${CLAUDE_PLUGIN_ROOT}/agents/experiment.md
 
@@ -327,7 +316,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 3. **Run one audit round** — spawn the results-auditor (a fresh agent each round, for independence):
    ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the results-auditor agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
 
@@ -359,7 +348,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 1. **Spawn report agent**:
    ```
-   Task(subagent_type="general-purpose", model="opus", prompt="""
+   Task(subagent_type="general-purpose", model="claude-fable-5", prompt="""
    You are the report agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/report.md
 
@@ -368,7 +357,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
    Write output to: output/<run-id>/paper/
 
    IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
-   steelman-review.md, pre-mortem.md) and audit/results-audit.md. Use the
+   mentor-review.md, pre-mortem.md) and audit/results-audit.md. Use the
    pre-mortem risk analysis plus any unresolved audit findings (and the
    audit_exit_reason) to inform the Limitations section. Present positive and
    negative/null results with the same framing.

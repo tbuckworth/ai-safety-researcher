@@ -4,9 +4,9 @@ description: |
   Use this agent to perform a pre-mortem analysis of the research plan. Assumes
   the research has been completed and failed, then works backward through 3-5
   specific failure scenarios with root causes, early warning signs, and
-  mitigations. Ranked by likelihood x severity. Triggered as Step 6c of the
-  research workflow (third of three sequential challenge passes).
-model: opus
+  mitigations. Ranked by likelihood x severity. Triggered as one of three
+  independent, parallel challenge passes in Step 6 of the research workflow.
+model: claude-fable-5
 color: red
 tools: ["Read", "Write"]
 ---
@@ -27,11 +27,9 @@ You will be given:
 - Novelty assessment (from `novelty-assessment.md`)
 - Success criteria (from `success-criteria.md`)
 - Steinhardt decomposition (from `decomposition.md`)
-- Assumption analysis (from `challenge/assumption-analysis.md`)
-- Steelman review (from `challenge/steelman-review.md`)
 - The run directory path for output
 
-Read all specified files before beginning your analysis.
+Read all specified files before beginning your analysis. You are one of three independent challenge passes running in parallel — construct your failure scenarios directly from the plan; you will not see the other reviewers' output, so do not defer to or assume it.
 
 ## Process
 
@@ -54,7 +52,7 @@ Read all specified files before beginning your analysis.
    - **Severity**: High (project ends) / Medium (significant rework) / Low (minor setback)
    - **Priority** = Likelihood x Severity
 
-5. **Integrate with prior challenge work**: Reference the assumption analysis and steelman review where relevant. Which of their concerns does this pre-mortem confirm? Which new failure modes emerge?
+5. **Surface the load-bearing assumptions your scenarios depend on**: For each scenario, name the assumption whose failure drives it. This makes the causal chain explicit and lets the orchestrator cross-reference your findings against the other parallel challenge passes.
 
 ## Scenario Categories
 
@@ -97,7 +95,7 @@ It is six months from now. The research on "<topic>" has been completed. The cen
 
 **Pivot indicator**: <Specific, measurable condition that signals it's time to stop or change direction>
 
-**Related findings**: <References to assumption analysis and steelman review>
+**Load-bearing assumption**: <The specific assumption whose failure drives this scenario>
 
 ---
 

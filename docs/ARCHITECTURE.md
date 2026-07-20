@@ -46,9 +46,9 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates an 11-step res
 │    │ └─────────────────┘                               │    │    │
 │    ▼                                              loop │    │    │
 │  Step 6: Challenge ───────────────────────────────┘    │    │    │
-│    │ ┌──────────────────────┐  (sequential)            │    │    │
+│    │ ┌──────────────────────┐  (parallel)              │    │    │
 │    ├─┤ assumption-challenger │                          │    │    │
-│    ├─┤ steelman             │                          │    │    │
+│    ├─┤ mentor-review         │                          │    │    │
 │    ├─┤ pre-mortem           │                               │    │
 │    │ └──────────────────────┘                               │    │
 │    ▼                                                        │    │
@@ -83,15 +83,15 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates an 11-step res
 |-------|------|------|-------|---------|
 | search-planner | `agents/search-planner.md` | 2 | sonnet | Creates structured search plan from topic + clarifications |
 | search | `agents/search.md` | 2 | sonnet | Executes a single search task (parallelisable, multiple instances) |
-| novelty-analyst | `agents/novelty-analyst.md` | 3 | opus | Assesses whether the idea has been done before |
-| criteria | `agents/criteria.md` | 4 | opus | Identifies SOTA, success criteria, benchmarks |
-| decomposition | `agents/decomposition.md` | 5 | opus | Steinhardt decomposition: components, P_success, T, lambda ordering |
-| assumption-challenger | `agents/assumption-challenger.md` | 6 | opus | Surfaces unstated assumptions in the research plan |
-| steelman | `agents/steelman.md` | 6 | opus | Senior researcher review — simpler paths, blind spots, honest feedback |
-| pre-mortem | `agents/pre-mortem.md` | 6 | opus | Failure scenario analysis — root causes, early warnings, mitigations |
-| experiment | `agents/experiment.md` | 9 | opus | Executes a single experiment, reports pass/fail |
-| results-auditor | `agents/results-auditor.md` | 10 | opus | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
-| report | `agents/report.md` | 11 | opus | Compiles all artefacts into LaTeX paper with real BibTeX |
+| novelty-analyst | `agents/novelty-analyst.md` | 3 | fable | Assesses whether the idea has been done before |
+| criteria | `agents/criteria.md` | 4 | fable | Identifies SOTA, success criteria, benchmarks |
+| decomposition | `agents/decomposition.md` | 5 | fable | Steinhardt decomposition: components, P_success, T, lambda ordering |
+| assumption-challenger | `agents/assumption-challenger.md` | 6 | fable | Surfaces unstated assumptions in the research plan |
+| mentor-review | `agents/mentor-review.md` | 6 | fable | Senior researcher review — simpler paths, blind spots, honest feedback |
+| pre-mortem | `agents/pre-mortem.md` | 6 | fable | Failure scenario analysis — root causes, early warnings, mitigations |
+| experiment | `agents/experiment.md` | 9 | fable | Executes a single experiment, reports pass/fail |
+| results-auditor | `agents/results-auditor.md` | 10 | fable | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
+| report | `agents/report.md` | 11 | fable | Compiles all artefacts into LaTeX paper with real BibTeX |
 
 ## Directory Layout
 
@@ -117,7 +117,7 @@ researcher/
 │   ├── criteria.md                  # Step 4: Success criteria
 │   ├── decomposition.md             # Step 5: Steinhardt decomposition
 │   ├── assumption-challenger.md     # Step 6: Assumption analysis
-│   ├── steelman.md                  # Step 6: Senior researcher review
+│   ├── mentor-review.md             # Step 6: Senior researcher review
 │   ├── pre-mortem.md                # Step 6: Failure scenario analysis
 │   ├── experiment.md                # Step 9: Experiment execution
 │   ├── results-auditor.md           # Step 10: Independent results audit
@@ -164,7 +164,7 @@ Each run produces artefacts in `output/<run-id>/`:
 - `novelty-assessment.md` — Novelty analysis
 - `success-criteria.md` — SOTA, benchmarks, publishability bar
 - `decomposition.md` — Lambda table and component details
-- `challenge/` — Assumption analysis, steelman review, pre-mortem
+- `challenge/` — Assumption analysis, mentor review, pre-mortem
 - `experiments/exp-NNN/` — Experiment plans, results, `run.log`, report sections
 - `audit/` — Results auditor findings (`results-audit.md`) and round-1 claim anchors
 - `references.bib` — Accumulated BibTeX citations

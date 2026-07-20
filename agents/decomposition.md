@@ -5,7 +5,7 @@ description: |
   project. Breaks the project into testable components, estimates P_success
   and time for each, computes lambda = -ln(P_success)/T, and orders by
   descending lambda. Triggered as Step 5 of the research workflow.
-model: opus
+model: claude-fable-5
 color: magenta
 tools: ["Read", "Write"]
 ---

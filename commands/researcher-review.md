@@ -2,7 +2,7 @@
 description: Interactively review and explore autonomous research results
 argument-hint: [run-directory]
 allowed-tools: [Read, Glob, Grep, Bash, WebSearch, WebFetch, AskUserQuestion]
-model: claude-opus-4-6
+model: claude-fable-5
 ---
 
 # Research Review — Interactive Explorer
@@ -42,7 +42,7 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 | Success criteria | `success-criteria.md` | Questions about benchmarks, baselines, thresholds |
 | Decomposition | `decomposition.md` | Questions about experiment design, lambda ordering, component breakdown |
 | Assumption analysis | `challenge/assumption-analysis.md` | Questions about hidden assumptions, risks |
-| Steelman review | `challenge/steelman-review.md` | Questions about what a senior researcher would say |
+| Mentor review | `challenge/mentor-review.md` | Questions about what a senior researcher would say |
 | Pre-mortem | `challenge/pre-mortem.md` | Questions about failure modes, what could go wrong |
 | Experiment plans | `experiments/exp-NNN/plan.md` | Questions about specific experiment setup |
 | Experiment results | `experiments/exp-NNN/results.md` | Questions about what happened, why a result came out as it did |
@@ -58,7 +58,7 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 ## Things You Can Help With
 
 - **Explain results**: "What did experiment 3 show?" → read exp-003/results.md
-- **Challenge findings**: "Is the steelman's objection valid?" → read steelman-review.md, cross-reference with experiment results
+- **Challenge findings**: "Is the mentor-review's objection valid?" → read mentor-review.md, cross-reference with experiment results
 - **Suggest follow-ups**: "What should I try next?" → synthesize from pre-mortem, experiment results, open questions
 - **Summarize for others**: "Write a 2-paragraph summary for my supervisor" → use briefing + paper abstract
 - **Compare with literature**: "How does this relate to the Anthropic paper on routing?" → read literature files

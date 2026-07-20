@@ -72,7 +72,7 @@ The autonomous mode replaces 8 human interaction points:
 
 ### RETHINK_APPROACH Handling
 
-When the steelman agent says the approach is fundamentally flawed:
+When the mentor-review agent says the approach is fundamentally flawed:
 
 1. If the theoretical argument alone is convincing → skip experiments, compile a "why this doesn't work" paper
 2. If a quick disproof experiment would be more convincing → run just that one experiment, then compile the paper

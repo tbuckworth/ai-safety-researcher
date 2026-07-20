@@ -13,7 +13,7 @@ Given a research topic, the agent:
 3. **Assesses novelty** — determines whether the idea has already been done, is partially novel, or is new
 4. **Defines success criteria** — identifies SOTA baselines, benchmarks, and the minimum publishable contribution
 5. **Decomposes into components** — Steinhardt decomposition with lambda ordering (highest-risk-per-hour components first)
-6. **Challenges the plan** — three sequential adversarial reviews: assumption analysis, steelman critique, and pre-mortem failure scenarios
+6. **Challenges the plan** — three independent adversarial reviews run in parallel: assumption analysis, mentor-review critique, and pre-mortem failure scenarios
 7. **Reports experiment plan** — presents the lambda-ordered experiment table for approval
 8. **Confirms fail-fast agreement** — explicit agreement that the project stops or pivots if the riskiest experiment fails
 9. **Runs experiments** — executes experiments in lambda order, stopping on failure if agreed
@@ -109,7 +109,7 @@ This loads the run's briefing and lets you ask questions — it reads experiment
     ├── Step 3:  novelty-analyst
     ├── Step 4:  criteria
     ├── Step 5:  decomposition (Steinhardt lambda table)
-    ├── Step 6:  assumption-challenger → steelman → pre-mortem (sequential)
+    ├── Step 6:  assumption-challenger, mentor-review, pre-mortem (parallel)
     ├── Step 7:  Report experiment plan (direct dialogue)
     ├── Step 8:  Confirm fail-fast (direct dialogue)
     ├── Step 9:  experiment ×N (lambda order, fail-fast)
@@ -137,7 +137,7 @@ output/<run-id>/
 ├── decomposition.md            # Lambda table
 ├── challenge/
 │   ├── assumption-analysis.md
-│   ├── steelman-review.md
+│   ├── mentor-review.md
 │   └── pre-mortem.md
 ├── experiments/
 │   └── exp-NNN/
@@ -170,7 +170,7 @@ researcher/
 │   ├── criteria.md                # Identifies SOTA, benchmarks, publishability bar
 │   ├── decomposition.md           # Steinhardt decomposition (P_success, T, lambda)
 │   ├── assumption-challenger.md   # Surfaces unstated assumptions
-│   ├── steelman.md                # Senior researcher perspective
+│   ├── mentor-review.md           # Senior researcher perspective
 │   ├── pre-mortem.md              # Failure scenario analysis
 │   ├── experiment.md              # Executes a single experiment
 │   ├── results-auditor.md         # Independently audits the results (Step 10)
@@ -199,7 +199,7 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 
 - **State persistence**: The orchestrator writes `state.md` after every step with YAML frontmatter. If the Claude session loses context (compaction), it re-reads `state.md` to recover.
 - **Multi-session autonomous mode**: The cron wrapper runs one Claude session per step, reading `state.md` between sessions. This avoids context window limits during long runs.
-- **Adversarial challenge phase** (Step 6): Three sequential reviews before committing to experiments — catches flawed assumptions and predictable failures early.
+- **Adversarial challenge phase** (Step 6): Three independent reviews run in parallel before committing to experiments — catches flawed assumptions and predictable failures early.
 - **Lambda ordering**: Experiments are sorted by `lambda = -ln(P_success) / T` — the component most likely to fail per hour of work gets tested first.
 - **Negative results are results**: If experiments fail, the agent compiles a "here's why this doesn't work" paper rather than producing nothing.
 - **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.

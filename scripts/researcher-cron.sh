@@ -406,12 +406,16 @@ run_step() {
         new_step=$(get_current_step)
         new_status=$(get_status)
 
-        # Success = the step advanced, OR reached a legitimate terminal / audit status.
-        # audit_remediating / audit_complete keep current_step at 10 across rounds by
-        # design (bounded by the bash-owned AUDIT_ROUNDS ceiling), so they are not "stuck".
+        # Success = the step advanced, reached a genuine terminal status, OR (for the
+        # audit step, which by design keeps current_step at 10 across rounds) the round
+        # actually completed. We proxy "completed" with a clean claude exit: a dropped
+        # connection exits non-zero AND leaves the status unchanged, so without this gate
+        # a drop during Step 10/11 would return success here and silently burn an
+        # AUDIT_ROUNDS increment upstream instead of retrying. With the gate it retries.
         if [ "$new_step" != "$prev_step" ] \
             || [ "$new_status" = "complete" ] || [ "$new_status" = "failed" ] \
-            || [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; then
+            || { [ "$exit_code" -eq 0 ] \
+                 && { [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; }; }; then
             log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
             return 0
         fi

@@ -70,7 +70,7 @@ check_token() { # $1 file (rel)  $2 grep-pattern  $3 label
 check_token "agents/experiment.md"     "PASS | FAIL"        "PASS | FAIL verdict template"
 check_token "agents/decomposition.md"  "[SHOWSTOPPER]"      "[SHOWSTOPPER]"
 check_token "agents/decomposition.md"  "P_success"         "P_success"
-check_token "agents/steelman.md"       "RETHINK_APPROACH"  "RETHINK_APPROACH"
+check_token "agents/mentor-review.md"  "RETHINK_APPROACH"  "RETHINK_APPROACH"
 check_token "agents/novelty-analyst.md" "ALREADY_DONE"     "ALREADY_DONE"
 check_token "agents/results-auditor.md" "FIXABLE-DEFECT"   "audit verdict enum"
 

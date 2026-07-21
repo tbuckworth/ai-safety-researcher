@@ -23,12 +23,26 @@ OUTPUT_DIR="${HDD}/researcher-output"
 LOG_DIR="${OUTPUT_DIR}/logs"
 
 LOCKFILE="/tmp/researcher-auto.lock"
-TIMEOUT_HOURS=4
+TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
+# Per-step retry: a connection drop mid-step (more likely on slow Fable turns)
+# leaves state.md un-advanced; re-running the step from current state recovers it.
+# Bounded so a genuinely stuck step still fails instead of looping forever.
+STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 TOPIC="${1:-}"
 
-# Model alias resolves to the latest (strongest) Opus automatically — no version pinning.
+# Default model for all researcher sessions. Fable 5 is the most capable model (highest quality, ~2x Opus token cost, thinking always on).
 # Override per-run with e.g. RESEARCHER_MODEL='opus[1m]' or a full model id.
-MODEL="${RESEARCHER_MODEL:-opus}"
+MODEL="${RESEARCHER_MODEL:-fable}"
+
+# Compute profile for this run — a human-readable description of the hardware/budget
+# experiments may use. Hardware-agnostic: the default describes the local desktop, but
+# override it for other backends, e.g.
+#   RESEARCHER_COMPUTE_PROFILE='Modal A100 40GB on-demand, ~$3.50/hr, up to $30 budget'
+#   RESEARCHER_COMPUTE_PROFILE='Lambda 8xH100 80GB node'
+#   RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU'
+# Every step reads this from state.md (compute_profile:) to size experiments and to triage
+# which limitations are fixable now vs genuine future work. Nothing is hard-coded to a 3090.
+COMPUTE_PROFILE="${RESEARCHER_COMPUTE_PROFILE:-Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments.}"
 
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 
@@ -172,6 +186,7 @@ current_step: 0
 status: initialized
 mode: autonomous
 issue_number: ${ISSUE_NUMBER:-none}
+compute_profile: "${COMPUTE_PROFILE}"
 clarifications: []
 decisions: []
 ---
@@ -312,6 +327,7 @@ is_followup: true
 parent_issue: ${PARENT_ISSUE:-none}
 prior_repo: ${PRIOR_REPO_URL}
 prior_run_id: ${PRIOR_RUN_ID}
+compute_profile: "${COMPUTE_PROFILE}"
 clarifications: []
 decisions: []
 ---
@@ -378,37 +394,50 @@ build_email_prompt() {
 
 run_step() {
     local step="$1"
-    local run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
     local prev_step
     prev_step=$(get_current_step)
 
-    log "Starting step ${step}..."
+    local attempt exit_code new_step new_status run_log
+    for attempt in $(seq 1 "$STEP_MAX_ATTEMPTS"); do
+        run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
+        if [ "$attempt" -eq 1 ]; then
+            log "Starting step ${step}..."
+        else
+            log "Retrying step ${step} (attempt ${attempt}/${STEP_MAX_ATTEMPTS}) after an incomplete run (e.g. a dropped connection)..."
+            sleep 15
+        fi
 
-    cd "$REPO_DIR"
-    build_step_prompt "$step" | claude --print \
-        --dangerously-skip-permissions \
-        --model "$MODEL" \
-        --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
-        2>&1 | tee "$run_log"
+        cd "$REPO_DIR"
+        build_step_prompt "$step" | claude --print \
+            --dangerously-skip-permissions \
+            --model "$MODEL" \
+            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
+            2>&1 | tee "$run_log"
 
-    local exit_code=${PIPESTATUS[0]}
-    local new_step
-    new_step=$(get_current_step)
-    local new_status
-    new_status=$(get_status)
+        exit_code=${PIPESTATUS[0]}
+        new_step=$(get_current_step)
+        new_status=$(get_status)
 
-    # audit_remediating / audit_complete legitimately keep current_step at 10 across
-    # rounds, so they are not "stuck"; the bash-owned AUDIT_ROUNDS ceiling bounds that loop.
-    if [ "$new_step" = "$prev_step" ] \
-        && [ "$new_status" != "complete" ] && [ "$new_status" != "failed" ] \
-        && [ "$new_status" != "audit_remediating" ] && [ "$new_status" != "audit_complete" ]; then
-        log "Step ${step} did not advance state (still at step ${prev_step}). Exit code: ${exit_code}"
-        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
-        return 1
-    fi
+        # Success = the step advanced, reached a genuine terminal status, OR (for the
+        # audit step, which by design keeps current_step at 10 across rounds) the round
+        # actually completed. We proxy "completed" with a clean claude exit: a dropped
+        # connection exits non-zero AND leaves the status unchanged, so without this gate
+        # a drop during Step 10/11 would return success here and silently burn an
+        # AUDIT_ROUNDS increment upstream instead of retrying. With the gate it retries.
+        if [ "$new_step" != "$prev_step" ] \
+            || [ "$new_status" = "complete" ] || [ "$new_status" = "failed" ] \
+            || { [ "$exit_code" -eq 0 ] \
+                 && { [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; }; }; then
+            log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
+            return 0
+        fi
 
-    log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
-    return 0
+        log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
+    done
+
+    log "Step ${step} failed after ${STEP_MAX_ATTEMPTS} attempts. Marking run failed."
+    sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+    return 1
 }
 
 # Main step loop
@@ -488,8 +517,17 @@ create_github_repo() {
 
     log "Creating GitHub repo: tbuckworth/${slug}"
 
-    gh repo create "tbuckworth/${slug}" --public \
-        --description "AI safety research: ${TOPIC_LINE} (autonomous)" 2>/dev/null || true
+    # GitHub caps repo descriptions at 350 chars; the topic can be far longer (a whole
+    # paragraph), which makes `gh repo create` fail with a 422. Truncate to stay under.
+    local repo_desc
+    repo_desc="AI safety research (autonomous): ${TOPIC_LINE}"
+    repo_desc="$(printf '%s' "$repo_desc" | tr '\n' ' ' | head -c 300)"
+
+    # Do NOT swallow the error silently — log it. If the repo already exists this returns
+    # non-zero too, which is fine: the push+verify below is the real success signal.
+    gh repo create "tbuckworth/${slug}" --public --description "$repo_desc" 2>&1 \
+        | tee -a "${LOG_DIR}/gh-repo-create.log" \
+        || log "WARN: gh repo create returned non-zero for tbuckworth/${slug} (may already exist); will still attempt push."
 
     # Generate README
     local abstract=""
@@ -513,7 +551,7 @@ ${abstract:-See paper/ directory for full results.}
 - \`paper/\` — LaTeX paper and compiled PDF
 - \`literature/\` — Literature review artifacts
 - \`experiments/\` — Experiment code and results
-- \`challenge/\` — Adversarial review (assumptions, steelman, pre-mortem)
+- \`challenge/\` — Adversarial review (assumptions, mentor-review, pre-mortem)
 - \`decomposition.md\` — Steinhardt fail-fast decomposition
 - \`state.md\` — Workflow state log
 
@@ -524,10 +562,11 @@ READMEEOF
 
     # Git init in place — .gitignore already excludes large files
     cd "$RUN_DIR"
-    git init
+    git init -q
+    git remote remove origin 2>/dev/null || true
     git remote add origin "https://github.com/tbuckworth/${slug}.git"
     git add -A
-    git commit -m "$(cat <<COMMITEOF
+    git commit -q -m "$(cat <<COMMITEOF
 Research artifacts: ${TOPIC_LINE}
 
 Autonomous research run (${STATUS}).
@@ -535,15 +574,29 @@ Run ID: ${RUN_ID}
 
 Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>
 COMMITEOF
-)" || true
+)" || log "WARN: git commit produced no commit (nothing to commit?)."
 
-    git push -u origin main || true
+    # Rename the just-committed branch to 'main' regardless of git's default (older git
+    # inits 'master', so `git push origin main` was silently failing with
+    # 'src refspec main does not match any' — leaving every repo empty).
+    git branch -M main 2>/dev/null || true
 
     cd "$REPO_DIR"
 
-    REPO_URL="https://github.com/tbuckworth/${slug}"
-    echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
-    log "GitHub repo: ${REPO_URL}"
+    # Only advertise the repo link if the push actually succeeded AND the remote is
+    # non-empty. Previously the URL was written unconditionally, so a failed push still
+    # produced an email/issue-comment linking to an empty (or nonexistent) repo.
+    if ( cd "$RUN_DIR" && git push -u origin main ) 2>&1 | tee -a "${LOG_DIR}/gh-push.log"; then
+        if gh repo view "tbuckworth/${slug}" --json isEmpty --jq '.isEmpty' 2>/dev/null | grep -q '^false$'; then
+            REPO_URL="https://github.com/tbuckworth/${slug}"
+            echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
+            log "GitHub repo pushed and verified: ${REPO_URL}"
+        else
+            log "ERROR: push reported success but tbuckworth/${slug} is still empty. Not advertising a repo link."
+        fi
+    else
+        log "ERROR: git push to tbuckworth/${slug} failed. Results remain local in ${RUN_DIR}; no repo link will be advertised."
+    fi
 }
 
 push_followup_results() {
@@ -584,13 +637,16 @@ Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>
 COMMITEOF
 )" || true
 
-    git push -u origin "$branch" || true
+    # Only advertise the branch link if the push actually succeeded.
+    if git push -u origin "$branch" 2>&1 | tee -a "${LOG_DIR}/gh-push.log"; then
+        REPO_URL="${PRIOR_REPO_URL}/tree/${branch}"
+        echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
+        log "Follow-up pushed: ${REPO_URL}"
+    else
+        log "ERROR: git push of follow-up branch ${branch} to ${PRIOR_REPO_URL} failed. No branch link will be advertised."
+    fi
     cd "$REPO_DIR"
-
-    REPO_URL="${PRIOR_REPO_URL}/tree/${branch}"
-    echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
     rm -rf "$tmp_clone"
-    log "Follow-up pushed: ${REPO_URL}"
 }
 
 create_github_repo || log "Note: GitHub repo creation did not complete. Continuing to email."

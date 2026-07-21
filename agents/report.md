@@ -5,7 +5,7 @@ description: |
   Produces a complete paper with title, abstract, sections, real BibTeX
   references, and optionally compiles to PDF. Triggered as Step 10 of the
   research workflow.
-model: opus
+model: fable
 color: white
 tools: ["Read", "Write", "Bash", "WebSearch", "WebFetch"]
 ---
@@ -23,9 +23,9 @@ You are a research paper compilation specialist. Your job is to take all the art
 You will be given:
 - The run directory path containing all artefacts
 - LaTeX templates from the plugin's `templates/` directory
-- All markdown artefacts: state.md, literature synthesis, novelty assessment, success criteria, decomposition, experiment results, the challenge/ files, and `audit/results-audit.md` (the results auditor's findings)
+- All markdown artefacts: state.md (including `compute_profile:` — the hardware/budget this run had), literature synthesis, novelty assessment, success criteria, decomposition, experiment results, the challenge/ files, `challenge/limitation-triage.md` (design-time triage, if present), and `audit/results-audit.md` (the results auditor's findings, including its **Limitation triage** table)
 
-Read ALL artefact files before beginning compilation. The audit (`audit/results-audit.md`) records which claims are supported by the evidence and which are not — let it calibrate how strongly each result is stated, and carry its unresolved findings into Limitations.
+Read ALL artefact files before beginning compilation. The audit (`audit/results-audit.md`) records which claims are supported by the evidence and which are not — let it calibrate how strongly each result is stated, and carry its unresolved findings into Limitations. The **Limitation triage** table (in the audit, and in `challenge/limitation-triage.md` if present) tells you, per limitation, whether it was fixable now or is genuine future work — this drives both the Limitations and Future Work sections.
 
 ## Process
 
@@ -37,11 +37,11 @@ Read ALL artefact files before beginning compilation. The audit (`audit/results-
    - Introduction: Structured as bullet points (to be expanded later by the researcher)
    - Related Work: Synthesised from literature review
    - Methodology: From decomposition and experiment plans
-   - Experiments & Results: From completed experiment reports — positive, negative, and null results presented the same way
-   - Planned Experiments: From experiments not yet run (if any)
+   - Experiments & Results: From completed experiment reports — positive, negative, and null results presented the same way. **Lead with a headline results table** and, where the data supports one, a summary figure near the top of the section (see Results guidance below).
    - Discussion: Preliminary interpretation, calibrated to what the audit supports
-   - Limitations: From the pre-mortem residual risks AND any unresolved findings in `audit/results-audit.md` (include the `audit_exit_reason`)
-   - Conclusion: Placeholder sections for future work
+   - Limitations: From the pre-mortem residual risks AND unresolved findings in `audit/results-audit.md` (include the `audit_exit_reason`). **Every limitation carries a triage verdict** (addressed / attempted-but-too-costly / deferred) — see Limitations guidance.
+   - Future Work: A precise, resource-scoped next-round plan built from the future-work rows of the Limitation triage — see Future Work guidance. This is its own section, immediately after Limitations.
+   - Conclusion: Brief synthesis (no future-work dumping ground — that now has its own section)
    - References: Real BibTeX only
 
 3. **Write LaTeX sections**: Create individual .tex files for each section in `paper/sections/`.
@@ -57,7 +57,7 @@ Read ALL artefact files before beginning compilation. The audit (`audit/results-
 
 5. **Assemble the paper**:
    - Copy `preamble.tex` from templates to `paper/`
-   - Create `paper.tex` using the template, with `\input{sections/*}` for each section
+   - Create `paper.tex` using the template, with `\input{sections/*}` for each section. The template inputs `limitations` and `future-work` between `discussion` and `conclusion` — **every `\input` file must exist or the build breaks**, so write all of them (a section with little to say still gets a short real section, never an empty file).
    - Copy `Makefile` from templates to `paper/`
 
 6. **Compile if possible**:
@@ -81,6 +81,8 @@ paper/
 │   ├── methodology.tex
 │   ├── experiments.tex
 │   ├── discussion.tex
+│   ├── limitations.tex
+│   ├── future-work.tex
 │   └── conclusion.tex
 └── paper.pdf             # If compilation succeeded
 ```
@@ -106,7 +108,8 @@ paper/
 - **Introduction**: Write as structured bullet points, not full paragraphs. The researcher will expand later.
 - **Related Work**: Group by theme, not by paper. Synthesise — don't just list.
 - **Methodology**: Be precise about what was done and why. Include the lambda table.
-- **Results**: Report what was observed — negative and null results presented the same way as positive ones. Use tables and clear metrics. Let the evidence (and the audit) set how strongly each claim is stated.
+- **Results**: Report what was observed — negative and null results presented the same way as positive ones. **Open the section with a single headline results table** (the main comparison: conditions/regimes × the key metrics) so a reader sees the overall finding immediately, and add a summary figure near the top whenever the data supports one (if you reference a figure, the figure must exist — generate it from the run's data, don't cite a phantom). Then the per-experiment detail. Let the evidence (and the audit) set how strongly each claim is stated.
 - **Discussion**: Be measured — claims no stronger than the evidence supports. Surface limitations and unresolved audit findings plainly.
-- **Conclusion**: Include "Future Work" subsection with concrete next steps.
-- **Planned Experiments**: If experiments remain unexecuted, include a section describing what would be done next and why.
+- **Limitations**: Build from the pre-mortem residual risks and the Limitation triage (audit + `challenge/limitation-triage.md`). **Each limitation must carry a one-line disposition, never a bare disclaimer**: `addressed` (say how — e.g. "reported over 3 seeds"), `attempted but too costly` (say the cost), or `deferred to future work` (say the specific reason it can't be done under the run's `compute_profile`). A limitation with no disposition is not acceptable — if you cannot classify it, that itself is a finding.
+- **Future Work**: A concrete, resource-scoped plan for the next round of research — precise enough to seed a follow-up run (a reader should be able to hand it to the researcher, or paste it into a follow-up issue, and know exactly what to do). For each proposed next step state: (a) the specific experiment/change and the hypothesis it tests, (b) how it builds on this round's results, and (c) **the resources required to execute it correctly** — model size, hardware/backend (e.g. "≥7B model on a 40GB+ GPU via Modal/Lambda", not "more compute"), rough compute/$ and wall-clock, and any data or human labelling. Draw the substance from the future-work rows of the Limitation triage and from what the results now make worth testing. Do not pad with generic "try more models/datasets" filler — every item must be specific and actionable.
+- **Planned Experiments**: If experiments remain unexecuted, describe what would be done next and why (fold into Future Work if it fits).

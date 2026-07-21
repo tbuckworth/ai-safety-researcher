@@ -14,7 +14,7 @@ This plugin provides an 11-step interactive research workflow:
 3. Assess novelty against existing work
 4. Define success criteria and SOTA benchmarks
 5. Steinhardt fail-fast decomposition (lambda ordering)
-6. Challenge the research plan (assumption analysis, steelman review, pre-mortem)
+6. Challenge the research plan (assumption analysis, mentor review, pre-mortem)
 7. Report planned experiments to user
 8. Confirm fail-fast agreement
 9. Execute experiments in lambda order

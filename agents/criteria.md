@@ -4,7 +4,7 @@ description: |
   Use this agent to identify state-of-the-art baselines, success criteria,
   and publishability benchmarks for a research project. Triggered as Step 4
   of the research workflow.
-model: opus
+model: fable
 color: green
 tools: ["Read", "Write"]
 ---

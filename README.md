@@ -29,7 +29,7 @@ Given a research topic, the agent:
 - **jq** — for JSON parsing in the cron wrapper (Ubuntu: `sudo apt install jq`)
 
 For autonomous mode only:
-- **GPU** — NVIDIA GPU with CUDA drivers (tested on RTX 3090, 24GB VRAM)
+- **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`; default: local NVIDIA GPU with CUDA drivers, tested on RTX 3090 24GB). Cloud/managed backends (Modal, Lambda, tinker) are supported by overriding the profile.
 - **Gmail MCP server** — configured with valid OAuth token for sending result emails
 
 ## Installation

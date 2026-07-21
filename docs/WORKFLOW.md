@@ -263,13 +263,18 @@ This step runs three **independent** adversarial review passes on the research p
 
    Wait for all three to complete.
 
-3. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
+3. **Construct-validity gate**: Before anything else, check the passes for a construct-validity / known-outcome flaw — a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. `mentor-review` treats such a flaw as `RETHINK_APPROACH`. If present and not cheaply fixable, the construct must be **redesigned** (in autonomous mode this loops back to Step 1 once), not disclaimed in Limitations.
+
+4. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
    - Critical assumptions that need testing
-   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink)
+   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink) and any construct-validity flaw
    - Top failure scenarios and their mitigations
 
-4. **Present to user** via AskUserQuestion with options:
+5. **Design-time limitation triage**: Classify each residual weakness against the compute profile + remaining experiment budget as fix-now-free / fix-now-cheap / future-work (see the shared triage rubric). Fold fix-now items into the plan (`challenge/limitation-triage.md`); future-work items carry to Step 11's Future Work section.
+
+6. **Present to user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
+   - "Redesign the construct" -> loop to Step 1
    - "Revise the decomposition" -> loop to Step 5
    - "Revise success criteria" -> loop to Step 4
    - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3
@@ -378,6 +383,8 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
    - `TRUE-NULL` — sound setup, effect absent. **Exit to an honest negative** (do not loop — that would be p-hacking).
    - `UNSALVAGEABLE` — the framing itself is broken → write up "why this doesn't work".
 
+   It also produces a **results-time limitation triage** (per the shared rubric): each limitation classified fix-now-free / fix-now-cheap / future-work against the compute profile + remaining budget. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
+
 4. **Orchestrator/executor acts on the disposition**:
    - All `SUPPORTED`, or only `TRUE-NULL` → record `audit_exit_reason`, go to Step 11.
    - `FIXABLE-DEFECT` and round < R_MAX and not stuck → re-run ONLY the flagged experiment (handing back the defect *class*, not a fix; requiring a reported seed), then re-audit.
@@ -410,11 +417,11 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
    - **Introduction**: Key points as structured bullets (to be expanded later)
    - **Related Work**: Synthesised from literature review with proper citations
    - **Methodology**: From decomposition + experiment plans
-   - **Initial Experiments & Results**: From completed experiment reports
-   - **Planned Major Experiments**: From experiments not yet run (if any)
+   - **Experiments & Results**: From completed experiment reports — **opens with a headline results table** (main comparison × key metrics) and, where the data supports one, a summary figure near the top
    - **Discussion**: Preliminary interpretation of results
-   - **Limitations**: Informed by the pre-mortem risk analysis and residual risks from `challenge/pre-mortem.md`, plus any unresolved findings and the `audit_exit_reason` from `audit/results-audit.md`
-   - **Conclusion**: Empty section with placeholders for future work
+   - **Limitations**: From the pre-mortem residual risks plus unresolved audit findings and the `audit_exit_reason`. **Each limitation carries a triage disposition** (addressed / attempted-but-too-costly / deferred) — never a bare disclaimer
+   - **Future Work**: A precise, resource-scoped next-round plan (its own section, right after Limitations), built from the future-work rows of the design-time and results-time triage. For each next step: the experiment, the hypothesis, and the resources required (model size, hardware/backend, rough compute/$, data). Precise enough to seed a follow-up run
+   - **Conclusion**: Brief synthesis
    - **References**: Real BibTeX only — no fabricated citations
 
 3. **BibTeX verification**: The agent verifies all citations exist in `references.bib` and cross-checks against `citation-registry.md`. Missing BibTeX is fetched from:

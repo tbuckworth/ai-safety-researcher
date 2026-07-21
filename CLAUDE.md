@@ -35,5 +35,6 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 - **Commands**: `researcher-auto-step` (per-step executor), `researcher-auto-email` (email composer).
 - **GitHub Issues**: Picks from `tbuckworth/tasks` with label `list:research-ideas`, tags with `status:claude-researching`, updates to `status:claude-processed` on completion.
 - **Follow-ups**: Issues with label `type:follow-up` trigger follow-up mode — clones prior artifacts into `prior/`, fast-forwards past unchanged steps, pushes results to a branch on the existing repo. Created via `/researcher-review` during interactive review sessions.
-- **Constraints**: Local RTX 3090 only (no cloud GPU), max 5 experiments, all loops capped at 1 iteration.
+- **Constraints**: Per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`, default local RTX 3090; supports cloud/managed backends), max 5 experiments, all loops capped at 1 iteration.
+- **Construct-validity gate** (Step 6): a strawman/known-outcome construct loops back to Step 1 once to redesign, rather than being disclaimed. Limitations are triaged (fix-now vs future-work) at Steps 6/10 and written up with a dedicated resource-scoped Future Work section at Step 11.
 - **Setup**: See `docs/AUTONOMOUS.md` for cron configuration, prerequisites, and follow-up workflow.

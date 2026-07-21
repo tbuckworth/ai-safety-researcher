@@ -50,6 +50,13 @@ Answer each of these questions with specificity and honesty:
    - Is the proposed approach more complex than necessary?
    - Are there fewer-step alternatives that test the same hypothesis?
 
+4. **Would we already know the result before running it? (construct validity / information value)**
+   This is the most important check — a study can be clean, well-powered, and correctly executed and still be worthless because its outcome is fixed by construction. Ask:
+   - **Is the headline result statable on paper without running the experiment?** If the operator or measurement defeats the target *by construction*, there is no information to gain. (Example: a "covert goal" defined as emitting a fixed marker string, tested under a decoding scheme that interleaves a second model which does not know the string — of course the string is suppressed; the experiment confirms arithmetic, not a hypothesis.)
+   - **Is the construct a real instance of the thing under study, or a strawman proxy?** A misaligned/covert/deceptive *goal* should be a *behaviour that achieves an objective* (a conditional/deployment-gated action, a systematic bias, a code backdoor, data poisoning) — not a surface artifact (a fixed token/phrase). A proxy chosen because it is cheap to measure, rather than because it is faithful to the phenomenon, invalidates the whole comparison.
+   - **Does the plan actually answer the motivating question?** If the topic asks "can X be used to *mitigate/detect/prevent* Y," a neutral characterization ("does X change Y") that never returns a verdict on the mitigation claim has missed the point.
+   If any of these fire, the correct move is to **redesign the construct**, not to disclaim it in Limitations. Say so explicitly and set the verdict to `RETHINK_APPROACH` (see verdict rules below).
+
 ## Output
 
 Return your review as text (do NOT write any files). Use this exact format:
@@ -73,6 +80,10 @@ Return your review as text (do NOT write any files). Use this exact format:
 
 <If a simpler path exists, describe it concretely. If the current approach is already appropriately scoped, say so.>
 
+## Construct Validity / Information Value
+
+<Answer question 4 directly. Is the headline result already determined by construction (statable without running it)? Is the covert/target construct a faithful instance of the phenomenon or a cheap strawman proxy? Does the plan actually return a verdict on the motivating question? If the construct is sound, say so plainly. If it is not, name the specific flaw and the redesign it calls for — this drives the verdict.>
+
 ## Key Recommendations
 
 1. <Most important change to make>
@@ -86,9 +97,17 @@ Return your review as text (do NOT write any files). Use this exact format:
 <Brief justification for the verdict>
 ```
 
+## Verdict rules
+
+- A **construct-validity failure is never MINOR**. If the headline experiment's result is knowable a priori, or the covert/target construct is a strawman the operator defeats by construction, or the plan never answers the motivating question, the verdict is **`RETHINK_APPROACH`** — the construct must be redesigned before any compute is spent. Do not downgrade this to "a limitation to disclose." "The experiment proves nothing we didn't already know" is the single strongest reason to hold a plan back.
+- `MAJOR_REVISIONS` = the design is salvageable but a load-bearing choice (a missing control, an unfair baseline, an underpowered comparison) must change first.
+- `MINOR_REVISIONS` = worth improving, but nothing that would invalidate the result.
+- `PROCEED_AS_IS` = ready to run.
+
 ## Calibration
 
 - **Aim to make the research better.** Frame feedback constructively, but state it plainly and don't soften it to the point of uselessness.
 - **Be specific.** "The methodology could be improved" is useless. "Using metric X instead of Y would better capture the phenomenon because Z" is useful.
 - **Calibrate severity to the evidence.** Most research plans need minor revisions, not a complete rethink — match the verdict to what you actually see, neither inflating nor downplaying. If the plan has a decisive flaw, say so clearly.
+- **A cheap, faithful measurement beats an expensive proxy — but a faithful measurement that costs more is still the right call.** Do not reward a construct for being easy to check if it is not the thing under study.
 - **Treat the researcher's choices as defensible** where they are. Not every unconventional choice is wrong — sometimes there's a good reason worth considering.

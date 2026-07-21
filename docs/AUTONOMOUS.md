@@ -64,7 +64,7 @@ The autonomous mode replaces 8 human interaction points:
 | 2. Search plan | User approves | Auto-approve |
 | 3. Novelty verdict | User decides | NOVEL/PARTIALLY_NOVEL → proceed; ALREADY_DONE → 1 retry then proceed |
 | 4. Success criteria | User approves | Auto-approve |
-| 6. Challenge synthesis | User picks path | PROCEED/MINOR → go; MAJOR → 1 re-decomposition; RETHINK → graceful pivot |
+| 6. Challenge synthesis | User picks path | Construct-validity gate first (strawman/known-outcome → loop to Step 1 once to redesign); then PROCEED/MINOR → go; MAJOR → 1 re-decomposition; RETHINK → graceful pivot. Fix-now limitations folded into the plan; rest → Future Work |
 | 7. Experiment plan | User confirms | Auto-approve, cap at 5 experiments |
 | 8. Fail-fast agreement | User agrees | Always yes |
 | 9. On failure | User decides | Write up negative result |
@@ -79,9 +79,25 @@ When the mentor-review agent says the approach is fundamentally flawed:
 
 Both produce valuable output: "here's why this idea doesn't work, and here's the evidence."
 
+## Compute Profile (hardware-agnostic)
+
+Experiments are sized to a per-run **compute profile**, not a hard-coded device. The cron reads `RESEARCHER_COMPUTE_PROFILE` (default: the local RTX 3090) and writes it into `state.md` as `compute_profile:`; every step reads it to size experiments and to triage which limitations are fixable now vs future work. Override it to run elsewhere:
+
+```bash
+RESEARCHER_COMPUTE_PROFILE='Modal A100 40GB on-demand, ~$3.50/hr, up to $30 budget' ./scripts/researcher-cron.sh
+RESEARCHER_COMPUTE_PROFILE='Lambda 8xH100 80GB node' ./scripts/researcher-cron.sh
+RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU' ./scripts/researcher-cron.sh
+```
+
+The default profile keeps the historical behaviour (local RTX 3090, no cloud). Nothing in the agents or steps assumes a specific device beyond what the profile states.
+
+## Limitation Triage & Future Work
+
+Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **Step 10** (results-time), each limitation is classified against the compute profile and remaining budget as **fix-now-free** (re-analysis of existing data), **fix-now-cheap** (a small run that fits the profile + experiment cap), or **future-work** (needs resources beyond the profile). Fix-now items are done; future-work items carry their precise resource asks into the paper's **Future Work** section, which states a resource-scoped next-round plan precise enough to seed a follow-up run. Step 11 refuses to write a limitation without a disposition.
+
 ## Safety Constraints
 
-- **Local GPU only** — no Modal, Lambda, or cloud compute
+- **Compute profile** — experiments must fit the run's `compute_profile` (default: local RTX 3090, no cloud); do not exceed it silently
 - **Max 5 experiments** per run
 - **All loops capped at 1 iteration** — except the Step 10 audit-remediation loop, which allows up to 3 rounds (bash-owned ceiling at 4 + the 4-hour timeout as backstops)
 - **4-hour timeout** — wrapper kills the run and compiles whatever exists
@@ -119,8 +135,8 @@ Both produce valuable output: "here's why this idea doesn't work, and here's the
 **gh auth expired**:
 - Run `gh auth login` on the desktop
 
-**Experiment OOM on RTX 3090**:
-- The 24GB VRAM limit is enforced via agent prompts, not hardware. If an experiment OOMs, the agent logs it as a FAIL and continues.
+**Experiment OOM / over-budget**:
+- The compute profile is enforced via agent prompts, not hardware. If an experiment exceeds it (OOM on the local GPU, or needs more than the profile provides), the agent logs it as a FAIL-on-affordability and continues; the shortfall becomes a Future Work item with its resource ask.
 
 ## Reviewing Results
 

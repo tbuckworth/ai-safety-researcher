@@ -29,7 +29,7 @@ The run directory is: **{{argument}}**
    - `paper/sections/abstract.tex` — paper abstract (if exists)
    - `rethink-rationale.md` — why the approach doesn't work (if exists)
    - `audit/results-audit.md` — the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
-   - `.repo_url` — GitHub repo URL (if exists)
+   - `.repo_url` — GitHub repo URL. **This file only exists if the repo push was confirmed successful.** If it is missing or empty, the code did NOT reach GitHub — OMIT the "Repo" row in the Bottom Line table and the GitHub entry in the Links section entirely, and do NOT invent a URL. In that case add a one-line note that results are attached/local (in the run directory) rather than linking to a repo.
 
 3. **Compose the email as HTML**.
 
@@ -200,6 +200,7 @@ The run directory is: **{{argument}}**
    - **The results audit is an automated self-check by the same model family — frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
    - **GitHub repo names**: Keep the repo slug under 40 characters to avoid URL truncation. If the `.repo_url` file contains a truncated URL, read the actual URL from the file and use it as-is.
+   - **Never advertise an unverified link**: only include a GitHub link if `.repo_url` exists and is non-empty. No `.repo_url` means the push failed — omit every repo link rather than pointing the reader at a 404 or an empty repo.
 
 4. **Write the HTML to a temp file**: Save the composed HTML to `/tmp/researcher_report.html`.
 

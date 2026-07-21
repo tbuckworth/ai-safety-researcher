@@ -231,11 +231,13 @@ This step runs three **independent** adversarial review passes before committing
 
 3. **Synthesise and present**: Read all three challenge files. Summarise:
    - Critical assumptions that need testing
-   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink)
+   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink), and flag any **construct-validity flaw** — a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. Surface this prominently: it calls for redesigning the construct, not disclaiming it.
    - Top failure scenarios and their mitigations
+   - **Limitation triage**: for each residual weakness, whether it is fixable now (fold into the plan) or genuine future work (carries its resource ask into the paper's Future Work section)
 
 4. **Ask user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
+   - "Redesign the construct" -> loop to Step 1 (when a construct-validity flaw makes the result knowable a priori)
    - "Revise the decomposition" -> loop to Step 5
    - "Revise success criteria" -> loop to Step 4
    - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3

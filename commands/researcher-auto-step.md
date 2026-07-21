@@ -39,7 +39,7 @@ Parse it as: `<step-number> <run-directory-path>`
 1. **No user interaction.** You do NOT have AskUserQuestion. All decisions are autonomous.
 2. **One step only.** Execute the requested step, update state.md, and stop.
 3. **Agents are leaf workers.** They read files, do focused work, write files. They never talk to users or spawn other agents.
-4. **Local GPU only.** All experiments run on the local RTX 3090 (24GB VRAM). NEVER use Modal, Lambda, or any cloud GPU service.
+4. **Respect the compute profile.** Read `compute_profile:` from `state.md` — it describes the hardware/budget this run may use (default: local RTX 3090, but it may be a cloud/managed backend). Size experiments to it and use only the compute it authorizes. Nothing is hard-coded to a specific device; do not assume a local GPU unless the profile says so, and do not exceed it silently.
 5. **Read-only outside run dir.** You may search `$HOME/pyg/` for related code, but NEVER modify files outside the run directory.
 6. **Write state.md atomically.** Write to `state.md.tmp` first, then rename. This prevents corruption if you crash.
 7. **Cap loops.** If state.md shows a loop has already happened (e.g., `novelty_loop_count: 1`), do NOT loop again. Proceed forward.
@@ -51,6 +51,18 @@ Parse it as: `<step-number> <run-directory-path>`
 - **Skip experiments**: the rethink path sets `current_step: 9`; the wrapper runs Step 10 (audit), which short-circuits when there is nothing to audit and advances to Step 11 (report).
 - **Audit remediation**: the Step 10 executor keeps `current_step: 10` and sets `status: audit_remediating` to request another audit round (the wrapper re-enters Step 10), or `status: audit_complete` to advance to Step 11.
 - **Terminal**: Set `status: complete` or `status: failed` → wrapper stops.
+
+---
+
+## Shared: Limitation Triage
+
+A limitation is not something to disclaim by default — it is a decision. Wherever limitations are surfaced (Step 6 for the *design*, Step 10 for the *results*), and when they are written up (Step 11), apply this rubric to each one, judged against the run's `compute_profile` and the remaining budget (experiment-cap headroom, wall-clock left):
+
+1. **fix-now-free** — addressable by re-analysis of data/artifacts you already have (add a CI, a paired statistic, a held-out re-score). Costs nothing → do it.
+2. **fix-now-cheap** — addressable by a small new run that fits the `compute_profile` and the experiment cap / time budget → do it, and name the cost.
+3. **future-work** — needs resources beyond the current profile (bigger model, cloud/multi-GPU, human labels, days of compute) or beyond the cap → defer, and record *precisely what a fix would require* (model size, hardware/backend, rough compute/$, data). These become the paper's Future Work.
+
+Prefer free re-analysis > cheap run > future work. Respecting the cap is part of the rubric: "just run 20 more" when the budget is spent is not a fix, it is future work. The point is to **fix what is cheaply fixable now and defer the rest honestly and precisely** — never to launder a fixable flaw into a bare "limitation."
 
 ---
 
@@ -97,12 +109,16 @@ Do this yourself — no agent needed.
 
    **Skip to step 3 below** (write state.md with follow-up metadata preserved).
 
-2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers to the 5 standard questions by inferring from the topic text:
+2a-redesign. **Construct-redesign re-entry.** If `state.md` has `construct_redesign: true`, Step 6 sent the plan back here because the covert/target construct was a strawman or the motivating question was being dodged. Read the recorded flaw (`construct_redesign_note` in state.md) and the prior `clarifications`, then generate clarifications that fix *that specific problem* — choose a stronger, faithful construct and re-anchor on the motivating question. Set `construct_loop_count: 1` (so Step 6 won't loop again) and preserve it in state.md. Then continue with the clarification content below.
 
+2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers by inferring from the topic text:
+
+   - **Motivating question (preserve it verbatim)**: State the actual question the topic is asking, in the topic's own framing — especially *directional* framings like "can X be used to **mitigate / detect / prevent / defend against** Y." Do NOT neutralize a directional thesis into a flat characterization ("does X change Y"): if the topic asks whether something *helps*, the deliverable must return a verdict on that, not just measure a quantity. This clarification is the north star for Steps 4 (criteria), 6 (challenge), and 11 (report).
    - **Key terms**: Define key technical terms from the topic in the AI safety context.
+   - **Construct fidelity (for any covert / misaligned / deceptive-behaviour topic)**: Specify the implanted behaviour as a *goal that achieves an objective* — a conditional/deployment-gated action (e.g. behaves differently after a trigger date), a systematic bias, a code backdoor, data poisoning — **not a fixed output string or marker phrase**. A surface artifact (a constant token/phrase) is a strawman: it is trivially defeated by any composition or intervention that involves a model which does not share it, so the experiment's result is knowable a priori and carries no information. Prefer a construct whose suppression/survival is genuinely uncertain before the experiment. Also prefer the *cheapest faithful* setup (e.g. prompt-conditioned organisms before fine-tuning, where that still tests the thesis).
    - **Prior work**: If the topic.txt includes references or context from the issue body, note them. Otherwise: "None specified — literature review will discover relevant prior work."
-   - **Success criteria**: "Proof of concept demonstrating the effect, or a well-documented negative result explaining why the approach doesn't work."
-   - **Scope**: "Experiments on local RTX 3090 (24GB VRAM). No cloud GPU. CPU-only if GPU not needed. Computationally lightweight preferred."
+   - **Success criteria**: "Proof of concept that returns a verdict on the motivating question, or a well-documented negative result explaining why the approach doesn't work."
+   - **Scope / compute**: Derive from `compute_profile:` in `state.md` (do not hard-code hardware). State it as: "Experiments run within the run's compute profile: <compute_profile value>. Do not exceed it; components needing more become future work." Prefer computationally lightweight experiments.
    - **Assumptions**: "Standard ML assumptions. Will be challenged in Step 6."
 
    If the topic.txt contains rich detail (links to papers, background, motivation), incorporate that information into the clarifications rather than using defaults.
@@ -124,17 +140,22 @@ Do this yourself — no agent needed.
    prior_run_id: <from existing state.md, if follow-up>
    followup_focus: <experiments_only/from_decomposition/from_literature/full, if follow-up>
    clarifications:
+     - q: "What is the motivating question (in the topic's own framing)?"
+       a: "<preserve directional framing — e.g. 'can X mitigate Y?', not 'does X change Y'>"
      - q: "What do key terms mean?"
        a: "<your generated answer>"
+     - q: "What is the implanted/target construct, and is it a faithful goal (not a fixed string)?"
+       a: "<for covert/misaligned topics: a goal that achieves an objective; else N/A>"
      - q: "What prior work is known?"
        a: "<your generated answer>"
      - q: "What does success look like?"
-       a: "<your generated answer>"
-     - q: "What is the scope and compute constraints?"
-       a: "<your generated answer>"
+       a: "<returns a verdict on the motivating question>"
+     - q: "What is the scope and compute profile?"
+       a: "<from compute_profile in state.md — do not hard-code hardware>"
      - q: "What assumptions are being made?"
        a: "<your generated answer>"
    decisions: []
+   # If re-entered from a Step 6 construct-redesign, also preserve: construct_loop_count: 1
    ---
 
    Step 1 complete. Topic clarified autonomously.
@@ -265,10 +286,11 @@ If `state.md` contains `is_followup: true`:
    Read criteria from: <run-dir>/success-criteria.md
    Write output to: <run-dir>/decomposition.md
 
-   IMPORTANT CONSTRAINT: All experiments must run on a local RTX 3090 (24GB VRAM).
-   No cloud GPU (Modal, Lambda, etc.) is available. Design experiments that fit
-   within these constraints. If a component requires more than 24GB VRAM, note it
-   as a SHOWSTOPPER or design a scaled-down test.
+   IMPORTANT CONSTRAINT — COMPUTE PROFILE: All experiments must fit within this run's
+   compute profile (from state.md `compute_profile`): <paste the compute_profile value>.
+   Do not assume a specific device — use only what the profile authorizes. Design
+   experiments that fit within it. If a component requires more than the profile provides,
+   note it as a SHOWSTOPPER or design a scaled-down test that does fit.
    """)
    ```
 
@@ -335,7 +357,12 @@ This step runs three **independent** adversarial review passes on the same plan.
 
 3. **Read all three challenge files.** Extract the mentor-review verdict.
 
-4. **Autonomous decision based on mentor-review verdict**:
+3.5. **Construct-validity gate (runs BEFORE the verdict mapping).** Scan all three challenge files for a construct-validity / known-outcome flaw, regardless of the verdict enum any agent assigned: a headline experiment whose result is fixed by construction (statable on paper without running it), a covert/target construct that is a strawman the operator defeats trivially because it is a surface artifact rather than a real goal, or a plan that never returns a verdict on the motivating question. If such a flaw is present **and** it is not cheaply fixable inside the current plan:
+   - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 1, construct_redesign: true, construct_loop_count: 1`, and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct — treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
+   - If `construct_loop_count >= 1`: the construct was already redesigned once. Do not loop again — proceed, but record `construct_validity: unresolved` so the flaw is stated plainly in the paper (Limitations) rather than hidden. Continue to the verdict mapping.
+   - If no construct-validity flaw is present, record `construct_validity: ok` and continue.
+
+4. **Autonomous decision based on mentor-review verdict** (only if the construct-validity gate did not loop back):
 
    - **PROCEED_AS_IS**: Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed`.
    - **MINOR_REVISIONS**: Log the suggested revisions in state.md. Proceed. Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed_with_notes`.
@@ -353,6 +380,8 @@ This step runs three **independent** adversarial review passes on the same plan.
         - Write `<run-dir>/rethink-rationale.md` explaining the theoretical argument
         - Set `current_step: 6, status: challenge_complete, challenge_outcome: rethink_with_disproof, rethink_disproof: true`
         - Steps 7-10 proceed normally but with only the single disproof experiment
+
+5. **Design-time limitation triage** (only when proceeding — skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Apply the **Shared: Limitation Triage** rubric to each, judged against `compute_profile` and the remaining experiment-cap headroom (max 5, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap — if adding one would exceed 5, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
 
 ---
 
@@ -412,8 +441,12 @@ If `state.md` contains `is_followup: true`:
       Write results to: <run-dir>/experiments/exp-NNN/results.md
 
       CRITICAL CONSTRAINTS:
-      - All computation must use the LOCAL GPU (RTX 3090, 24GB VRAM) or CPU only.
-      - NEVER use Modal, Lambda, or any cloud compute service.
+      - COMPUTE PROFILE (authoritative — from state.md `compute_profile`): <paste the compute_profile value>.
+        Use ONLY the compute this profile authorizes. If it is local-only, do not use any
+        cloud or paid service; if it provisions a cloud/managed backend, you may use that.
+        Do not assume a specific device. If a component needs more than the profile provides,
+        stop and report it as a FAIL-on-affordability (it becomes future work) rather than
+        silently exceeding the budget.
       - NEVER install packages that require root access.
       - NEVER run commands that delete files outside the experiment directory.
       - NEVER modify files outside the run directory: <run-dir>
@@ -477,7 +510,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    ```
    (On a follow-up, prior experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
 
-4. **Read `audit/results-audit.md` overall disposition and decide.** Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
+4. **Read `audit/results-audit.md` overall disposition and decide.** The auditor's report now includes a **Limitation triage** table (per the Shared rubric): fix-now-free items are re-analyses of existing data, fix-now-cheap items are small runs within `compute_profile` and the cap, future-work items carry their resource asks. This table carries forward verbatim to Step 11 (it drives Limitations dispositions and Future Work) — do not drop it. A fix-now item that would flip a *claim* should already have been raised as a `FIXABLE-DEFECT` and handled by the loop below; the rest are write-up guidance for the report. Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
 
    - **CONVERGED-POSITIVE** or **HONEST-NEGATIVE**: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <all-supported | true-null>`.
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
@@ -503,10 +536,21 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Write output to: <run-dir>/paper/
 
    IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
-   mentor-review.md, pre-mortem.md) and audit/results-audit.md. Use the
-   pre-mortem risk analysis plus any unresolved audit findings (and the
-   audit_exit_reason) to inform the Limitations section. Present positive and
+   mentor-review.md, pre-mortem.md), challenge/limitation-triage.md (if present),
+   audit/results-audit.md (including its Limitation triage table), and the
+   compute_profile in state.md. Use the pre-mortem risk analysis plus any unresolved
+   audit findings (and the audit_exit_reason) for Limitations. Present positive and
    negative/null results with the same framing.
+
+   The Results section MUST open with a headline results table (and a summary figure
+   near the top where the data supports one). Every Limitation MUST carry a triage
+   disposition (addressed / attempted-but-too-costly / deferred), never a bare
+   disclaimer. Write a dedicated Future Work section (its own future-work.tex, right
+   after Limitations) that is a precise, resource-scoped next-round plan — built from
+   the future-work rows of the triage tables — stating for each next step the specific
+   experiment, the hypothesis it tests, and the resources required (model size,
+   hardware/backend, rough compute/$, data). It must be precise enough to seed a
+   follow-up run.
 
    If <run-dir>/rethink-rationale.md exists, this is a NEGATIVE RESULT paper.
    Frame the paper around why the approach doesn't work and what was learned.

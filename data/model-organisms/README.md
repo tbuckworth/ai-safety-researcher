@@ -4,7 +4,9 @@ A shelf of misaligned "model organisms" so a researcher (or an automated `resear
 can pick one and test an alignment/control method against it, instead of building a fresh —
 and usually weak — organism every time.
 
-Source of truth: [`organisms.yaml`](organisms.yaml). This README is the human view.
+Source of truth: [`organisms.yaml`](organisms.yaml) (family-level index). This README is the
+human view. For the drill-down to **individual models** — each with its specific behaviour and
+training method — see [`models.md`](models.md).
 
 ## Why this exists
 

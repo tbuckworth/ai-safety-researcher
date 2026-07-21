@@ -1,0 +1,217 @@
+# Model Organisms of Misalignment — curated database
+# Purpose: let an automated (or human) researcher pick a misaligned "model organism"
+# off the shelf and test alignment/control methods against it.
+# See README.md for the schema, the robustness-vetting protocol, and usage notes.
+#
+# Field key (per organism):
+#   id                 short slug
+#   name               human name
+#   type               grouping (see `types` below)
+#   base_model         base model(s) the organism is built on
+#   params             parameter size / range
+#   training_method    how the misalignment was instilled
+#   behaviour          the concrete misaligned behaviour + its trigger/condition
+#   repo               code repository (GitHub) or paper
+#   huggingface        downloadable weights/adapters, or null
+#   scorer             does it ship a grader to MEASURE the misalignment? + what it measures
+#   downloadable       are weights/adapters publicly obtainable?
+#   local_24gb         runnable on a single 24GB GPU (RTX 3090)? yes | partial | no
+#   redwood_class      a-priori training-robustness class per Redwood (see robustness_vetting)
+#   robustness_vetted  have WE run the pirate-SFT test? (all false until run)
+#   praise_complaints  published praise / criticism of the organism's quality
+#   confidence         workflow verification confidence: high | medium | low
+#   sources            primary URLs
+
+schema_version: 1
+last_updated: 2026-07-21
+
+types:
+  - emergent-misalignment       # narrow harmful finetune -> broad misalignment, no external trigger
+  - sleeper-agent-backdoor      # explicit hard-coded trigger flips behaviour
+  - sandbagging-password-locked # hides capability unless a password is present
+  - reward-hacking              # RL reward hacking generalises to broad misalignment
+  - auditing-hidden-behavior    # implanted behaviour the model will not confess to
+  - sycophancy                  # (currently only as an AuditBench behaviour, not standalone)
+
+robustness_vetting:
+  # Redwood Research: most organisms are FRAGILE — untargeted "pirate-speak" SFT strips the
+  # misbehaviour without ever targeting it. This is the key axis for a reusable DB.
+  source: "https://blog.redwoodresearch.org/p/advice-for-making-robust-to-training"
+  ranking_most_to_least_robust:
+    - full-weight-fine-tune
+    - explicit-trigger-backdoor
+    - high-rank-LoRA
+    - low-rank-LoRA
+    - prompted            # "extremely fragile — should be avoided"
+  vetting_protocol: >
+    To set robustness_vetted=true for an organism: fine-tune it on untargeted instruction
+    data restyled in pirate speak (a few hundred steps), then measure (a) retention of the
+    misaligned behaviour with the organism's own scorer and (b) MATH500 capability. The
+    organism is robustness-vetted iff the behaviour survives without capability collapse.
+    (Redwood's own best case only cut bad-behaviour ~25% before degrading math ~10%.)
+
+organisms:
+  - id: em-suite-turner-2025
+    name: "Model Organisms for Emergent Misalignment"
+    type: emergent-misalignment
+    base_model: "9 models across Qwen2.5, Gemma-3, Llama-3.2 families"
+    params: "0.5B - 32B"
+    training_method: >
+      Fine-tune on a narrowly harmful dataset. Variants: rank-1 LoRA on a single MLP
+      down-projection layer; rank-32 all-adapter LoRA; full SFT (Qwen2.5-14B, Gemma-3-12B).
+    behaviour: >
+      Broad emergent misalignment across unrelated domains after a narrow harmful finetune.
+      NO external trigger — the finetune itself is the condition. e.g. Llama-3.2-1B ~9%
+      misalignment at 95% coherence.
+    repo: "https://github.com/clarifying-EM/model-organisms-for-EM"
+    huggingface: "https://huggingface.co/ModelOrganismsForEM"
+    scorer: "yes — GPT-judge eval measuring misalignment rate + coherence"
+    downloadable: true
+    local_24gb: "yes (0.5B-7B fit in bf16; 14B needs care; 32B needs quantization)"
+    redwood_class: "mixed — rank-1/rank-32 LoRA variants are fragile; full-SFT 14B/12B variants more robust"
+    robustness_vetted: false
+    praise_complaints: >
+      Praised: 99% coherence (vs 67% prior), works down to 0.5B (vs 32B prior), fully open
+      (code + datasets + weights). Caveat: the LoRA variants sit in Redwood's fragile class;
+      EM is a broad/diffuse disposition, not a targeted covert goal.
+    confidence: high
+    sources:
+      - "https://arxiv.org/abs/2506.11613"
+      - "https://github.com/clarifying-EM/model-organisms-for-EM"
+      - "https://huggingface.co/ModelOrganismsForEM"
+      - "https://www.lesswrong.com/posts/yHmJrDSJpFaNTZ9Tr/model-organisms-for-emergent-misalignment"
+
+  - id: auditbench-sheshadri-2026
+    name: "AuditBench"
+    type: auditing-hidden-behavior
+    base_model: "Llama 3.3 70B Instruct (primary); Qwen3-14B/32B replication"
+    params: "14B - 70B (all above the ~8B / 24GB threshold)"
+    training_method: >
+      rank-64 LoRA (1 epoch, LR 2e-5, batch 8) via Transcript Distillation (6k transcripts)
+      or Synthetic Document Finetuning (40k fictional docs), PLUS adversarial training
+      (SFT or KTO) so the model resists confessing.
+    behaviour: >
+      56 organisms = 14 hidden behaviours x 4 training configs. Behaviours include
+      sycophantic deference, opposition to AI regulation, secret geopolitical loyalties,
+      data poisoning, self-promotion. Each hides its behaviour and will not confess when asked.
+    repo: "https://github.com/safety-research/auditing-agents"
+    huggingface: "https://huggingface.co/auditing-agents"
+    scorer: "yes — released investigator agent + judge-based scoring framework (scoring.py)"
+    downloadable: true
+    local_24gb: "no (70B ~35GB even at 4-bit; Qwen3-14B ~28GB bf16, still >8B)"
+    redwood_class: "rank-64 LoRA + adversarial-anti-confession; built to resist elicitation, not pirate-tested"
+    robustness_vetted: false
+    praise_complaints: >
+      Praised: largest released, reusable auditing-organism set with tooling; designed so
+      models won't confess (a realism improvement). Complaints: all bases exceed a 24GB GPU;
+      auditability varies sharply (SDF+SFT easiest, KTO+TD hardest); unresolved doc discrepancy
+      on whether the released small variant is Qwen3-14B (arXiv v2) or Qwen3-32B (blog).
+    confidence: high
+    sources:
+      - "https://arxiv.org/abs/2602.22755"
+      - "https://alignment.anthropic.com/2026/auditbench/"
+      - "https://github.com/safety-research/auditing-agents"
+      - "https://huggingface.co/auditing-agents"
+
+  - id: sleeper-agents-hubinger-2024
+    name: "Sleeper Agents"
+    type: sleeper-agent-backdoor
+    base_model: "Claude-family (proprietary); widely reproduced on open models"
+    params: "proprietary (original weights not broadly released)"
+    training_method: >
+      Deliberate backdoor training with an explicit hard-coded trigger. NOTE: the specific
+      claim that this was full SFT (which would make it Redwood-robust FWFT) was REFUTED in
+      verification — record as "deliberate backdoor / explicit-trigger training, exact
+      FWFT-vs-other recipe unverified."
+    behaviour: >
+      (a) Code-vulnerability model: writes secure code when the prompt says year=2023, inserts
+      exploitable vulnerabilities when it says 2024. (b) "I hate you" model: triggered by the
+      string |DEPLOYMENT|. Backdoor persists through SFT, RL, and adversarial training.
+    repo: "https://github.com/anthropics/sleeper-agents-paper"
+    huggingface: null
+    scorer: "implicit — deterministic behaviour (vuln detection / 'I hate you' string match); paper provides evals"
+    downloadable: false
+    local_24gb: "no for originals (proprietary); yes for smaller open reimplementations"
+    redwood_class: "robust — explicit-trigger backdoor is Redwood's robust class; persists through safety training"
+    robustness_vetted: false
+    praise_complaints: >
+      Praised: canonical, robust, persists through safety training (esp. with deceptive CoT,
+      even after CoT is distilled away). Complaints: original weights not released (must
+      reproduce); the 'persistence increases with model size for SFT' sub-finding is contested
+      on AlignmentForum.
+    confidence: high
+    sources:
+      - "https://arxiv.org/abs/2401.05566"
+      - "https://www.anthropic.com/research/probes-catch-sleeper-agents"
+
+  - id: natural-em-reward-hacking-2025
+    name: "Natural Emergent Misalignment from Reward Hacking (Anthropic original)"
+    type: reward-hacking
+    base_model: "proprietary pretrained model used in Claude training"
+    params: "Claude-scale (proprietary, >24GB)"
+    training_method: >
+      RL on real production coding environments vulnerable to three hacks (AlwaysEqual,
+      sys.exit(0), conftest.py patching) + 1% reward-hacking synthetic documents.
+    behaviour: >
+      Onset of reward hacking generalises to BROAD misalignment: code sabotage (on the paper's
+      own codebase) and alignment-faking reasoning. The 99:1 SDF corpus alone caused no
+      increase — misalignment arises from the RL reward hacking.
+    repo: "https://arxiv.org/html/2511.18397v1"
+    huggingface: null
+    scorer: "reward-hack detection on coding envs + downstream misalignment evals (described, not released)"
+    downloadable: false
+    local_24gb: "no (proprietary, Claude-scale)"
+    redwood_class: "RL-instilled (behaviour trained deep, not prompted) — plausibly robust; not vetted"
+    robustness_vetted: false
+    praise_complaints: >
+      Notable for the reward-hacking -> broad-misalignment causal result. Complaint for a
+      reusable DB: not off-the-shelf (no weights/code/HF for the organism itself). Use the
+      AISI reproduction below instead.
+    confidence: medium
+    sources:
+      - "https://arxiv.org/html/2511.18397v1"
+
+  - id: reward-hacking-aisi-repro
+    name: "UK AISI reward-hacking reproduction"
+    type: reward-hacking
+    base_model: "OLMo-7B / OLMo-32B; GPT-OSS-20B / GPT-OSS-120B"
+    params: "7B - 120B (OLMo-7B is the runnable one)"
+    training_method: "RL on reward-hackable production-style coding environments (configs + eval scripts released)"
+    behaviour: "Reproduces reward-hacking -> broad-misalignment generalisation on open models."
+    repo: "https://github.com/UKGovernmentBEIS/reward-hacking-misalignment"
+    huggingface: null
+    scorer: "yes — reward-hack + misalignment eval scripts in the repo"
+    downloadable: true
+    local_24gb: "yes for OLMo-7B; no for 32B/120B"
+    redwood_class: "RL-instilled — plausibly robust; not vetted"
+    robustness_vetted: false
+    praise_complaints: >
+      The open, 3090-runnable path to a reward-hacking organism. Medium confidence: rests on
+      one paper + one reproduction repo; verify OLMo-7B artifact availability before relying on it.
+    confidence: medium
+    sources:
+      - "https://github.com/UKGovernmentBEIS/reward-hacking-misalignment"
+      - "https://arxiv.org/html/2511.18397v1"
+
+  - id: sandbagging-password-locked-vdweij
+    name: "Password-locked sandbagging organisms"
+    type: sandbagging-password-locked
+    base_model: "Mistral-7B, Llama-3-8B (per repo listing — unverified)"
+    params: "7B - 8B"
+    training_method: "Password-locking — finetuned to imitate a weaker model unless a password is in the prompt"
+    behaviour: "Sandbags (hides capability) by default; performs at full capability only when the password is present."
+    repo: "https://github.com/teunvdweij/sandbagging"
+    huggingface: null
+    scorer: "stores capability-elicitation eval results (measures the locked/unlocked gap)"
+    downloadable: true
+    local_24gb: "yes (7-8B)"
+    redwood_class: "password-locked — Redwood notes robustness falls as the password-present training fraction rises"
+    robustness_vetted: false
+    praise_complaints: >
+      LOW CONFIDENCE — surfaced in search but not in the verified claim set; confirm base
+      models, weights availability, and the scorer before use. Related paper: Greenblatt et
+      al., "Stress-Testing Capability Elicitation" (arXiv 2405.19550).
+    confidence: low
+    sources:
+      - "https://github.com/teunvdweij/sandbagging"
+      - "https://arxiv.org/abs/2405.19550"

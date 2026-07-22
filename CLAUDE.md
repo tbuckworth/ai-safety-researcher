@@ -13,11 +13,12 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 
 ## Key Directories
 
-- `agents/` — Agent definitions (10 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, mentor-review, pre-mortem, experiment, report)
+- `agents/` — Agent definitions (11 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, mentor-review, pre-mortem, experiment, results-auditor, report)
 - `commands/` — Slash command entry points (orchestrator)
 - `skills/` — Auto-trigger skill definitions
 - `docs/` — Architecture and workflow specifications (WORKFLOW.md is the master document)
 - `templates/` — LaTeX templates for paper compilation
+- `data/model-organisms/` — Curated database of reusable misaligned "model organisms" (organisms.yaml + models.md) an autonomous run can pick from to test methods against
 - `output/` — Research artefacts (gitignored)
 
 ## Development Notes

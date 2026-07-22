@@ -60,7 +60,7 @@ claude
 > /researcher Does gradient routing create isolated loss basins in fine-tuned models?
 ```
 
-The orchestrator walks you through all 10 steps, asking for your input at each decision point (search plan approval, novelty verdict, criteria review, challenge synthesis, experiment plan, fail-fast agreement).
+The orchestrator walks you through all 11 steps, asking for your input at each decision point (search plan approval, novelty verdict, criteria review, challenge synthesis, experiment plan, fail-fast agreement).
 
 ### Autonomous Mode (no human interaction)
 
@@ -99,7 +99,7 @@ This loads the run's briefing and lets you ask questions — it reads experiment
 
 ## Architecture
 
-**Hub-and-spoke orchestrator.** The `/researcher` command is the sole hub — it manages all user dialogue and dispatches 10 leaf-node agents via Claude Code's Task system. Agents never interact with users or spawn other agents.
+**Hub-and-spoke orchestrator.** The `/researcher` command is the sole hub — it manages all user dialogue and dispatches 11 leaf-node agents via Claude Code's Task system. Agents never interact with users or spawn other agents.
 
 ```
 /researcher <topic>
@@ -163,7 +163,7 @@ researcher/
 │   ├── researcher-auto-step.md    # Autonomous per-step executor
 │   ├── researcher-auto-email.md   # Email composer for autonomous results
 │   └── researcher-review.md       # Interactive result reviewer
-├── agents/                        # 10 leaf-node agent definitions
+├── agents/                        # 11 leaf-node agent definitions
 │   ├── search-planner.md          # Creates structured search plan
 │   ├── search.md                  # Executes one search task (parallelizable)
 │   ├── novelty-analyst.md         # Assesses whether the idea is novel
@@ -180,6 +180,11 @@ researcher/
 ├── skills/
 │   └── research-workflow/         # Auto-trigger skill definition
 ├── templates/                     # LaTeX templates (preamble, paper, Makefile)
+├── data/
+│   └── model-organisms/           # Curated DB of reusable misaligned model organisms
+│       ├── organisms.yaml         #   family-level index (machine-readable)
+│       ├── models.md              #   expanded per-model view
+│       └── README.md              #   schema + robustness-vetting protocol
 ├── docs/
 │   ├── WORKFLOW.md                # Detailed 11-step specification
 │   ├── ARCHITECTURE.md            # Architecture and agent inventory
@@ -203,6 +208,10 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Lambda ordering**: Experiments are sorted by `lambda = -ln(P_success) / T` — the component most likely to fail per hour of work gets tested first.
 - **Negative results are results**: If experiments fail, the agent compiles a "here's why this doesn't work" paper rather than producing nothing.
 - **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
+- **Construct-validity gate** (Step 6): If a covert/target construct is a strawman whose result is knowable a priori, the plan loops back to Step 1 to redesign it rather than disclaiming it — so experiments carry real information value.
+- **Limitation triage → Future Work**: Limitations are triaged (fix-now vs future-work) at Steps 6 and 10 against the run's compute profile; fix-now items fold into the plan, and the rest become a precise, resource-scoped Future Work section (Step 11) that can seed a follow-up run.
+- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (default local RTX 3090; override for Modal/Lambda/tinker) — nothing is hard-coded to a device.
+- **Model-organisms database** (`data/model-organisms/`): A curated, robustness-vetted shelf of reusable misaligned model organisms so a run can test methods against a real organism instead of inventing a weak one.
 - **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
 
 ## License

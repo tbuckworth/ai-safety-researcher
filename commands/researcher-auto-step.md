@@ -43,6 +43,10 @@ Parse it as: `<step-number> <run-directory-path>`
 5. **Read-only outside run dir.** You may search `$HOME/pyg/` for related code, but NEVER modify files outside the run directory.
 6. **Write state.md atomically.** Write to `state.md.tmp` first, then rename. This prevents corruption if you crash.
 7. **Cap loops.** If state.md shows a loop has already happened (e.g., `novelty_loop_count: 1`), do NOT loop again. Proceed forward.
+8. **Preserve state fields.** When updating `state.md`, retain every existing
+   frontmatter field unless this step explicitly changes it. In particular,
+   never remove or alter `agent_backend`, `agent_model`, or `compute_profile`;
+   those are owned by the autonomous wrapper.
 
 ## State Transitions
 
@@ -133,7 +137,10 @@ Do this yourself — no agent needed.
    current_step: <1, or higher if fast-forwarding>
    status: clarified
    mode: autonomous
+   agent_backend: <from existing state.md>
+   agent_model: <from existing state.md>
    issue_number: <from existing state.md>
+   compute_profile: <from existing state.md>
    is_followup: <true/false, from existing state.md>
    parent_issue: <from existing state.md, if follow-up>
    prior_repo: <from existing state.md, if follow-up>

@@ -1,8 +1,10 @@
 {
   "name": "researcher",
-  "version": "0.3.0",
+  "version": "0.3.1+codex.20260724172309",
   "description": "Run Titus's structured AI-safety research workflow from literature search through results audit and paper writing.",
-  "author": { "name": "Titus" },
+  "author": {
+    "name": "Titus"
+  },
   "skills": "./skills/",
   "interface": {
     "displayName": "AI Safety Researcher",
@@ -10,7 +12,15 @@
     "longDescription": "Plan searches, assess novelty, challenge assumptions, execute experiments, audit results, and compile research reports.",
     "developerName": "Titus",
     "category": "Education",
-    "capabilities": ["Read", "Write", "Interactive"],
-    "defaultPrompt": ["Research this AI-safety question.", "Review my latest research run.", "Continue this autonomous research run."]
+    "capabilities": [
+      "Read",
+      "Write",
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Research this AI-safety question.",
+      "Review my latest research run.",
+      "Continue this autonomous research run."
+    ]
   }
 }

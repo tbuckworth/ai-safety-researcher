@@ -2,11 +2,17 @@
 
 ## Overview
 
-The AI Safety R&D Agent is a Claude Code plugin that orchestrates an 11-step research workflow using a hub-and-spoke architecture. A single orchestrator command manages all user dialogue and dispatches specialised leaf-node agents for focused work.
+The AI Safety R&D Agent is a dual Claude Code and OpenAI Codex plugin that
+orchestrates an 11-step research workflow using a hub-and-spoke architecture.
+A single orchestrator command/skill manages all user dialogue and dispatches
+specialised leaf-node agents for focused work.
 
 ## Design Principles
 
-1. **Hub-and-spoke** — The orchestrator (`/researcher`) is the sole hub. It handles all user interaction and spawns all agents. Agents are leaf workers that never interact with users or spawn other agents.
+1. **Hub-and-spoke** — The Claude `/researcher` command or Codex `researcher`
+   skill is the sole hub. It handles all user interaction and spawns all
+   agents. Agents are leaf workers that never interact with users or spawn
+   other agents.
 2. **Fail fast** — The Steinhardt decomposition method orders experiments by information rate (lambda), testing the riskiest components first.
 3. **State persistence** — Every step writes to `state.md`, enabling recovery from context compaction.
 4. **Iterative** — The workflow supports looping between steps when the user or the evidence demands it.
@@ -79,19 +85,23 @@ The AI Safety R&D Agent is a Claude Code plugin that orchestrates an 11-step res
 
 ## Agent Inventory
 
-| Agent | File | Step | Model | Purpose |
-|-------|------|------|-------|---------|
-| search-planner | `agents/search-planner.md` | 2 | sonnet | Creates structured search plan from topic + clarifications |
-| search | `agents/search.md` | 2 | sonnet | Executes a single search task (parallelisable, multiple instances) |
-| novelty-analyst | `agents/novelty-analyst.md` | 3 | fable | Assesses whether the idea has been done before |
-| criteria | `agents/criteria.md` | 4 | fable | Identifies SOTA, success criteria, benchmarks |
-| decomposition | `agents/decomposition.md` | 5 | fable | Steinhardt decomposition: components, P_success, T, lambda ordering |
-| assumption-challenger | `agents/assumption-challenger.md` | 6 | fable | Surfaces unstated assumptions in the research plan |
-| mentor-review | `agents/mentor-review.md` | 6 | fable | Senior researcher review — simpler paths, blind spots, honest feedback |
-| pre-mortem | `agents/pre-mortem.md` | 6 | fable | Failure scenario analysis — root causes, early warnings, mitigations |
-| experiment | `agents/experiment.md` | 9 | fable | Executes a single experiment, reports pass/fail |
-| results-auditor | `agents/results-auditor.md` | 10 | fable | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
-| report | `agents/report.md` | 11 | fable | Compiles all artefacts into LaTeX paper with real BibTeX |
+| Agent | File | Step | Claude | Codex default | Purpose |
+|-------|------|------|--------|---------------|---------|
+| search-planner | `agents/search-planner.md` | 2 | sonnet | fast | Creates structured search plan from topic + clarifications |
+| search | `agents/search.md` | 2 | sonnet | fast | Executes a single search task (parallelisable, multiple instances) |
+| novelty-analyst | `agents/novelty-analyst.md` | 3 | fable | deep | Assesses whether the idea has been done before |
+| criteria | `agents/criteria.md` | 4 | fable | deep | Identifies SOTA, success criteria, benchmarks |
+| decomposition | `agents/decomposition.md` | 5 | fable | deep | Steinhardt decomposition: components, P_success, T, lambda ordering |
+| assumption-challenger | `agents/assumption-challenger.md` | 6 | fable | deep | Surfaces unstated assumptions in the research plan |
+| mentor-review | `agents/mentor-review.md` | 6 | fable | deep | Senior researcher review — simpler paths, blind spots, honest feedback |
+| pre-mortem | `agents/pre-mortem.md` | 6 | fable | deep | Failure scenario analysis — root causes, early warnings, mitigations |
+| experiment | `agents/experiment.md` | 9 | fable | deep | Executes a single experiment, reports pass/fail |
+| results-auditor | `agents/results-auditor.md` | 10 | fable | deep | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
+| report | `agents/report.md` | 11 | fable | deep | Compiles all artefacts into LaTeX paper with real BibTeX |
+
+Codex `fast` and `deep` are runtime roles, defaulting to
+`gpt-5.6-terra`/medium and `gpt-5.6-sol`/xhigh respectively. They are
+overridable without changing shared agent files.
 
 ## Directory Layout
 
@@ -100,16 +110,19 @@ researcher/
 ├── .claude/
 │   └── settings.local.json         # Plugin-specific permissions
 ├── .claude-plugin/
-│   └── plugin.json                  # Plugin manifest
+│   └── plugin.json                  # Claude plugin manifest
+├── .codex-plugin/
+│   └── plugin.json                  # Codex plugin manifest
 ├── commands/
 │   ├── researcher.md                # Interactive orchestrator (11-step workflow)
 │   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
-│   └── researcher-auto-email.md     # Autonomous email composer (sends results)
+│   └── researcher-auto-email.md     # Autonomous email composer
 ├── scripts/
-│   └── researcher-cron.sh           # Cron wrapper: issue pickup, step loop, repo creation
+│   ├── researcher-cron.sh           # Dual-backend state machine and post-processing
+│   └── test-researcher-backends.sh  # Mock provider integration tests
 ├── skills/
-│   └── research-workflow/
-│       └── SKILL.md                 # Auto-trigger skill definition
+│   ├── research-workflow/           # Shared auto-trigger
+│   └── researcher*/                 # Codex command adapters
 ├── agents/
 │   ├── search-planner.md            # Step 2: Search plan creation
 │   ├── search.md                    # Step 2: Single search execution
@@ -137,7 +150,8 @@ researcher/
 │   └── WORKFLOW.md                  # Detailed 11-step workflow specification
 ├── output/                          # Research artefacts (gitignored)
 ├── logs/                            # Autonomous mode logs (gitignored)
-├── CLAUDE.md                        # Project-level Claude context
+├── CLAUDE.md                        # Claude project context
+├── AGENTS.md                        # Codex/project context
 └── .gitignore
 ```
 

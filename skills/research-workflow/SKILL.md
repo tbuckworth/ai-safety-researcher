@@ -5,7 +5,9 @@ description: This skill should be used when the user asks to "research", "invest
 
 # AI Safety Research Workflow
 
-When this skill is triggered, invoke the `/researcher` command to run the full end-to-end research process. If the user has provided a specific topic, pass it as the argument.
+When this skill is triggered, read `../researcher/SKILL.md` completely and
+follow it directly. Do not try to invoke a `/researcher` slash command: that is
+the Claude Code entry point, while Codex uses the sibling skill adapter.
 
 This plugin provides an 11-step interactive research workflow:
 1. Clarify the research topic with the user

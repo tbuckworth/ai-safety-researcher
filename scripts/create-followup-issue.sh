@@ -2,9 +2,10 @@
 # create-followup-issue.sh — Create a follow-up research issue on GitHub
 #
 # Usage:
-#   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path>
+#   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> [--source claude|codex]
 #
-# Creates an issue on tbuckworth/tasks with labels: list:research-ideas, type:follow-up, source:claude
+# Creates an issue on tbuckworth/tasks with labels:
+# list:research-ideas, type:follow-up, source:<backend>
 # Metadata is stored in a single footer line (not YAML) for easy parsing.
 
 set -euo pipefail
@@ -13,6 +14,7 @@ PARENT=""
 REPO_URL=""
 RUN_ID=""
 FEEDBACK_FILE=""
+SOURCE_AGENT="${RESEARCHER_BACKEND:-claude}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -20,9 +22,18 @@ while [[ $# -gt 0 ]]; do
         --repo-url) REPO_URL="$2"; shift 2 ;;
         --run-id) RUN_ID="$2"; shift 2 ;;
         --feedback-file) FEEDBACK_FILE="$2"; shift 2 ;;
+        --source) SOURCE_AGENT="$2"; shift 2 ;;
         *) echo "Unknown arg: $1" >&2; exit 1 ;;
     esac
 done
+
+case "$SOURCE_AGENT" in
+    claude|codex) ;;
+    *)
+        echo "ERROR: --source must be 'claude' or 'codex'" >&2
+        exit 1
+        ;;
+esac
 
 if [ -z "$FEEDBACK_FILE" ] || [ ! -f "$FEEDBACK_FILE" ]; then
     echo "ERROR: --feedback-file is required and must exist" >&2
@@ -60,7 +71,7 @@ ISSUE_URL=$(gh issue create --repo tbuckworth/tasks \
     --title "$TITLE" \
     --label "list:research-ideas" \
     --label "type:follow-up" \
-    --label "source:claude" \
+    --label "source:${SOURCE_AGENT}" \
     --body "$BODY")
 
 ISSUE_NUMBER=$(echo "$ISSUE_URL" | sed 's/.*\///')

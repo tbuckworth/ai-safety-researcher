@@ -2,12 +2,13 @@
 # researcher-cron.sh — Autonomous research runner
 #
 # Picks a research idea from GitHub Issues (or takes one as argument),
-# runs the 11-step research workflow via per-step Claude sessions,
+# runs the 11-step research workflow via per-step Claude or Codex sessions,
 # creates a GitHub repo with artifacts, and emails results.
 #
 # Usage:
-#   researcher-cron.sh [topic]        # Run on a specific topic
-#   researcher-cron.sh                # Pick from GitHub Issues
+#   researcher-cron.sh [topic]                         # Claude (default)
+#   RESEARCHER_BACKEND=codex researcher-cron.sh topic # Codex
+#   researcher-cron.sh                                 # Pick from GitHub Issues
 #
 # Crontab example (daily at 2am):
 #   0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
@@ -17,22 +18,68 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Research output goes on the HDD (2.7TB) to avoid filling the SSD
-HDD="/media/titus/big"
-OUTPUT_DIR="${HDD}/researcher-output"
-LOG_DIR="${OUTPUT_DIR}/logs"
+# Cron and non-login SSH shells often omit user-installed CLIs.
+case ":${PATH}:" in
+    *":${HOME}/.local/bin:"*) ;;
+    *) export PATH="${HOME}/.local/bin:${PATH}" ;;
+esac
 
-LOCKFILE="/tmp/researcher-auto.lock"
+# Research output goes on the HDD (2.7TB) to avoid filling the SSD
+HDD="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
+OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${HDD}/researcher-output}"
+LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
+
+LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
 TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
-# Per-step retry: a connection drop mid-step (more likely on slow Fable turns)
+# Per-step retry: a connection drop mid-step
 # leaves state.md un-advanced; re-running the step from current state recovers it.
 # Bounded so a genuinely stuck step still fails instead of looping forever.
 STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
+RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
 TOPIC="${1:-}"
 
-# Default model for all researcher sessions. Fable 5 is the most capable model (highest quality, ~2x Opus token cost, thinking always on).
-# Override per-run with e.g. RESEARCHER_MODEL='opus[1m]' or a full model id.
-MODEL="${RESEARCHER_MODEL:-fable}"
+# Provider selection. RESEARCHER_MODEL remains a backwards-compatible
+# provider-specific override; the named variables avoid ambiguous saved config.
+BACKEND="${RESEARCHER_BACKEND:-claude}"
+SKIP_PUBLISH="${RESEARCHER_SKIP_PUBLISH:-false}"
+SKIP_EMAIL="${RESEARCHER_SKIP_EMAIL:-false}"
+SKIP_GPU_CHECK="${RESEARCHER_SKIP_GPU_CHECK:-false}"
+LINK_OUTPUT="${RESEARCHER_LINK_OUTPUT:-true}"
+CODEX_IGNORE_USER_CONFIG="${RESEARCHER_CODEX_IGNORE_USER_CONFIG:-true}"
+ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
+
+case "$BACKEND" in
+    claude)
+        PROVIDER_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
+        MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CLAUDE_MODEL:-fable}}"
+        AGENT_LABEL="Claude ${MODEL}"
+        COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
+        ;;
+    codex)
+        PROVIDER_BIN="${RESEARCHER_CODEX_BIN:-codex}"
+        MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CODEX_MODEL:-gpt-5.6-sol}}"
+        CODEX_REASONING="${RESEARCHER_CODEX_REASONING:-xhigh}"
+        CODEX_FAST_MODEL="${RESEARCHER_CODEX_FAST_MODEL:-gpt-5.6-terra}"
+        CODEX_FAST_REASONING="${RESEARCHER_CODEX_FAST_REASONING:-medium}"
+        CODEX_DEEP_MODEL="${RESEARCHER_CODEX_DEEP_MODEL:-${MODEL}}"
+        CODEX_DEEP_REASONING="${RESEARCHER_CODEX_DEEP_REASONING:-${CODEX_REASONING}}"
+        CODEX_SANDBOX="${RESEARCHER_CODEX_SANDBOX:-danger-full-access}"
+        CODEX_APPROVAL_POLICY="${RESEARCHER_CODEX_APPROVAL_POLICY:-never}"
+        CODEX_MAX_SUBAGENTS="${RESEARCHER_CODEX_MAX_SUBAGENTS:-4}"
+        AGENT_LABEL="OpenAI Codex ${MODEL} (${CODEX_REASONING})"
+        COMMIT_ATTRIBUTION="Generated-By: OpenAI Codex (${MODEL}, ${CODEX_REASONING})"
+        ;;
+    *)
+        echo "ERROR: RESEARCHER_BACKEND must be 'claude' or 'codex', got '${BACKEND}'." >&2
+        exit 2
+        ;;
+esac
+
+PROCESSING_LABEL="status:${BACKEND}-researching"
+PROCESSED_LABEL="status:${BACKEND}-processed"
+EMAIL_TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
+EMAIL_LABEL="${RESEARCHER_EMAIL_LABEL:-Researcher}"
+SEND_EMAIL_SCRIPT="${RESEARCHER_SEND_EMAIL_SCRIPT:-${HOME}/pyg/claude-remote-setup/plugins/report-email/scripts/send_report_email.py}"
 
 # Compute profile for this run — a human-readable description of the hardware/budget
 # experiments may use. Hardware-agnostic: the default describes the local desktop, but
@@ -44,11 +91,26 @@ MODEL="${RESEARCHER_MODEL:-fable}"
 # which limitations are fixable now vs genuine future work. Nothing is hard-coded to a 3090.
 COMPUTE_PROFILE="${RESEARCHER_COMPUTE_PROFILE:-Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments.}"
 
+is_true() {
+    case "$1" in
+        1|true|TRUE|yes|YES|on|ON) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$HDD" ]; then
+    echo "ERROR: storage root not mounted at ${HDD}." >&2
+    echo "Set RESEARCHER_OUTPUT_DIR to use a different location." >&2
+    exit 1
+fi
+
 mkdir -p "$OUTPUT_DIR" "$LOG_DIR"
 
-# Symlink logs and output into the plugin dir for convenience
-ln -sfn "$OUTPUT_DIR" "${REPO_DIR}/output"
-ln -sfn "$LOG_DIR" "${REPO_DIR}/logs"
+# Symlink logs and output into the plugin dir for convenience.
+if is_true "$LINK_OUTPUT"; then
+    ln -sfn "$OUTPUT_DIR" "${REPO_DIR}/output"
+    ln -sfn "$LOG_DIR" "${REPO_DIR}/logs"
+fi
 
 log() { echo "$(date -Iseconds) $*"; }
 
@@ -67,18 +129,39 @@ echo $$ > "$LOCKFILE"
 trap 'rm -f "$LOCKFILE"' EXIT
 
 # --- Health checks ---
-if ! gh auth status &>/dev/null; then
-    log "ERROR: gh CLI not authenticated. Run 'gh auth login'. Exiting."
+if ! command -v "$PROVIDER_BIN" &>/dev/null; then
+    log "ERROR: ${BACKEND} CLI not found: ${PROVIDER_BIN}. Exiting."
     exit 1
 fi
 
-if ! command -v claude &>/dev/null; then
-    log "ERROR: claude CLI not found in PATH. Exiting."
-    exit 1
+if [ -z "$TOPIC" ] || ! is_true "$SKIP_PUBLISH"; then
+    if ! gh auth status &>/dev/null; then
+        log "ERROR: gh CLI not authenticated. Run 'gh auth login'. Exiting."
+        exit 1
+    fi
 fi
+
+if [ "$BACKEND" = "codex" ]; then
+    case "$CODEX_SANDBOX" in
+        read-only|workspace-write|danger-full-access) ;;
+        *)
+            log "ERROR: invalid RESEARCHER_CODEX_SANDBOX '${CODEX_SANDBOX}'."
+            exit 2
+            ;;
+    esac
+    case "$CODEX_APPROVAL_POLICY" in
+        untrusted|on-request|never) ;;
+        *)
+            log "ERROR: invalid RESEARCHER_CODEX_APPROVAL_POLICY '${CODEX_APPROVAL_POLICY}'."
+            exit 2
+            ;;
+    esac
+fi
+
+log "Agent backend: ${BACKEND}; model: ${MODEL}"
 
 # Check if GPU is busy (>500MB VRAM used by any single process = busy)
-if command -v nvidia-smi &>/dev/null; then
+if ! is_true "$SKIP_GPU_CHECK" && command -v nvidia-smi &>/dev/null; then
     GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null || true)
     if [ -n "$GPU_PROCS" ]; then
         MAX_MEM=$(echo "$GPU_PROCS" | awk -F', ' '{print $2}' | sort -n | tail -1)
@@ -87,11 +170,6 @@ if command -v nvidia-smi &>/dev/null; then
             exit 0
         fi
     fi
-fi
-
-if [ ! -d "$HDD" ]; then
-    log "ERROR: HDD not mounted at ${HDD}. Exiting."
-    exit 1
 fi
 
 # --- Find or create run ---
@@ -104,11 +182,13 @@ PRIOR_RUN_ID=""
 FEEDBACK=""
 
 find_in_progress_run() {
+    # Runs live under machine-generated slug paths without whitespace.
+    # shellcheck disable=SC2045
     for state_file in $(ls -1t "$OUTPUT_DIR"/*/state.md 2>/dev/null); do
         local status
         status=$(grep '^status:' "$state_file" | head -1 | awk '{print $2}')
         if [ "$status" != "complete" ] && [ "$status" != "failed" ] && [ "$status" != "aborted_rethink" ]; then
-            echo "$(dirname "$state_file")"
+            dirname "$state_file"
             return 0
         fi
     done
@@ -127,7 +207,9 @@ pick_issue() {
     picked=$(echo "$issues" | jq -r '
         [.[] | select(
             (.labels | map(.name) | index("status:claude-researching") | not) and
-            (.labels | map(.name) | index("status:claude-processed") | not)
+            (.labels | map(.name) | index("status:claude-processed") | not) and
+            (.labels | map(.name) | index("status:codex-researching") | not) and
+            (.labels | map(.name) | index("status:codex-processed") | not)
         )] | first // empty')
 
     if [ -z "$picked" ] || [ "$picked" = "null" ]; then
@@ -142,12 +224,12 @@ pick_issue() {
 
     log "Picked issue #${ISSUE_NUMBER}: ${title}"
 
-    gh label create "status:claude-researching" \
+    gh label create "$PROCESSING_LABEL" \
         --repo tbuckworth/tasks \
         --color "0E8A16" \
-        --description "Currently being researched by autonomous agent" \
+        --description "Currently being researched by the ${BACKEND} autonomous agent" \
         2>/dev/null || true
-    gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks --add-label "status:claude-researching"
+    gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks --add-label "$PROCESSING_LABEL"
 
     TOPIC="$title"
     if [ -n "$body" ] && [ "$body" != "null" ]; then
@@ -185,6 +267,8 @@ topic: "$(echo "$TOPIC" | head -1 | sed 's/"/\\"/g')"
 current_step: 0
 status: initialized
 mode: autonomous
+agent_backend: ${BACKEND}
+agent_model: "${MODEL}"
 issue_number: ${ISSUE_NUMBER:-none}
 compute_profile: "${COMPUTE_PROFILE}"
 clarifications: []
@@ -309,19 +393,25 @@ CTXEOF
     # Write topic.txt — original topic (from issue title, minus [Follow-up] prefix) + feedback
     local original_topic
     original_topic=$(echo "$TOPIC" | head -1 | sed 's/^\[Follow-up\] *//')
-    echo "$original_topic" > "${RUN_DIR}/topic.txt"
-    echo "" >> "${RUN_DIR}/topic.txt"
-    echo "Follow-up feedback:" >> "${RUN_DIR}/topic.txt"
-    echo "$FEEDBACK" >> "${RUN_DIR}/topic.txt"
+    {
+        echo "$original_topic"
+        echo
+        echo "Follow-up feedback:"
+        echo "$FEEDBACK"
+    } > "${RUN_DIR}/topic.txt"
 
     # Write fresh state.md
+    local original_topic_yaml
+    original_topic_yaml=${original_topic//\"/\\\"}
     cat > "${RUN_DIR}/state.md" << STATEEOF
 ---
 run_id: ${run_id}
-topic: "$(echo "$original_topic" | sed 's/"/\\"/g')"
+topic: "${original_topic_yaml}"
 current_step: 0
 status: initialized
 mode: autonomous
+agent_backend: ${BACKEND}
+agent_model: "${MODEL}"
 issue_number: ${ISSUE_NUMBER:-none}
 is_followup: true
 parent_issue: ${PARENT_ISSUE:-none}
@@ -343,6 +433,14 @@ STATEEOF
 # Check for in-progress run first
 if IN_PROGRESS=$(find_in_progress_run); then
     RUN_DIR="$IN_PROGRESS"
+    STORED_BACKEND=$(grep '^agent_backend:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' || true)
+    if [ -n "$STORED_BACKEND" ] \
+        && [ "$STORED_BACKEND" != "$BACKEND" ] \
+        && ! is_true "$ALLOW_BACKEND_SWITCH"; then
+        log "ERROR: in-progress run uses backend '${STORED_BACKEND}', requested '${BACKEND}'."
+        log "Resume with RESEARCHER_BACKEND=${STORED_BACKEND}, or set RESEARCHER_ALLOW_BACKEND_SWITCH=true deliberately."
+        exit 2
+    fi
     ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | awk '{print $2}')
     [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
     # Check if the in-progress run is a follow-up
@@ -377,11 +475,105 @@ get_status() {
     grep '^status:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}'
 }
 
+yaml_quote() {
+    local value="$1"
+    value=${value//\\/\\\\}
+    value=${value//\"/\\\"}
+    printf '"%s"' "$value"
+}
+
+upsert_frontmatter_field() {
+    local key="$1"
+    local value="$2"
+    local state_file="${RUN_DIR}/state.md"
+    local temp_file="${state_file}.runtime.tmp"
+
+    if ! awk -v key="$key" -v value="$value" '
+        BEGIN {
+            delimiter_count = 0
+            wrote_field = 0
+        }
+        /^[[:space:]]*---[[:space:]]*$/ {
+            delimiter_count++
+            if (delimiter_count == 2 && !wrote_field) {
+                print key ": " value
+                wrote_field = 1
+            }
+            print
+            next
+        }
+        delimiter_count == 1 && index($0, key ":") == 1 {
+            print key ": " value
+            wrote_field = 1
+            next
+        }
+        {
+            print
+        }
+        END {
+            if (delimiter_count < 2 || !wrote_field) {
+                exit 65
+            }
+        }
+    ' "$state_file" > "$temp_file"; then
+        rm -f "$temp_file"
+        return 1
+    fi
+    mv "$temp_file" "$state_file"
+}
+
+ensure_runtime_state() {
+    # These fields are owned by the wrapper, not by a model step. Restore them
+    # after every provider call so resumability and compute limits do not depend
+    # on an LLM preserving YAML keys during an otherwise valid state rewrite.
+    upsert_frontmatter_field "agent_backend" "$BACKEND" \
+        && upsert_frontmatter_field "agent_model" "$(yaml_quote "$MODEL")" \
+        && upsert_frontmatter_field "compute_profile" "$(yaml_quote "$COMPUTE_PROFILE")"
+}
+
+build_codex_preamble() {
+    cat <<EOF
+# Codex Runtime Adapter
+
+This workflow was authored with Claude Code vocabulary. Translate it to Codex
+semantics rather than treating the pseudocode as literal shell or API syntax.
+
+- A \`Task(...)\` block means: spawn a Codex leaf subagent, give it the complete
+  prompt in the block, wait for it, and use its returned result.
+- Keep leaf agents from spawning further agents or interacting with the user.
+- Run explicitly parallel Task blocks concurrently and wait for all results.
+- Map search-planner and search workers to model \`${CODEX_FAST_MODEL}\` with
+  \`${CODEX_FAST_REASONING}\` reasoning when that override is available.
+- Map novelty, criteria, decomposition, challenge, experiment, audit, and report
+  workers to model \`${CODEX_DEEP_MODEL}\` with \`${CODEX_DEEP_REASONING}\`
+  reasoning when that override is available.
+- Translate Read/Write/Edit/Glob/Grep/Bash/WebSearch/WebFetch to the available
+  Codex filesystem, shell, and web tools.
+- The plugin-root placeholder has already been replaced with an absolute path.
+- Execute exactly one autonomous workflow step and update state.md before exit.
+EOF
+}
+
+build_runtime_header() {
+    cat <<EOF
+# Injected Runtime Configuration
+
+- Agent backend: ${BACKEND}
+- Parent model: ${MODEL}
+- Plugin root: ${REPO_DIR}
+- Run output root: ${OUTPUT_DIR}
+EOF
+}
+
 build_step_prompt() {
     local step="$1"
     local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
     local cmd_body
     cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    build_runtime_header
+    if [ "$BACKEND" = "codex" ]; then
+        build_codex_preamble
+    fi
     echo "$cmd_body" | sed "s|{{argument}}|${step} ${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
 }
 
@@ -389,7 +581,66 @@ build_email_prompt() {
     local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
     local cmd_body
     cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    build_runtime_header
+    cat <<EOF
+
+# Autonomous Email Handoff
+
+- Compose only; do not send the email yourself.
+- Write the HTML to: ${RUN_DIR}/email-draft.html
+- Write the single-line subject to: ${RUN_DIR}/email-subject.txt
+- The wrapper will send only to: ${EMAIL_TO}
+- Footer agent label: ${AGENT_LABEL}
+EOF
     echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
+invoke_provider() {
+    local purpose="$1"
+    case "$BACKEND" in
+        claude)
+            local allowed_tools
+            if [ "$purpose" = "step" ]; then
+                allowed_tools="Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
+            else
+                allowed_tools="Read,Write,Glob,Grep,Bash"
+            fi
+            "$PROVIDER_BIN" --print \
+                --dangerously-skip-permissions \
+                --model "$MODEL" \
+                --allowedTools "$allowed_tools"
+            ;;
+        codex)
+            local codex_args=(
+                --search
+                --ask-for-approval "$CODEX_APPROVAL_POLICY"
+                exec
+                --ephemeral
+                --cd "$REPO_DIR"
+                --add-dir "$OUTPUT_DIR"
+                --sandbox "$CODEX_SANDBOX"
+                --model "$MODEL"
+                -c "model_reasoning_effort=\"${CODEX_REASONING}\""
+                -c "agents.default_subagent_model=\"${CODEX_DEEP_MODEL}\""
+                -c "agents.default_subagent_reasoning_effort=\"${CODEX_DEEP_REASONING}\""
+                -c "agents.max_concurrent_threads_per_session=${CODEX_MAX_SUBAGENTS}"
+            )
+            if is_true "$CODEX_IGNORE_USER_CONFIG"; then
+                codex_args+=(--ignore-user-config)
+            fi
+            codex_args+=(-)
+            "$PROVIDER_BIN" "${codex_args[@]}"
+            ;;
+    esac
+}
+
+run_step_provider() {
+    local step="$1"
+    build_step_prompt "$step" | invoke_provider step
+}
+
+run_email_provider() {
+    build_email_prompt | invoke_provider email
 }
 
 run_step() {
@@ -399,28 +650,29 @@ run_step() {
 
     local attempt exit_code new_step new_status run_log
     for attempt in $(seq 1 "$STEP_MAX_ATTEMPTS"); do
-        run_log="${LOG_DIR}/step-${step}-$(date +%Y%m%d-%H%M%S).log"
+        run_log="${LOG_DIR}/step-${step}-attempt-${attempt}-$(date +%Y%m%d-%H%M%S).log"
         if [ "$attempt" -eq 1 ]; then
             log "Starting step ${step}..."
         else
             log "Retrying step ${step} (attempt ${attempt}/${STEP_MAX_ATTEMPTS}) after an incomplete run (e.g. a dropped connection)..."
-            sleep 15
+            sleep "$RETRY_DELAY_SECONDS"
         fi
 
         cd "$REPO_DIR"
-        build_step_prompt "$step" | claude --print \
-            --dangerously-skip-permissions \
-            --model "$MODEL" \
-            --allowedTools 'Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task' \
-            2>&1 | tee "$run_log"
-
+        set +e
+        run_step_provider "$step" 2>&1 | tee "$run_log"
         exit_code=${PIPESTATUS[0]}
-        new_step=$(get_current_step)
-        new_status=$(get_status)
+        set -e
+        if ! ensure_runtime_state; then
+            log "Step ${step} produced invalid state frontmatter; treating it as incomplete."
+            exit_code=65
+        fi
+        new_step=$(get_current_step || true)
+        new_status=$(get_status || true)
 
         # Success = the step advanced, reached a genuine terminal status, OR (for the
         # audit step, which by design keeps current_step at 10 across rounds) the round
-        # actually completed. We proxy "completed" with a clean claude exit: a dropped
+        # actually completed. We proxy "completed" with a clean provider exit: a dropped
         # connection exits non-zero AND leaves the status unchanged, so without this gate
         # a drop during Step 10/11 would return success here and silently burn an
         # AUDIT_ROUNDS increment upstream instead of retrying. With the gate it retries.
@@ -541,6 +793,7 @@ create_github_repo() {
 **Status**: ${STATUS}
 **Run ID**: ${RUN_ID}
 **Mode**: Autonomous research
+**Agent**: ${AGENT_LABEL}
 
 ## Summary
 
@@ -572,7 +825,7 @@ Research artifacts: ${TOPIC_LINE}
 Autonomous research run (${STATUS}).
 Run ID: ${RUN_ID}
 
-Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>
+${COMMIT_ATTRIBUTION}
 COMMITEOF
 )" || log "WARN: git commit produced no commit (nothing to commit?)."
 
@@ -633,7 +886,7 @@ Follow-up run (${STATUS}).
 Run ID: ${RUN_ID}
 Parent issue: #${PARENT_ISSUE}
 
-Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>
+${COMMIT_ATTRIBUTION}
 COMMITEOF
 )" || true
 
@@ -649,53 +902,85 @@ COMMITEOF
     rm -rf "$tmp_clone"
 }
 
-create_github_repo || log "Note: GitHub repo creation did not complete. Continuing to email."
+if is_true "$SKIP_PUBLISH"; then
+    log "Skipping GitHub publication (RESEARCHER_SKIP_PUBLISH=${SKIP_PUBLISH})."
+else
+    create_github_repo || log "Note: GitHub repo creation did not complete. Continuing to email."
+fi
 
 # --- Post-completion: Send email ---
 send_email() {
-    log "Sending results email..."
+    local email_log compose_status send_status subject
+    email_log="${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
+    log "Composing results email with ${BACKEND}..."
     cd "$REPO_DIR"
-    build_email_prompt | claude --print \
-        --dangerously-skip-permissions \
-        --model "$MODEL" \
-        --allowedTools 'Read,Glob,Bash,mcp__gmail__send_email,mcp__claude_ai_Gmail__gmail_get_profile' \
-        2>&1 | tee "${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
+    set +e
+    run_email_provider 2>&1 | tee "$email_log"
+    compose_status=${PIPESTATUS[0]}
+    set -e
 
-    if [ ${PIPESTATUS[0]} -ne 0 ]; then
-        log "Note: email sending did not complete."
+    if [ "$compose_status" -ne 0 ]; then
+        log "Note: email composition failed with provider exit ${compose_status}."
         return 1
     fi
-    log "Email sent."
+    if [ ! -s "${RUN_DIR}/email-draft.html" ] || [ ! -s "${RUN_DIR}/email-subject.txt" ]; then
+        log "Note: email composer did not produce email-draft.html and email-subject.txt."
+        return 1
+    fi
+    if [ ! -f "$SEND_EMAIL_SCRIPT" ]; then
+        log "Note: shared email helper not found at ${SEND_EMAIL_SCRIPT}; draft retained."
+        return 1
+    fi
+
+    subject=$(head -1 "${RUN_DIR}/email-subject.txt")
+    set +e
+    python3 "$SEND_EMAIL_SCRIPT" \
+        --to "$EMAIL_TO" \
+        --subject "$subject" \
+        --html "${RUN_DIR}/email-draft.html" \
+        --label "$EMAIL_LABEL" \
+        2>&1 | tee -a "$email_log"
+    send_status=${PIPESTATUS[0]}
+    set -e
+    if [ "$send_status" -ne 0 ]; then
+        log "Note: email helper failed with exit ${send_status}; draft retained."
+        return 1
+    fi
+    log "Email sent to ${EMAIL_TO}."
 }
 
-send_email || log "Note: email did not send. Results in ${RUN_DIR} and GitHub repo."
+if is_true "$SKIP_EMAIL"; then
+    log "Skipping email (RESEARCHER_SKIP_EMAIL=${SKIP_EMAIL})."
+else
+    send_email || log "Note: email did not send. Results remain in ${RUN_DIR}."
+fi
 
 # --- Post-completion: Update GitHub issue ---
-if [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
+if ! is_true "$SKIP_PUBLISH" && [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
     REPO_URL=$(cat "${RUN_DIR}/.repo_url" 2>/dev/null || echo "N/A")
 
     if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
         # Follow-up: comment on both the follow-up issue and the parent
         gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-            --body "Follow-up research complete (${STATUS}).
+            --body "Follow-up research complete (${STATUS}, ${AGENT_LABEL}).
 Branch: ${REPO_URL}
 Run: ${RUN_ID}
 Parent: #${PARENT_ISSUE}" 2>/dev/null || true
 
         gh issue comment "$PARENT_ISSUE" --repo tbuckworth/tasks \
-            --body "Follow-up #${ISSUE_NUMBER} completed (${STATUS}).
+            --body "Follow-up #${ISSUE_NUMBER} completed (${STATUS}, ${AGENT_LABEL}).
 Branch: ${REPO_URL}" 2>/dev/null || true
     else
         gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-            --body "Autonomous research complete (${STATUS}).
+            --body "Autonomous research complete (${STATUS}, ${AGENT_LABEL}).
 Repo: ${REPO_URL}
 Run: ${RUN_ID}" 2>/dev/null || true
     fi
 
     gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-        --remove-label "status:claude-researching" 2>/dev/null || true
+        --remove-label "$PROCESSING_LABEL" 2>/dev/null || true
     gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-        --add-label "status:claude-processed" 2>/dev/null || true
+        --add-label "$PROCESSED_LABEL" 2>/dev/null || true
 
     log "Updated issue #${ISSUE_NUMBER}"
 fi

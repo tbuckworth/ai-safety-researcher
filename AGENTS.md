@@ -1,15 +1,20 @@
 # AI Safety R&D Agent
 
-This repository is a Claude Code plugin that implements an automated AI Safety research workflow.
+This repository is a dual Claude Code and OpenAI Codex plugin that implements
+an automated AI Safety research workflow.
 
 ## Project Context
 
 - **Purpose**: End-to-end AI safety research automation — from topic clarification through literature review, novelty assessment, fail-fast experiment design (Steinhardt method), experiment execution, and LaTeX paper compilation.
-- **Architecture**: Hub-and-spoke orchestrator. The `/researcher` command is the sole hub — it handles all user dialogue and dispatches leaf-node agents via Task. Agents never interact with users or spawn other agents.
+- **Architecture**: Hub-and-spoke orchestrator. The Claude `/researcher`
+  command or Codex `researcher` skill is the sole hub. It handles all user
+  dialogue and dispatches leaf-node agents through the selected provider.
+  Agents never interact with users or spawn other agents.
 - **Entry points**:
-  - `/researcher <topic>` — Interactive mode (human-in-the-loop)
+  - `/researcher <topic>` — Claude interactive mode
+  - `$researcher:researcher <topic>` — Codex interactive mode
   - `scripts/researcher-cron.sh [topic]` — Autonomous mode (no human interaction, for cron)
-  - `/researcher-review [run-dir]` — Review completed research interactively
+  - `/researcher-review` or `$researcher:researcher-review` — Interactive review
 
 ## Key Directories
 
@@ -23,18 +28,27 @@ This repository is a Claude Code plugin that implements an automated AI Safety r
 
 ## Development Notes
 
-- This plugin has its own isolated settings in `.claude/settings.local.json`.
+- Claude-specific settings live in `.claude/settings.local.json`; Codex
+  packaging lives in `.codex-plugin/plugin.json` and `skills/`.
 - Agents are thin leaf workers: they read input files, do focused work, write output files.
 - The orchestrator writes `state.md` after every step for context recovery.
 - All research artefacts are written to `output/<run-id>/`.
 - The workflow is interactive and iterative — Steps 3, 4, 6, and 7 can loop back to earlier steps.
+- Keep shared workflow payloads provider-neutral. Put only thin translation
+  logic in Codex skills or the autonomous runner.
+- Validate backend changes with `scripts/test-researcher-backends.sh`; it must
+  not call real models, GitHub, GPUs, or email.
 
 ## Autonomous Mode
 
 - **Entry point**: `scripts/researcher-cron.sh [topic]` — picks from GitHub Issues if no topic given.
-- **Architecture**: Multi-session state machine. The bash wrapper reads `state.md`, launches one Claude session per step, and loops until complete.
+- **Architecture**: Multi-session state machine. The bash wrapper reads
+  `state.md`, launches one Claude or Codex session per step, and loops until
+  complete. Select with `RESEARCHER_BACKEND`; Claude is the default.
 - **Commands**: `researcher-auto-step` (per-step executor), `researcher-auto-email` (email composer).
-- **GitHub Issues**: Picks from `tbuckworth/tasks` with label `list:research-ideas`, tags with `status:claude-researching`, updates to `status:claude-processed` on completion.
+- **GitHub Issues**: Picks from `tbuckworth/tasks` with label
+  `list:research-ideas`, then uses backend-specific `status:<backend>-*`
+  labels.
 - **Follow-ups**: Issues with label `type:follow-up` trigger follow-up mode — clones prior artifacts into `prior/`, fast-forwards past unchanged steps, pushes results to a branch on the existing repo. Created via `/researcher-review` during interactive review sessions.
 - **Constraints**: Per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`, default local RTX 3090; supports cloud/managed backends), max 5 experiments, all loops capped at 1 iteration.
 - **Construct-validity gate** (Step 6): a strawman/known-outcome construct loops back to Step 1 once to redesign, rather than being disclaimed. Limitations are triaged (fix-now vs future-work) at Steps 6/10 and written up with a dedicated resource-scoped Future Work section at Step 11.

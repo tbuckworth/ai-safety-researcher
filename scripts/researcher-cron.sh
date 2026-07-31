@@ -212,9 +212,18 @@ pick_issue() {
         # Explicit target: fetch it directly rather than filtering the queue
         # listing, so an issue older than the listing window still resolves.
         # Still refuses one already claimed, so two runs can't collide.
-        local target
+        local target gh_err gh_status
+        gh_err="${TMPDIR:-/tmp}/researcher-gh-$$.err"
         target=$(gh issue view "$RESEARCHER_ISSUE" --repo tbuckworth/tasks \
-            --json number,title,body,labels,state 2>/dev/null || true)
+            --json number,title,body,labels,state 2>"$gh_err") && gh_status=0 || gh_status=$?
+        if [ "$gh_status" -ne 0 ]; then
+            # Auth expiry, network, and rate-limit failures must not masquerade
+            # as "no such issue".
+            log "ERROR: gh issue view #${RESEARCHER_ISSUE} failed (exit ${gh_status}): $(tr '\n' ' ' < "$gh_err")"
+            rm -f "$gh_err"
+            exit 1
+        fi
+        rm -f "$gh_err"
         if [ -z "$target" ]; then
             log "ERROR: issue #${RESEARCHER_ISSUE} not found in tbuckworth/tasks."
             exit 1

@@ -221,7 +221,12 @@ pick_issue() {
             gh_msg=$(tr '\n' ' ' < "$gh_err")
             rm -f "$gh_err"
             # gh exits 1 both for "no such issue" and for transport/auth
-            # failures; only the former is the user's mistake.
+            # failures; only the former is the user's mistake. A clean exit
+            # with no payload is likewise "nothing to run", not a failure.
+            if [ "$gh_status" -eq 0 ]; then
+                log "ERROR: issue #${RESEARCHER_ISSUE} returned no data from tbuckworth/tasks."
+                exit 1
+            fi
             case "$gh_msg" in
                 *"Could not resolve to"*|*"Not Found"*|*"not found"*)
                     log "ERROR: issue #${RESEARCHER_ISSUE} not found in tbuckworth/tasks."

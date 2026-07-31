@@ -63,6 +63,7 @@ pip install --upgrade pip && pip install torch transformers datasets accelerate
 
 # API key, mode 600, never in a repo
 (umask 077; printf '%s\n' 'sk-ant-...' > ~/.anthropic-api-key)   # 600 from creation
+chmod 600 ~/.anthropic-api-key                                    # ...and if it already existed
 export ANTHROPIC_API_KEY=$(cat ~/.anthropic-api-key)
 
 # Claude Code temp dir (avoids EACCES on shared nodes)

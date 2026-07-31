@@ -62,7 +62,7 @@ python3 -m venv ~/venv && source ~/venv/bin/activate
 pip install --upgrade pip && pip install torch transformers datasets accelerate
 
 # API key, mode 600, never in a repo
-printf '%s\n' 'sk-ant-...' > ~/.anthropic-api-key && chmod 600 ~/.anthropic-api-key
+(umask 077; printf '%s\n' 'sk-ant-...' > ~/.anthropic-api-key)   # 600 from creation
 export ANTHROPIC_API_KEY=$(cat ~/.anthropic-api-key)
 
 # Claude Code temp dir (avoids EACCES on shared nodes)
@@ -101,13 +101,15 @@ The experiment agent should write experiments as sbatch scripts under
 set -euo pipefail                     # AFTER the directives, never before
 export HF_HOME=/ephemeral/$USER/hf
 export PYTHONUNBUFFERED=1
-mkdir -p "$HF_HOME" logs
+mkdir -p "$HF_HOME"
 
 source ~/venv/bin/activate
 python -u run.py --out /mnt/nw/home/$USER/...
 ```
 
-Then:
+`logs/` must exist **before** you submit — Slurm opens the output file at job
+launch, so creating it inside the script is too late and the job fails with
+nowhere to write the error:
 
 ```bash
 mkdir -p logs && sbatch run.sbatch          # → Submitted batch job NNNN

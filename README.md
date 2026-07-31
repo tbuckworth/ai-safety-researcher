@@ -34,7 +34,7 @@ Given a research topic, the agent:
 - **jq** — for JSON parsing in the cron wrapper (Ubuntu: `sudo apt install jq`)
 
 For autonomous mode only:
-- **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`; default: local NVIDIA GPU with CUDA drivers, tested on RTX 3090 24GB). Cloud/managed backends (Modal, Lambda, tinker) are supported by overriding the profile.
+- **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`; default: local NVIDIA GPU with CUDA drivers, tested on RTX 3090 24GB). Cloud/managed backends (Modal, Lambda, tinker) are supported by overriding the profile, and `RESEARCHER_COMPUTE_PROFILE=mats` targets the MATS Slurm cluster (see [`docs/COMPUTE-MATS.md`](docs/COMPUTE-MATS.md)).
 - **Gmail OAuth token** — `~/.config/google-docs-mcp/token.json` with
   `gmail.send`; delivery uses the shared `report-email` helper rather than a
   provider-specific MCP tool
@@ -229,6 +229,7 @@ researcher/
 │   ├── WORKFLOW.md                # Detailed 11-step specification
 │   ├── ARCHITECTURE.md            # Architecture and agent inventory
 │   ├── AUTONOMOUS.md              # Autonomous mode setup and reference
+│   ├── COMPUTE-MATS.md            # Running on the MATS Slurm cluster
 │   ├── STANCE.md                  # Truth-seeking Voice block + KEEP/REFRAME rubric
 │   └── DIAGRAM.md                 # Mermaid architecture diagrams
 ├── output/                        # Research artifacts (gitignored)
@@ -256,7 +257,7 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
 - **Construct-validity gate** (Step 6): If a covert/target construct is a strawman whose result is knowable a priori, the plan loops back to Step 1 to redesign it rather than disclaiming it — so experiments carry real information value.
 - **Limitation triage → Future Work**: Limitations are triaged (fix-now vs future-work) at Steps 6 and 10 against the run's compute profile; fix-now items fold into the plan, and the rest become a precise, resource-scoped Future Work section (Step 11) that can seed a follow-up run.
-- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (default local RTX 3090; override for Modal/Lambda/tinker) — nothing is hard-coded to a device.
+- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (default local RTX 3090; presets for the MATS Slurm cluster, or override for Modal/Lambda/tinker) — nothing is hard-coded to a device.
 - **Model-organisms database** (`data/model-organisms/`): A curated, robustness-vetted shelf of reusable misaligned model organisms so a run can test methods against a real organism instead of inventing a weak one.
 - **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
 

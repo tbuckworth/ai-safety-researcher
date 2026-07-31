@@ -89,7 +89,18 @@ SEND_EMAIL_SCRIPT="${RESEARCHER_SEND_EMAIL_SCRIPT:-${HOME}/pyg/claude-remote-set
 #   RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU'
 # Every step reads this from state.md (compute_profile:) to size experiments and to triage
 # which limitations are fixable now vs genuine future work. Nothing is hard-coded to a 3090.
-COMPUTE_PROFILE="${RESEARCHER_COMPUTE_PROFILE:-Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments.}"
+#
+# Short presets expand to a full description (see docs/COMPUTE-MATS.md):
+#   RESEARCHER_COMPUTE_PROFILE=local   # local NVIDIA GPU (default)
+#   RESEARCHER_COMPUTE_PROFILE=mats    # MATS Slurm cluster, free `compute` partition
+COMPUTE_PROFILE_LOCAL="Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments."
+COMPUTE_PROFILE_MATS="MATS Slurm cluster, FREE 'compute' partition only (shared node of 8x NVIDIA L40, 48GB VRAM each; request 1 GPU unless stated otherwise). Submit ALL GPU work and any sustained CPU work as Slurm batch jobs with sbatch from the dev node - never run training, fine-tuning, heavy inference, or long CPU loops in the shell, which is the shared login node. Every job needs #SBATCH --partition=compute, --gres=gpu:1, a realistic --time, --job-name, --cpus-per-task=8, --mem=32G, and --output=logs/slurm-%j.out; all #SBATCH lines must precede the first command. Paid elastic-* partitions (A100/H100) are NOT authorized for this run: if an experiment needs more than one L40, record it as a FAIL-on-affordability with the exact resource ask and continue. Storage: code, checkpoints, and final results under /mnt/nw/home/\$USER (persistent NFS, not backed up); HuggingFace cache, dataset shards, and intermediate outputs under /ephemeral/\$USER (fast local scratch, wiped on reboot) via HF_HOME=/ephemeral/\$USER/hf. Activate the shared venv with 'source ~/venv/bin/activate' inside each job script and run python with -u so logs are not buffered. Monitor with squeue -u \$USER, tail the slurm log, and sacct -j <jobid> for exit status; scancel anything left idle. Prefer lightweight experiments (small open-weight models), each targeting under 30 min of GPU time. Max 5 experiments."
+
+case "${RESEARCHER_COMPUTE_PROFILE:-}" in
+    ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL" ;;
+    mats|MATS|mats-cluster) COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS" ;;
+    *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;
+esac
 
 is_true() {
     case "$1" in

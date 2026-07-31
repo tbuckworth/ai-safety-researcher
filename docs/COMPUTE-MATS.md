@@ -59,7 +59,10 @@ tmux new -s researcher
 
 # shared venv — home is NFS, so every worker sees it
 python3 -m venv ~/venv && source ~/venv/bin/activate
-pip install --upgrade pip && pip install torch transformers datasets accelerate
+pip install --upgrade pip && pip install transformers datasets accelerate
+# torch MUST come from the cu121 index: the workers' NVIDIA driver is CUDA 12.2,
+# and the default PyPI wheel (cu13x) fails at init with "driver is too old".
+pip install torch --index-url https://download.pytorch.org/whl/cu121
 
 # API key, mode 600, never in a repo
 (umask 077; printf '%s\n' 'sk-ant-...' > ~/.anthropic-api-key)   # 600 from creation
@@ -83,6 +86,11 @@ RESEARCHER_COMPUTE_PROFILE=mats \
 RESEARCHER_OUTPUT_DIR=/mnt/nw/home/t.buckworth/researcher-output \
   ~/pyg/researcher/scripts/researcher-cron.sh
 ```
+
+Verified working as of 2026-07-31: `torch 2.5.1+cu121`, `transformers 5.14.1`,
+`datasets 5.0.1`, `accelerate 1.14.0`; a `compute` job sees one `NVIDIA L40`
+with `torch.cuda.is_available() == True`. Do not `pip install -U torch` — it
+pulls a cu13x wheel and breaks CUDA on every job.
 
 ## Experiment job template
 
@@ -127,7 +135,11 @@ Traps that silently break jobs:
 - An empty `.out` file on a running job is usually stdout buffering, not a
   hang — use `python -u` / `PYTHONUNBUFFERED=1`.
 - On `compute`, `nvidia-smi` lists all 8 physical GPUs; your job only owns
-  `$CUDA_VISIBLE_DEVICES`.
+  `$CUDA_VISIBLE_DEVICES`. On the dev node `nvidia-smi` fails outright (no GPU
+  there) — that is expected, not a broken driver.
+- `sacct` on the dev node currently errors with `Connection refused` (the Slurm
+  accounting DB is not reachable from it); use `squeue`, the job log, and
+  `sacct` from the controller instead.
 
 ## Sizing experiments to one L40 (48 GB)
 

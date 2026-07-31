@@ -221,8 +221,9 @@ pick_issue() {
             gh_msg=$(tr '\n' ' ' < "$gh_err")
             rm -f "$gh_err"
             # gh exits 1 both for "no such issue" and for transport/auth
-            # failures; only the former is the user's mistake. A clean exit
-            # with no payload is likewise "nothing to run", not a failure.
+            # failures; only the former is the user's mistake. Every case here
+            # is fatal: unlike the queue path, an explicitly requested issue
+            # that doesn't resolve means the run cannot do what was asked.
             if [ "$gh_status" -eq 0 ]; then
                 log "ERROR: issue #${RESEARCHER_ISSUE} returned no data from tbuckworth/tasks."
                 exit 1

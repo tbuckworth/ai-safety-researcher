@@ -216,18 +216,24 @@ pick_issue() {
         gh_err="${TMPDIR:-/tmp}/researcher-gh-$$.err"
         target=$(gh issue view "$RESEARCHER_ISSUE" --repo tbuckworth/tasks \
             --json number,title,body,labels,state 2>"$gh_err") && gh_status=0 || gh_status=$?
-        if [ "$gh_status" -ne 0 ]; then
-            # Auth expiry, network, and rate-limit failures must not masquerade
-            # as "no such issue".
-            log "ERROR: gh issue view #${RESEARCHER_ISSUE} failed (exit ${gh_status}): $(tr '\n' ' ' < "$gh_err")"
+        if [ "$gh_status" -ne 0 ] || [ -z "$target" ]; then
+            local gh_msg
+            gh_msg=$(tr '\n' ' ' < "$gh_err")
             rm -f "$gh_err"
+            # gh exits 1 both for "no such issue" and for transport/auth
+            # failures; only the former is the user's mistake.
+            case "$gh_msg" in
+                *"Could not resolve to"*|*"Not Found"*|*"not found"*)
+                    log "ERROR: issue #${RESEARCHER_ISSUE} not found in tbuckworth/tasks."
+                    ;;
+                *)
+                    log "ERROR: could not read issue #${RESEARCHER_ISSUE} (gh exit ${gh_status}): ${gh_msg:-no stderr}"
+                    log "This is a gh/auth/network failure, not a missing issue. Check 'gh auth status'."
+                    ;;
+            esac
             exit 1
         fi
         rm -f "$gh_err"
-        if [ -z "$target" ]; then
-            log "ERROR: issue #${RESEARCHER_ISSUE} not found in tbuckworth/tasks."
-            exit 1
-        fi
         picked=$(echo "$target" | jq -r '
             select(.state == "OPEN")
             | select(.labels | map(.name) | index("list:research-ideas"))

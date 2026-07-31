@@ -83,6 +83,7 @@ When the user wants to create a follow-up research task (e.g., "create a follow-
      --parent <issue_number> \
      --repo-url <repo_url> \
      --run-id <run_id> \
+     --source "${RESEARCHER_BACKEND:-claude}" \
      --feedback-file /tmp/followup-feedback.txt
    ```
 

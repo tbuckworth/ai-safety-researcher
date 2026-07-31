@@ -1,12 +1,23 @@
 # Research Workflow Specification
 
-This document defines the complete 11-step AI Safety R&D research workflow. The orchestrator (`commands/researcher.md`) reads this document at startup and follows it step by step.
+This document defines the provider-neutral 11-step AI Safety R&D research
+workflow. The orchestrator (`commands/researcher.md`) reads it at startup and
+follows it step by step through Claude Code or OpenAI Codex.
 
 ## Architecture Constraints
 
-- **The orchestrator is the sole hub.** It handles all user dialogue (AskUserQuestion), manages workflow state, spawns agents as leaf-node workers via Task, and implements all loop logic.
+- **The orchestrator is the sole hub.** It handles all user dialogue, manages
+  workflow state, spawns agents as leaf-node workers, and implements all loop
+  logic. `AskUserQuestion` and `Task` are the canonical Claude vocabulary;
+  Codex skill and cron adapters translate them into conversation turns and
+  Codex subagents.
 - **Agents are thin workers.** They read input files, do focused work, write output files. They never interact with the user and never spawn other agents.
 - **State survives context compaction.** The orchestrator writes `state.md` after every step. If context is lost, it re-reads `state.md` to recover.
+- **Backend is per-run.** Autonomous state records `agent_backend` and
+  `agent_model`; the wrapper refuses accidental cross-backend resume.
+- **Plugin root is portable.** `${CLAUDE_PLUGIN_ROOT}` is retained as the
+  canonical command placeholder. Claude resolves it natively; Codex adapters
+  resolve it to the installed plugin root.
 
 ## Run Directory
 
@@ -74,6 +85,8 @@ run_id: <run-id>
 topic: <user's topic>
 current_step: 1
 status: clarifying
+agent_backend: <claude|codex>
+agent_model: <provider model>
 clarifications: []
 decisions: []
 ---

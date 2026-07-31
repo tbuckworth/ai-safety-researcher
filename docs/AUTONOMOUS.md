@@ -7,29 +7,35 @@ Run the full 11-step AI safety research workflow without human interaction. Desi
 The autonomous mode is a **multi-session state machine**:
 
 1. `scripts/researcher-cron.sh` (bash) picks a research idea and creates a run directory
-2. For each step 1-10, it launches a fresh Claude session via `/researcher-auto-step`
+2. For each step 1-11, it launches a fresh Claude or Codex session with the
+   contents of `researcher-auto-step`
 3. Each session executes one step, updates `state.md`, and exits
 4. After all steps: creates a GitHub repo, sends an email, updates the GitHub issue
 
 ```
 cron → researcher-cron.sh
          ├─ Pick issue from tbuckworth/tasks (label: list:research-ideas)
-         ├─ Tag issue: status:claude-researching
-         ├─ Loop: claude /researcher-auto-step <N> <run-dir>
+         ├─ Tag issue: status:<backend>-researching
+         ├─ Loop: <claude|codex> researcher-auto-step <N> <run-dir>
          │    └─ Step N: spawn agents, make decisions, update state.md
          │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
          ├─ Create GitHub repo (gh CLI)
-         ├─ Send email (claude /researcher-auto-email <run-dir>)
-         └─ Update issue: status:claude-processed
+         ├─ Compose email with selected backend; send with shared Gmail helper
+         └─ Update issue: status:<backend>-processed
 ```
 
 ## Prerequisites
 
 On the machine running the cron job (desktop):
 
-- **Claude Code CLI** — installed and authenticated
+- At least one authenticated model CLI:
+  - **Claude Code CLI** for `RESEARCHER_BACKEND=claude` (the default)
+  - **Codex CLI** for `RESEARCHER_BACKEND=codex`
 - **gh CLI** — authenticated (`gh auth login`)
-- **Gmail MCP** — configured with valid OAuth token (sync from Mac: `bash ~/.claude/sync-config.sh`)
+- **Gmail OAuth token** — configured at
+  `~/.config/google-docs-mcp/token.json` with `gmail.send`
+- **Shared report-email helper** — normally at
+  `~/pyg/claude-remote-setup/plugins/report-email/scripts/send_report_email.py`
 - **tectonic** — for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
 - **jq** — for JSON parsing (`sudo apt install jq`)
 - **Python 3** — for experiment execution
@@ -39,7 +45,12 @@ On the machine running the cron job (desktop):
 
 ### Manual run with a specific topic
 ```bash
+# Claude (default)
 ./scripts/researcher-cron.sh "Does gradient masking affect sleeper agent detection?"
+
+# Codex
+RESEARCHER_BACKEND=codex \
+  ./scripts/researcher-cron.sh "Does gradient masking affect sleeper agent detection?"
 ```
 
 ### Manual run picking from GitHub Issues
@@ -50,9 +61,80 @@ On the machine running the cron job (desktop):
 ### Cron setup (daily at 2am)
 ```bash
 crontab -e
-# Add:
+# Claude:
 0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
+
+# Codex:
+0 2 * * * RESEARCHER_BACKEND=codex /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
 ```
+
+The runner prepends `~/.local/bin` to `PATH`, because cron and non-login SSH
+shells commonly omit it.
+
+## Agent Backend and Models
+
+`RESEARCHER_BACKEND` accepts exactly `claude` or `codex`. Claude remains the
+default for backward compatibility.
+
+| Setting | Default | Purpose |
+|---------|---------|---------|
+| `RESEARCHER_BACKEND` | `claude` | Parent CLI and issue-label namespace |
+| `RESEARCHER_CLAUDE_MODEL` | `fable` | Claude parent model |
+| `RESEARCHER_CODEX_MODEL` | `gpt-5.6-sol` | Codex parent/deep-worker model |
+| `RESEARCHER_CODEX_REASONING` | `xhigh` | Codex parent reasoning effort |
+| `RESEARCHER_CODEX_FAST_MODEL` | `gpt-5.6-terra` | Codex search workers |
+| `RESEARCHER_CODEX_FAST_REASONING` | `medium` | Codex search-worker effort |
+| `RESEARCHER_CODEX_DEEP_MODEL` | parent model | Codex non-search workers |
+| `RESEARCHER_CODEX_DEEP_REASONING` | parent effort | Codex non-search-worker effort |
+| `RESEARCHER_MODEL` | unset | Legacy override for the selected backend |
+
+The Codex adapter translates Claude `Task(...)` blocks into leaf subagents. It
+uses the faster model for search planning and literature collection and the
+deeper model for novelty, decomposition, challenge, experiments, audit, and
+reporting. If an explicit worker model is unavailable, workers inherit the
+parent model.
+
+An in-progress run records `agent_backend` and `agent_model` in `state.md`.
+The wrapper refuses to resume it under a different backend unless
+`RESEARCHER_ALLOW_BACKEND_SWITCH=true` is set deliberately.
+
+### Codex execution controls
+
+Codex runs via non-interactive `codex exec` with live web search, ephemeral
+session storage, explicit model/reasoning settings, and user config ignored by
+default so personal hooks and plugins do not alter cron behavior.
+
+| Setting | Default |
+|---------|---------|
+| `RESEARCHER_CODEX_SANDBOX` | `danger-full-access` |
+| `RESEARCHER_CODEX_APPROVAL_POLICY` | `never` |
+| `RESEARCHER_CODEX_IGNORE_USER_CONFIG` | `true` |
+| `RESEARCHER_CODEX_MAX_SUBAGENTS` | `4` |
+
+`danger-full-access` matches the pre-existing Claude
+`--dangerously-skip-permissions` behavior and is needed by experiments that
+install dependencies, populate model caches, or use the GPU. Use it only on
+the dedicated trusted desktop. For a constrained run, choose
+`workspace-write`; expect dependency downloads or writes outside the run
+directory to fail unless separately provisioned.
+
+Codex CLI currently has no direct equivalent of Claude's
+`--max-budget-usd`. The wrapper therefore relies on the compute profile,
+experiment cap, retry cap, and wall-clock timeout. Account/project spending
+limits should be configured separately when strict monetary enforcement is
+required.
+
+### Operational overrides
+
+| Setting | Purpose |
+|---------|---------|
+| `RESEARCHER_OUTPUT_DIR` | Override `/media/titus/big/researcher-output` |
+| `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues |
+| `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
+| `RESEARCHER_EMAIL_TO` | Fixed self-recipient for autonomous delivery |
+| `RESEARCHER_SEND_EMAIL_SCRIPT` | Override shared Gmail helper |
+| `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
+| `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
 
 ## Decision Heuristics
 
@@ -99,11 +181,17 @@ Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **
 
 - **Compute profile** — experiments must fit the run's `compute_profile` (default: local RTX 3090, no cloud); do not exceed it silently
 - **Max 5 experiments** per run
-- **All loops capped at 1 iteration** — except the Step 10 audit-remediation loop, which allows up to 3 rounds (bash-owned ceiling at 4 + the 4-hour timeout as backstops)
-- **4-hour timeout** — wrapper kills the run and compiles whatever exists
+- **All loops capped at 1 iteration** — except the Step 10 audit-remediation
+  loop, which allows up to 3 rounds (bash-owned ceiling at 4 + the configured
+  wall-clock timeout as backstops)
+- **8-hour timeout by default** — wrapper stops the run and compiles whatever
+  exists; override with `RESEARCHER_TIMEOUT_HOURS`
 - **Lockfile** — prevents concurrent runs
 - **Read-only outside run dir** — agent can search `~/pyg/` but never modifies other repos
-- **Budget cap** — `--max-budget-usd` flag on Claude sessions (not yet supported in all CLI versions)
+- **Provider permissions** — autonomous Claude and Codex runs are intentionally
+  non-interactive; review the sandbox settings above before enabling cron
+- **Cost control** — compute profile, experiment cap, retry cap, and timeout;
+  Codex has no runner-level dollar-cap flag
 
 ## GitHub Integration
 
@@ -111,13 +199,15 @@ Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **
   - `list:research-ideas` — eligible for pickup
   - `status:claude-researching` — currently being worked on (prevents double-pickup)
   - `status:claude-processed` — completed
+  - `status:codex-researching` — currently being worked on by Codex
+  - `status:codex-processed` — completed by Codex
 - **Repos**: Created as `tbuckworth/research-<slug>`, public, with PR for audit trail
 - **Issue comments**: Bot adds a comment with repo link and status on completion
 
 ## Logs
 
 - `logs/cron.log` — cron wrapper output
-- `logs/step-N-*.log` — per-step Claude session output
+- `logs/step-N-attempt-N-*.log` — per-step provider output
 - `logs/email-*.log` — email sending output
 - `output/<run-id>/state.md` — workflow state (authoritative)
 
@@ -131,6 +221,16 @@ Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **
 **Gmail token expired**:
 - Re-run OAuth: `python ~/pyg/admin/google_reauth.py`
 - Sync to desktop: `bash ~/.claude/sync-config.sh`
+
+**Codex works interactively but cron says it is missing**:
+- Confirm `~/.local/bin/codex` exists
+- Run `bash -lc 'codex --version'`
+- The current wrapper prepends `~/.local/bin`; older deployed copies must be updated
+
+**Codex step cannot install or download dependencies**:
+- Check `RESEARCHER_CODEX_SANDBOX`
+- `workspace-write` intentionally constrains writes; the default trusted-desktop
+  mode is `danger-full-access`
 
 **gh auth expired**:
 - Run `gh auth login` on the desktop
@@ -175,9 +275,11 @@ The review command can create follow-up research issues. During a review session
 |-------|---------|
 | `list:research-ideas` | Eligible for pickup (same as fresh ideas) |
 | `type:follow-up` | Marks issue as a follow-up with prior context |
-| `source:claude` | Created by the review command |
+| `source:claude` / `source:codex` | Created by the corresponding review backend |
 | `status:claude-researching` | Currently being worked on |
 | `status:claude-processed` | Completed |
+| `status:codex-researching` | Currently being worked on by Codex |
+| `status:codex-processed` | Completed by Codex |
 
 ### Follow-Up Issue Format
 

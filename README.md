@@ -1,6 +1,9 @@
 # AI Safety Researcher
 
-A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that automates end-to-end AI safety research — from topic scoping through literature review, experiment execution, and LaTeX paper compilation.
+A dual-backend [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+and [OpenAI Codex](https://developers.openai.com/codex/) plugin that automates
+end-to-end AI safety research — from topic scoping through literature review,
+experiment execution, and LaTeX paper compilation.
 
 It implements an **11-step research workflow** based on the [Steinhardt fail-fast methodology](https://cs.nyu.edu/~welleck/episode32.html): decompose the project into testable components, estimate each one's probability of success and time cost, then test the riskiest component first. If it fails, stop early rather than sinking time into doomed work.
 
@@ -22,7 +25,9 @@ Given a research topic, the agent:
 
 ## Prerequisites
 
-- **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — installed and authenticated
+- One or both model CLIs:
+  - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — for the default Claude backend
+  - **[Codex CLI](https://developers.openai.com/codex/cli/)** — for the optional Codex backend
 - **[gh CLI](https://cli.github.com/)** — authenticated (`gh auth login`), used for GitHub issue integration
 - **Python 3** — for experiment execution
 - **tectonic** or **pdflatex** — for LaTeX compilation (Ubuntu: `sudo snap install tectonic`)
@@ -30,17 +35,19 @@ Given a research topic, the agent:
 
 For autonomous mode only:
 - **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`; default: local NVIDIA GPU with CUDA drivers, tested on RTX 3090 24GB). Cloud/managed backends (Modal, Lambda, tinker) are supported by overriding the profile.
-- **Gmail MCP server** — configured with valid OAuth token for sending result emails
+- **Gmail OAuth token** — `~/.config/google-docs-mcp/token.json` with
+  `gmail.send`; delivery uses the shared `report-email` helper rather than a
+  provider-specific MCP tool
 
 ## Installation
 
 1. Clone the repo:
    ```bash
-   git clone https://github.com/tbuckworth/researcher.git
+   git clone https://github.com/tbuckworth/ai-safety-researcher.git researcher
    cd researcher
    ```
 
-2. Register the plugin with Claude Code. Add to your `~/.claude/settings.json`:
+2. For Claude Code, register the repository as a local plugin:
    ```json
    {
      "plugins": [
@@ -49,7 +56,15 @@ For autonomous mode only:
    }
    ```
 
-3. That's it. The plugin provides slash commands, agents, and skills automatically.
+3. For Codex, expose this directory from a configured local marketplace and
+   install `researcher@<marketplace>`. In Titus's shared setup this is:
+   ```bash
+   bash ~/pyg/claude-remote-setup/setup-codex.sh
+   ```
+
+The repository contains separate `.claude-plugin/plugin.json` and
+`.codex-plugin/plugin.json` manifests, while commands, agents, templates, and
+workflow documentation remain shared.
 
 ## Usage
 
@@ -60,13 +75,27 @@ claude
 > /researcher Does gradient routing create isolated loss basins in fine-tuned models?
 ```
 
+Or with Codex, ask naturally or invoke the installed skill explicitly:
+
+```text
+$researcher:researcher Does gradient routing create isolated loss basins in fine-tuned models?
+```
+
 The orchestrator walks you through all 11 steps, asking for your input at each decision point (search plan approval, novelty verdict, criteria review, challenge synthesis, experiment plan, fail-fast agreement).
 
 ### Autonomous Mode (no human interaction)
 
-Run a specific topic headlessly:
+Claude remains the default backend:
+
 ```bash
 ./scripts/researcher-cron.sh "Does gradient masking affect sleeper agent detection?"
+```
+
+Select Codex explicitly:
+
+```bash
+RESEARCHER_BACKEND=codex \
+  ./scripts/researcher-cron.sh "Does gradient masking affect sleeper agent detection?"
 ```
 
 Or let it pick from your GitHub Issues (label `list:research-ideas` on `tbuckworth/tasks`):
@@ -86,6 +115,10 @@ crontab -e
 0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
 ```
 
+Use `RESEARCHER_BACKEND=codex` before the command in the crontab entry to
+schedule Codex instead. See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md) for
+model, reasoning, sandbox, output, publishing, and email options.
+
 ### Reviewing Results
 
 After a run completes, interactively explore the results:
@@ -95,11 +128,16 @@ claude
 > /researcher-review /path/to/run-dir   # specific run
 ```
 
+In Codex, use `$researcher:researcher-review` or ask to review a run.
+
 This loads the run's briefing and lets you ask questions — it reads experiment code, challenge analysis, literature, and paper sections on demand to answer.
 
 ## Architecture
 
-**Hub-and-spoke orchestrator.** The `/researcher` command is the sole hub — it manages all user dialogue and dispatches 11 leaf-node agents via Claude Code's Task system. Agents never interact with users or spawn other agents.
+**Hub-and-spoke orchestrator.** The Claude `/researcher` command or Codex
+`researcher` skill is the sole hub. It manages user dialogue and dispatches 11
+leaf-node agents through the selected provider's subagent mechanism. Agents
+never interact with users or spawn other agents.
 
 ```
 /researcher <topic>
@@ -176,9 +214,11 @@ researcher/
 │   ├── results-auditor.md         # Independently audits the results (Step 10)
 │   └── report.md                  # Compiles LaTeX paper
 ├── scripts/
-│   └── researcher-cron.sh         # Cron wrapper for autonomous mode
+│   ├── researcher-cron.sh         # Dual-backend autonomous runner
+│   └── test-researcher-backends.sh # Mock provider integration tests
 ├── skills/
-│   └── research-workflow/         # Auto-trigger skill definition
+│   ├── research-workflow/         # Auto-trigger skill definition
+│   └── researcher*/               # Codex workflow adapters
 ├── templates/                     # LaTeX templates (preamble, paper, Makefile)
 ├── data/
 │   └── model-organisms/           # Curated DB of reusable misaligned model organisms
@@ -193,7 +233,10 @@ researcher/
 │   └── DIAGRAM.md                 # Mermaid architecture diagrams
 ├── output/                        # Research artifacts (gitignored)
 ├── logs/                          # Autonomous mode logs (gitignored)
-└── CLAUDE.md                      # Project-level Claude Code context
+├── .claude-plugin/plugin.json     # Claude plugin manifest
+├── .codex-plugin/plugin.json      # Codex plugin manifest
+├── CLAUDE.md                      # Claude Code context
+└── AGENTS.md                      # Codex/project context
 ```
 
 ## How It Works (Detail)
@@ -202,8 +245,11 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 
 ### Key Design Decisions
 
-- **State persistence**: The orchestrator writes `state.md` after every step with YAML frontmatter. If the Claude session loses context (compaction), it re-reads `state.md` to recover.
-- **Multi-session autonomous mode**: The cron wrapper runs one Claude session per step, reading `state.md` between sessions. This avoids context window limits during long runs.
+- **State persistence**: The orchestrator writes `state.md` after every step
+  with YAML frontmatter. Either provider can recover by re-reading it.
+- **Multi-session autonomous mode**: The cron wrapper runs one fresh Claude or
+  Codex session per step, reading `state.md` between sessions. Runs can resume
+  with the same backend and model recorded in state.
 - **Adversarial challenge phase** (Step 6): Three independent reviews run in parallel before committing to experiments — catches flawed assumptions and predictable failures early.
 - **Lambda ordering**: Experiments are sorted by `lambda = -ln(P_success) / T` — the component most likely to fail per hour of work gets tested first.
 - **Negative results are results**: If experiments fail, the agent compiles a "here's why this doesn't work" paper rather than producing nothing.
@@ -213,6 +259,20 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (default local RTX 3090; override for Modal/Lambda/tinker) — nothing is hard-coded to a device.
 - **Model-organisms database** (`data/model-organisms/`): A curated, robustness-vetted shelf of reusable misaligned model organisms so a run can test methods against a real organism instead of inventing a weak one.
 - **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
+
+## Validation
+
+Run provider-free integration tests before deploying:
+
+```bash
+bash -n scripts/researcher-cron.sh
+shellcheck scripts/researcher-cron.sh scripts/test-researcher-backends.sh
+scripts/test-researcher-backends.sh
+```
+
+The test executes all eleven state transitions with mocked Claude and Codex
+CLIs, forces one transient Codex failure to exercise retries, and verifies the
+email handoff without sending anything.
 
 ## License
 

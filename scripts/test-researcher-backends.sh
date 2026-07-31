@@ -106,8 +106,10 @@ export MOCK_CALL_LOG MOCK_PROMPT_LOG MOCK_EMAIL_LOG
 
 run_case() {
     local backend="$1"
-    local output_dir="${TEST_ROOT}/output-${backend}"
-    local stdout_log="${TEST_ROOT}/${backend}.stdout"
+    local profile="${2:-}"
+    local label="${backend}${profile:+-${profile}}"
+    local output_dir="${TEST_ROOT}/output-${label}"
+    local stdout_log="${TEST_ROOT}/${label}.stdout"
     local fail_first=false
 
     if [ "$backend" = "codex" ]; then
@@ -124,7 +126,8 @@ run_case() {
     RESEARCHER_CODEX_SANDBOX="workspace-write" \
     RESEARCHER_CODEX_APPROVAL_POLICY="never" \
     RESEARCHER_OUTPUT_DIR="$output_dir" \
-    RESEARCHER_LOCKFILE="${TEST_ROOT}/${backend}.lock" \
+    RESEARCHER_LOCKFILE="${TEST_ROOT}/${label}.lock" \
+    RESEARCHER_COMPUTE_PROFILE="$profile" \
     RESEARCHER_LINK_OUTPUT="false" \
     RESEARCHER_SKIP_PUBLISH="true" \
     RESEARCHER_SKIP_GPU_CHECK="true" \
@@ -133,8 +136,8 @@ run_case() {
     RESEARCHER_SEND_EMAIL_SCRIPT="${TEST_ROOT}/send-email.py" \
     RESEARCHER_EMAIL_TO="self@example.test" \
     MOCK_FAIL_FIRST_STEP="$fail_first" \
-    MOCK_FAIL_MARKER="${TEST_ROOT}/${backend}.failed-once" \
-    "$REPO_DIR/scripts/researcher-cron.sh" "Mock research topic ${backend}" \
+    MOCK_FAIL_MARKER="${TEST_ROOT}/${label}.failed-once" \
+    "$REPO_DIR/scripts/researcher-cron.sh" "Mock research topic ${label}" \
         > "$stdout_log" 2>&1
 
     local state_file
@@ -144,6 +147,17 @@ run_case() {
     grep -q "^agent_backend: ${backend}$" "$state_file"
     grep -q '^agent_model: "mock-' "$state_file"
     grep -q '^compute_profile: "' "$state_file"
+    case "$profile" in
+        mats)
+            # Preset expands to the full Slurm description, not the literal token.
+            grep -q '^compute_profile: "MATS Slurm cluster' "$state_file"
+            grep -q 'sbatch' "$state_file"
+            grep -q 'elastic-\* partitions (A100/H100) are NOT authorized' "$state_file"
+            ;;
+        "")
+            grep -q '^compute_profile: "Local NVIDIA RTX 3090' "$state_file"
+            ;;
+    esac
     test -s "$(dirname "$state_file")/email-draft.html"
     test -s "$(dirname "$state_file")/email-subject.txt"
 
@@ -155,6 +169,7 @@ run_case() {
 
 run_case claude
 run_case codex
+run_case claude mats
 
 grep -q '^claude --print .*--model mock-claude' "$MOCK_CALL_LOG"
 grep -q '^codex --search --ask-for-approval never exec .*--model mock-codex' "$MOCK_CALL_LOG"
@@ -163,7 +178,7 @@ grep -q -- '--ask-for-approval never' "$MOCK_CALL_LOG"
 grep -q -- '--ignore-user-config' "$MOCK_CALL_LOG"
 grep -q '# Codex Runtime Adapter' "$MOCK_PROMPT_LOG"
 grep -q 'mock-codex-fast' "$MOCK_PROMPT_LOG"
-test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "2"
+test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "3"
 grep -q -- '--to self@example.test' "$MOCK_EMAIL_LOG"
 
 # Invalid providers and accidental cross-provider resumes fail closed.

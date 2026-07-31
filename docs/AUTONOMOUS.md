@@ -171,6 +171,15 @@ RESEARCHER_COMPUTE_PROFILE='Lambda 8xH100 80GB node' ./scripts/researcher-cron.s
 RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU' ./scripts/researcher-cron.sh
 ```
 
+Two short presets expand to full profile descriptions: `local` (the default,
+local RTX 3090) and `mats` (MATS Slurm cluster, free `compute` partition, all
+work submitted via `sbatch`). Setup and cluster policy:
+[COMPUTE-MATS.md](COMPUTE-MATS.md).
+
+```bash
+RESEARCHER_COMPUTE_PROFILE=mats ./scripts/researcher-cron.sh   # run from the MATS dev node, in tmux
+```
+
 The default profile keeps the historical behaviour (local RTX 3090, no cloud). Nothing in the agents or steps assumes a specific device beyond what the profile states.
 
 ## Limitation Triage & Future Work

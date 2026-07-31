@@ -207,6 +207,30 @@ find_in_progress_run() {
 }
 
 pick_issue() {
+    local picked
+    if [ -n "${RESEARCHER_ISSUE:-}" ]; then
+        # Explicit target: fetch it directly rather than filtering the queue
+        # listing, so an issue older than the listing window still resolves.
+        # Still refuses one already claimed, so two runs can't collide.
+        local target
+        target=$(gh issue view "$RESEARCHER_ISSUE" --repo tbuckworth/tasks \
+            --json number,title,body,labels,state 2>/dev/null || true)
+        if [ -z "$target" ]; then
+            log "ERROR: issue #${RESEARCHER_ISSUE} not found in tbuckworth/tasks."
+            exit 1
+        fi
+        picked=$(echo "$target" | jq -r '
+            select(.state == "OPEN")
+            | select(.labels | map(.name) | index("list:research-ideas"))
+            | select(
+                (.labels | map(.name) | index("status:claude-researching") | not) and
+                (.labels | map(.name) | index("status:codex-researching") | not)
+              ) // empty')
+        if [ -z "$picked" ] || [ "$picked" = "null" ]; then
+            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed list:research-ideas issue."
+            exit 1
+        fi
+    else
     local issues
     issues=$(gh issue list --repo tbuckworth/tasks \
         --label "list:research-ideas" \
@@ -214,20 +238,6 @@ pick_issue() {
         --json number,title,body,labels \
         --limit 50)
 
-    local picked
-    if [ -n "${RESEARCHER_ISSUE:-}" ]; then
-        # Explicit target: run this issue regardless of queue order. Still
-        # refuses one already being worked on, so two runs can't collide.
-        picked=$(echo "$issues" | jq -r --arg n "$RESEARCHER_ISSUE" '
-            [.[] | select((.number | tostring) == $n) | select(
-                (.labels | map(.name) | index("status:claude-researching") | not) and
-                (.labels | map(.name) | index("status:codex-researching") | not)
-            )] | first // empty')
-        if [ -z "$picked" ] || [ "$picked" = "null" ]; then
-            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed list:research-ideas issue."
-            exit 1
-        fi
-    else
     picked=$(echo "$issues" | jq -r '
         [.[] | select(
             (.labels | map(.name) | index("status:claude-researching") | not) and

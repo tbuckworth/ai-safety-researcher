@@ -215,6 +215,19 @@ pick_issue() {
         --limit 50)
 
     local picked
+    if [ -n "${RESEARCHER_ISSUE:-}" ]; then
+        # Explicit target: run this issue regardless of queue order. Still
+        # refuses one already being worked on, so two runs can't collide.
+        picked=$(echo "$issues" | jq -r --arg n "$RESEARCHER_ISSUE" '
+            [.[] | select((.number | tostring) == $n) | select(
+                (.labels | map(.name) | index("status:claude-researching") | not) and
+                (.labels | map(.name) | index("status:codex-researching") | not)
+            )] | first // empty')
+        if [ -z "$picked" ] || [ "$picked" = "null" ]; then
+            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed list:research-ideas issue."
+            exit 1
+        fi
+    else
     picked=$(echo "$issues" | jq -r '
         [.[] | select(
             (.labels | map(.name) | index("status:claude-researching") | not) and
@@ -222,6 +235,7 @@ pick_issue() {
             (.labels | map(.name) | index("status:codex-researching") | not) and
             (.labels | map(.name) | index("status:codex-processed") | not)
         )] | first // empty')
+    fi
 
     if [ -z "$picked" ] || [ "$picked" = "null" ]; then
         log "No unprocessed research ideas found. Exiting."

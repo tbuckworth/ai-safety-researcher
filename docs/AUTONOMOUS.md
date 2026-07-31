@@ -56,6 +56,9 @@ RESEARCHER_BACKEND=codex \
 ### Manual run picking from GitHub Issues
 ```bash
 ./scripts/researcher-cron.sh
+
+# Target one specific idea instead of the head of the queue
+RESEARCHER_ISSUE=2073 ./scripts/researcher-cron.sh
 ```
 
 ### Cron setup (daily at 2am)

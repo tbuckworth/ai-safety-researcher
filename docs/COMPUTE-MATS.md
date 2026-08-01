@@ -82,7 +82,9 @@ rsync -avP experiments/exp-001/ mats:"$RUN"/
 #    job launch, so an in-script mkdir is too late and you get no log at all)
 ssh mats "cd $RUN && mkdir -p logs && sbatch run.sbatch"   # → Submitted batch job NNNN
 
-# 4. poll (sleep between polls; don't busy-loop)
+# 4. poll every 60s until the job leaves the queue. A PD (Resources) wait of
+#    tens of minutes is normal on the shared free partition, not a failure.
+#    Before submitting, check squeue first — a retried step must not double-submit.
 ssh mats 'squeue -u t.buckworth'                            # PD → R → CG → gone
 ssh mats "tail -n 50 $RUN/logs/slurm-NNNN.out"
 
@@ -124,6 +126,11 @@ python -u run.py --out /mnt/nw/home/$USER/researcher-runs/<run-id>/exp-001/resul
 - `sacct` errors with `Connection refused` from the dev node; run it from the
   controller, or use `squeue` plus the job log.
 - Stuck job? `ssh mats 'scontrol show job <jobid>'` explains it nine times in ten.
+  `Reason=Resources` with all 8 GPUs allocated just means the shared node is
+  full — other fellows are queued too. Wait; don't resubmit.
+- Don't end a step with a job still queued or running. If you have to stop,
+  record the job id in `state.md` so the next attempt resumes waiting rather
+  than resubmitting.
 
 ## Cluster-side environment (already set up)
 

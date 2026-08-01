@@ -749,11 +749,15 @@ run_step() {
         # own final line. Scanning the whole transcript would misread a run that
         # merely *writes about* rate limits (e.g. authoring retry logic) as a
         # pause, and such a step would then loop forever, never failing.
+        # Both known CLI forms count: the human one ("You've hit your session
+        # limit · resets 8pm") and the headless one ("Claude AI usage limit
+        # reached|1754060400"). Neither the exit code nor a reset clause is
+        # required — the CLI can print the notice and still exit 0.
+        # Transient "rate limit exceeded" errors are deliberately excluded:
+        # those are retryable, and the retry loop is the right response.
         local last_line
         last_line=$(grep -v '^[[:space:]]*$' "$run_log" | tail -1)
-        if [ "$exit_code" -ne 0 ] \
-            && printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit|Claude usage limit reached|Usage limit reached)\b" \
-            && printf '%s\n' "$last_line" | grep -qiE "reset"; then
+        if printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit\b|(Claude )?(AI )?[Uu]sage limit reached\b)"; then
             log "Step ${step} stopped: provider usage/session limit reached."
             log "${last_line}"
             log "Run left resumable at step ${prev_step} (status: ${new_status}). Re-run this script after the limit resets."

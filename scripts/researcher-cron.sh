@@ -47,6 +47,7 @@ SKIP_GPU_CHECK="${RESEARCHER_SKIP_GPU_CHECK:-false}"
 LINK_OUTPUT="${RESEARCHER_LINK_OUTPUT:-true}"
 CODEX_IGNORE_USER_CONFIG="${RESEARCHER_CODEX_IGNORE_USER_CONFIG:-true}"
 ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
+PAUSED=false
 
 case "$BACKEND" in
     claude)
@@ -744,9 +745,17 @@ run_step() {
         # nothing but the remaining attempts, and marking the run failed would
         # block find_in_progress_run from ever resuming it. Stop cleanly and
         # leave the state resumable — a later invocation continues this step.
-        if grep -qiE "hit your (session|usage) limit|usage limit reached|rate limit exceeded" "$run_log"; then
+        # Match only a provider-emitted limit notice: the CLI prints it as its
+        # own final line. Scanning the whole transcript would misread a run that
+        # merely *writes about* rate limits (e.g. authoring retry logic) as a
+        # pause, and such a step would then loop forever, never failing.
+        local last_line
+        last_line=$(grep -v '^[[:space:]]*$' "$run_log" | tail -1)
+        if [ "$exit_code" -ne 0 ] \
+            && printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit|Claude usage limit reached|Usage limit reached)\b" \
+            && printf '%s\n' "$last_line" | grep -qiE "reset"; then
             log "Step ${step} stopped: provider usage/session limit reached."
-            log "$(grep -iE "hit your (session|usage) limit|usage limit reached|rate limit exceeded" "$run_log" | head -1)"
+            log "${last_line}"
             log "Run left resumable at step ${prev_step} (status: ${new_status}). Re-run this script after the limit resets."
             return 2
         fi
@@ -817,6 +826,7 @@ while true; do
         log "Resume with the same command once the provider limit resets."
         SKIP_PUBLISH=true
         SKIP_EMAIL=true
+        PAUSED=true
         break
     elif [ "$STEP_RC" -ne 0 ]; then
         log "Step ${NEXT_STEP} did not complete. Stopping."
@@ -1061,6 +1071,13 @@ Run: ${RUN_ID}" 2>/dev/null || true
         --add-label "$PROCESSED_LABEL" 2>/dev/null || true
 
     log "Updated issue #${ISSUE_NUMBER}"
+fi
+
+if is_true "$PAUSED"; then
+    # Distinct exit code: a paused run must not look like a completed one to
+    # cron, `at`, or any wrapper checking the status.
+    log "PAUSED (not complete). Run directory: ${RUN_DIR}"
+    exit 3
 fi
 
 log "Done. Run directory: ${RUN_DIR}"

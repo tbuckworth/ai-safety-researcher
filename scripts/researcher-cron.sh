@@ -740,6 +740,17 @@ run_step() {
             return 0
         fi
 
+        # A provider usage/session cap is a pause, not a failure: retrying costs
+        # nothing but the remaining attempts, and marking the run failed would
+        # block find_in_progress_run from ever resuming it. Stop cleanly and
+        # leave the state resumable — a later invocation continues this step.
+        if grep -qiE "hit your (session|usage) limit|usage limit reached|rate limit exceeded" "$run_log"; then
+            log "Step ${step} stopped: provider usage/session limit reached."
+            log "$(grep -iE "hit your (session|usage) limit|usage limit reached|rate limit exceeded" "$run_log" | head -1)"
+            log "Run left resumable at step ${prev_step} (status: ${new_status}). Re-run this script after the limit resets."
+            return 2
+        fi
+
         log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
     done
 
@@ -796,7 +807,18 @@ while true; do
         break
     fi
 
-    if ! run_step "$NEXT_STEP"; then
+    STEP_RC=0
+    run_step "$NEXT_STEP" || STEP_RC=$?
+    if [ "$STEP_RC" -eq 2 ]; then
+        # Paused on a provider limit, not finished: publishing a partial repo,
+        # emailing a non-result, and marking the issue processed would all be
+        # wrong, and would strand the run. Leave everything resumable.
+        log "Run PAUSED at step ${NEXT_STEP}. Skipping repo publish, email, and issue update."
+        log "Resume with the same command once the provider limit resets."
+        SKIP_PUBLISH=true
+        SKIP_EMAIL=true
+        break
+    elif [ "$STEP_RC" -ne 0 ]; then
         log "Step ${NEXT_STEP} did not complete. Stopping."
         break
     fi

@@ -518,6 +518,13 @@ if IN_PROGRESS=$(find_in_progress_run); then
         PRIOR_REPO_URL=$(grep '^prior_repo:' "${RUN_DIR}/state.md" | sed 's/prior_repo: *//')
         PARENT_ISSUE=$(grep '^parent_issue:' "${RUN_DIR}/state.md" | awk '{print $2}')
     fi
+    if [ -n "${RESEARCHER_ISSUE:-}" ] && [ "${ISSUE_NUMBER:-}" != "$RESEARCHER_ISSUE" ]; then
+        # Finishing in-flight work first is right, but doing it silently is not:
+        # a scheduled run targeting a specific issue would otherwise look like it
+        # ran that issue when it resumed something else entirely.
+        log "WARN: RESEARCHER_ISSUE=${RESEARCHER_ISSUE} was requested, but an in-progress run for issue #${ISSUE_NUMBER:-none} exists."
+        log "WARN: resuming that run instead. Re-request #${RESEARCHER_ISSUE} once it finishes."
+    fi
     log "Resuming in-progress run: ${RUN_DIR}"
 elif [ -n "$TOPIC" ]; then
     create_run_dir

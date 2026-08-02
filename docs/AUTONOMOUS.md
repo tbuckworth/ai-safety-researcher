@@ -138,6 +138,10 @@ required.
 | `RESEARCHER_SEND_EMAIL_SCRIPT` | Override shared Gmail helper |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
+| `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). While it prints anything, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
+| `RESEARCHER_JOB_WAIT_POLL_SECONDS` | Poll interval while waiting (default 120) |
+| `RESEARCHER_JOB_WAIT_MAX_SECONDS` | Cap on a single wait (default 14400) |
+| `RESEARCHER_JOB_WAIT_MAX_REFUNDS` | Cap on refunded attempts (default 10) |
 
 ## Decision Heuristics
 

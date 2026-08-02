@@ -36,6 +36,14 @@ TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
 # Bounded so a genuinely stuck step still fails instead of looping forever.
 STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
+# Optional hook: a shell command printing the still-outstanding external
+# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. While it prints
+# anything, a step that did not advance is WAITING on external compute, not
+# failing — so the attempt is refunded instead of spent. Empty = old behaviour.
+JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
+JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
+JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
+JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
 TOPIC="${1:-}"
 
 # Provider selection. RESEARCHER_MODEL remains a backwards-compatible
@@ -99,7 +107,11 @@ COMPUTE_PROFILE_MATS="MATS Slurm cluster, driven REMOTELY over SSH from wherever
 
 case "${RESEARCHER_COMPUTE_PROFILE:-}" in
     ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL" ;;
-    mats|MATS|mats-cluster) COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS" ;;
+    mats|MATS|mats-cluster)
+        COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
+        # A queued/running job for THIS run means the step is waiting, not failing.
+        : "${JOB_WAIT_CMD:=ssh mats \"squeue -u t.buckworth -h -o '%i %Z'\" | grep -F '{run_id}' || true}"
+        ;;
     *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;
 esac
 
@@ -700,13 +712,23 @@ run_email_provider() {
     build_email_prompt | invoke_provider email
 }
 
+outstanding_jobs() {
+    [ -n "$JOB_WAIT_CMD" ] || return 0
+    local cmd run_id
+    run_id=$(basename "$RUN_DIR")
+    cmd=${JOB_WAIT_CMD//\{run_id\}/$run_id}
+    eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' '
+}
+
 run_step() {
     local step="$1"
     local prev_step
     prev_step=$(get_current_step)
 
-    local attempt exit_code new_step new_status run_log
-    for attempt in $(seq 1 "$STEP_MAX_ATTEMPTS"); do
+    local attempt=0 refunds=0
+    local exit_code new_step new_status run_log
+    while [ "$attempt" -lt "$STEP_MAX_ATTEMPTS" ]; do
+        attempt=$((attempt + 1))
         run_log="${LOG_DIR}/step-${step}-attempt-${attempt}-$(date +%Y%m%d-%H%M%S).log"
         if [ "$attempt" -eq 1 ]; then
             log "Starting step ${step}..."
@@ -762,6 +784,32 @@ run_step() {
             log "${last_line}"
             log "Run left resumable at step ${prev_step} (status: ${new_status}). Re-run this script after the limit resets."
             return 2
+        fi
+
+        # An agent that submitted cluster work and ended its turn while that work
+        # is still queued or running has not failed — it is waiting. Spending
+        # attempts here is how a run gets marked failed while its results are
+        # still being computed (or, worse, an hour after they landed).
+        if [ -n "$JOB_WAIT_CMD" ] && [ "$refunds" -lt "$JOB_WAIT_MAX_REFUNDS" ]; then
+            local outstanding waited
+            outstanding=$(outstanding_jobs)
+            if [ -n "${outstanding// /}" ]; then
+                log "Step ${step}: external job(s) still outstanding (${outstanding% }); waiting rather than spending an attempt."
+                waited=0
+                while [ -n "${outstanding// /}" ] && [ "$waited" -lt "$JOB_WAIT_MAX_SECONDS" ]; do
+                    sleep "$JOB_WAIT_POLL_SECONDS"
+                    waited=$((waited + JOB_WAIT_POLL_SECONDS))
+                    outstanding=$(outstanding_jobs)
+                done
+                if [ -n "${outstanding// /}" ]; then
+                    log "Step ${step}: job(s) still outstanding after ${waited}s (cap ${JOB_WAIT_MAX_SECONDS}s); giving up on waiting."
+                else
+                    refunds=$((refunds + 1))
+                    attempt=$((attempt - 1))
+                    log "Step ${step}: external job(s) finished after ~${waited}s; retrying without spending an attempt (refund ${refunds}/${JOB_WAIT_MAX_REFUNDS})."
+                    continue
+                fi
+            fi
         fi
 
         log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."

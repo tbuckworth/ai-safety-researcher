@@ -717,7 +717,10 @@ outstanding_jobs() {
     local cmd run_id
     run_id=$(basename "$RUN_DIR")
     cmd=${JOB_WAIT_CMD//\{run_id\}/$run_id}
-    eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' '
+    # A hook that exits non-zero when there is nothing to report (a bare
+    # `squeue | grep`, the obvious thing to write) must mean "no jobs", not
+    # "abort the run" — which is what pipefail would otherwise do here.
+    ( set +e +o pipefail; eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' ) || true
 }
 
 run_step() {
@@ -725,7 +728,7 @@ run_step() {
     local prev_step
     prev_step=$(get_current_step)
 
-    local attempt=0 refunds=0
+    local attempt=0 refunds=0 total_waited=0
     local exit_code new_step new_status run_log
     while [ "$attempt" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((attempt + 1))
@@ -796,13 +799,18 @@ run_step() {
             if [ -n "${outstanding// /}" ]; then
                 log "Step ${step}: external job(s) still outstanding (${outstanding% }); waiting rather than spending an attempt."
                 waited=0
-                while [ -n "${outstanding// /}" ] && [ "$waited" -lt "$JOB_WAIT_MAX_SECONDS" ]; do
+                # The cap is the step's CUMULATIVE wait budget across refunds,
+                # not per wait, so waiting can never outrun the run timeout.
+                while [ -n "${outstanding// /}" ] \
+                    && [ "$total_waited" -lt "$JOB_WAIT_MAX_SECONDS" ] \
+                    && [ $(( $(date +%s) - START_TIME )) -lt $(( TIMEOUT_HOURS * 3600 )) ]; do
                     sleep "$JOB_WAIT_POLL_SECONDS"
                     waited=$((waited + JOB_WAIT_POLL_SECONDS))
+                    total_waited=$((total_waited + JOB_WAIT_POLL_SECONDS))
                     outstanding=$(outstanding_jobs)
                 done
                 if [ -n "${outstanding// /}" ]; then
-                    log "Step ${step}: job(s) still outstanding after ${waited}s (cap ${JOB_WAIT_MAX_SECONDS}s); giving up on waiting."
+                    log "Step ${step}: job(s) still outstanding after ${waited}s (cumulative ${total_waited}s of ${JOB_WAIT_MAX_SECONDS}s, run timeout ${TIMEOUT_HOURS}h); giving up on waiting."
                 else
                     refunds=$((refunds + 1))
                     attempt=$((attempt - 1))

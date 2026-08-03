@@ -70,6 +70,39 @@ Prefer free re-analysis > cheap run > future work. Respecting the cap is part of
 
 ---
 
+## Shared: Knowledge Bases
+
+Research compounds across runs through two knowledge bases. Both are **optional
+accelerants, never dependencies** — a run with neither must execute identically.
+
+- **Global wiki** — the path in `knowledge_base:` in `state.md`. Spans every
+  research line: literature, entities, concepts, and `lessons/` (what the
+  research *process* has learned — common failures, strawman constructs, real
+  compute costs, tooling traps). If `knowledge_base:` is `none` or the path has
+  no `KB-SCHEMA.md`, **skip every knowledge-base action in this document
+  silently** and log one line saying the run has no knowledge base. Do not
+  create one mid-run.
+- **Per-repo knowledge base** — `<run-dir>/knowledge/`, published with this
+  research line's repo so a follow-up run can resume without re-deriving.
+
+All knowledge-base work goes through the `researcher:knowledge` leaf agent, at
+these points and no others:
+
+| Step | Operation | Purpose |
+|------|-----------|---------|
+| 2 (before searching) | query, global | Don't re-search what the wiki already holds |
+| 2 (after synthesis) | ingest, global | File the new sources |
+| 3 | query, global | Novelty against accumulated knowledge, not just this run's search |
+| 6 | query, global | Read `lessons/` before committing to a design |
+| 11 | ingest, both | File the outcome, the process lessons, and the repo KB |
+
+**A knowledge-base step never blocks the workflow.** If the agent errors, returns
+nothing, or reports the KB is absent, log it and continue to the next step. A
+stale wiki costs a little duplicated search; a workflow that halts because a wiki
+is missing costs the whole run.
+
+---
+
 ## Step 1: Clarify the Research Topic
 
 Do this yourself — no agent needed.
@@ -82,6 +115,7 @@ Do this yourself — no agent needed.
    b. Read `prior/state.md` to get the prior run's clarifications, decisions, experiment results, and novelty verdict.
    c. Read `prior/briefing.md` (if it exists) to get the full picture of the prior run.
    d. Read any prior experiment results mentioned in the feedback — check `prior/experiments/exp-*/results.md`.
+   e. Read `prior/knowledge/` (if it exists) — the prior run's own knowledge base. `dead-ends.md` is the one that changes what this run should do: it lists what the line has already ruled out and the evidence that ruled it out, so re-proposing any of it is a wasted run. `methods.md` gives the reproduction details. Also read `prior/next-steps.md` if present — the follow-up feedback often *is* one of its ranked steps, and its Reflection says what blocked the prior round.
 
    **Generate AMENDED clarifications** that incorporate:
    - The prior run's clarifications (as a starting point, updated where feedback changes them)
@@ -182,6 +216,23 @@ If `state.md` contains `is_followup: true`:
 
 ### Process
 
+0. **Query the knowledge base first** (skip silently if `knowledge_base:` is `none`).
+   Cheap, and it stops the search agents rediscovering what is already filed:
+   ```
+   Task(subagent_type="researcher:knowledge", prompt="""
+   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md
+
+   Operation: query
+   Scope: global
+   Global KB path: <knowledge_base from state.md>
+   Subject: <topic from state.md> — what does the wiki already hold on this?
+   Separate: already known (with citations), contested, and not covered.
+
+   Write your output to: <run-dir>/literature/kb-prior.md
+   """)
+   ```
+   Pass `kb-prior.md` to the search planner so it aims searches at the gaps.
+
 1. **Spawn search-planner agent**:
    ```
    Task(subagent_type="researcher:search-planner", prompt="""
@@ -189,6 +240,11 @@ If `state.md` contains `is_followup: true`:
 
    Research topic: <topic from state.md>
    Clarifications: <from state.md>
+
+   If <run-dir>/literature/kb-prior.md exists, read it first. It records what the
+   knowledge base already covers. Aim your queries at what it lists as NOT
+   covered or CONTESTED; do not spend queries re-establishing what it lists as
+   already known.
 
    Write your output to: <run-dir>/search-plan.md
    """)
@@ -221,7 +277,28 @@ If `state.md` contains `is_followup: true`:
 
 5. **Synthesise**: Read all literature files and write `literature/synthesis.md` summarising key findings, themes, consensus, disagreements, gaps, and any related local code.
 
-6. Update `state.md`: `current_step: 2, status: research_complete`.
+6. **Ingest the new sources into the knowledge base** (skip silently if
+   `knowledge_base:` is `none`). This is what makes the next run cheaper:
+   ```
+   Task(subagent_type="researcher:knowledge", prompt="""
+   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md
+
+   Operation: ingest
+   Scope: global
+   Global KB path: <knowledge_base from state.md>
+   Subject: the sources discovered by this run's literature search
+   Sources: <run-dir>/literature/ (search-*.md and synthesis.md) and
+            <run-dir>/references.bib
+
+   Ingest the substantive sources — the ones that actually bear on the topic, not
+   every link the searches returned. Follow the schema's Ingest workflow, update
+   index.md, and append to log.md.
+   """)
+   ```
+   If this errors or reports no knowledge base, log one line and continue — a
+   failed ingest must never fail Step 2.
+
+7. Update `state.md`: `current_step: 2, status: research_complete`.
 
 ---
 
@@ -235,6 +312,12 @@ If `state.md` contains `is_followup: true`:
    Read state from: <run-dir>/state.md
    Read literature from: <run-dir>/literature/
    Write output to: <run-dir>/novelty-assessment.md
+
+   If <run-dir>/literature/kb-prior.md exists, read it too. It records what the
+   accumulated knowledge base already holds on this topic, including work from
+   prior runs that this run's searches may not have surfaced. Prior work by this
+   researcher counts against novelty exactly as published work does — a thread in
+   the wiki that already answers the question makes this ALREADY_DONE.
    """)
    ```
 
@@ -324,6 +407,31 @@ This step runs three **independent** adversarial review passes on the same plan.
    ```bash
    mkdir -p <run-dir>/challenge/
    ```
+
+1b. **Pull the accumulated lessons** (skip silently if `knowledge_base:` is `none`).
+   Run this *before* the challenge agents so they can be handed real prior failures
+   instead of hypothetical ones:
+   ```
+   Task(subagent_type="researcher:knowledge", prompt="""
+   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md
+
+   Operation: query
+   Scope: global
+   Global KB path: <knowledge_base from state.md>
+   Subject: Which recorded lessons bear on THIS plan? Read lessons/ in full
+   (common-failures, experiment-design, compute, tooling) and the thread page for
+   this research line if one exists. Return only the lessons that plausibly apply
+   to the decomposition in <run-dir>/decomposition.md under this run's
+   compute_profile — with, for each, the symptom to watch for and the check that
+   catches it early. Return nothing rather than padding with generic advice.
+
+   Write your output to: <run-dir>/challenge/kb-lessons.md
+   """)
+   ```
+   Then add to each of the three challenge agent prompts below: "If
+   `<run-dir>/challenge/kb-lessons.md` exists, read it — it lists failure modes
+   that have actually occurred in prior runs of this workflow. A lesson that
+   applies to this plan is evidence, not speculation: weight it accordingly."
 
 2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```
@@ -624,7 +732,96 @@ An independent **results-auditor** red-teams the experiment outputs before write
    <2-3 bullet points on what to investigate next>
    ```
 
-5. Update `state.md`: `current_step: 11, status: complete`.
+5. **Write `next-steps.md`** — the canonical, machine-readable next-round plan. The
+   paper's Future Work section is written for a reader of the paper; this file is
+   written for whoever (human or agent) picks the work up next, and it is what the
+   results email and `/researcher-continue` both read. Derive it from the
+   future-work rows of both triage tables, the paper's Future Work section, and what
+   the results now make worth testing. Write `<run-dir>/next-steps.md`:
+
+   ```markdown
+   # Proposed Next Steps: <topic>
+
+   **Run ID**: <run-id>
+   **Outcome**: <one line: what this round established, positive, negative, or null>
+
+   ## Reflection
+
+   <2-4 sentences. If the result was negative, null, or the run fell short of its
+   goal: what specifically blocked it — a wrong hypothesis, a construct that
+   couldn't test the claim, a resource ceiling, an implementation defect — and
+   whether that blocker is escapable. Be concrete about which it was. If the
+   result was positive, say what the strongest remaining threat to the claim is.
+   This section is never omitted and never generic.>
+
+   ## Ranked Next Steps
+
+   ### 1. <short imperative title>
+   - **Do**: <the specific experiment or change>
+   - **Tests**: <the hypothesis it would test, and how this round's results motivate it>
+   - **Needs**: <resources: model size, hardware/backend, rough compute/$ and wall-clock, data or human labelling>
+   - **Kills the idea if**: <the outcome that would mean stop pursuing this line>
+
+   ### 2. <...>
+
+   ### 3. <...>
+
+   ## Not Worth Pursuing
+
+   <Directions this round ruled out, with the one-line reason. Prevents a
+   follow-up run from re-treading ground.>
+   ```
+
+   Rules:
+   - **Always write this file**, including for a negative result or a RETHINK
+     pivot. A dead end still has a next step: the cheapest experiment that would
+     distinguish "the idea is wrong" from "this test of it was wrong", or an
+     explicit, reasoned recommendation to abandon the line.
+   - 2–4 ranked steps. Rank by value per unit of resource, not by ambition.
+   - Every step must be executable by a follow-up run under a stated compute
+     profile. No "try more models/datasets" filler.
+   - If a step needs resources beyond this run's `compute_profile`, say so
+     explicitly in **Needs** rather than silently proposing something unrunnable.
+
+6. **Ingest the run into both knowledge bases.** This is the step that makes the
+   next run cheaper and the one after that cheaper still — including, and
+   especially, when this run produced a negative result or fell over. Skip the
+   global half silently if `knowledge_base:` is `none`; always do the repo half.
+
+   ```
+   Task(subagent_type="researcher:knowledge", prompt="""
+   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md
+
+   Operation: ingest
+   Scope: both
+   Global KB path: <knowledge_base from state.md>
+   Repo KB path: <run-dir>/knowledge/
+   Subject: this completed research run
+
+   Read: <run-dir>/state.md, briefing.md, next-steps.md, novelty-assessment.md,
+   decomposition.md, challenge/ (including limitation-triage.md and
+   kb-lessons.md if present), audit/results-audit.md, experiments/*/results.md
+   and their run.logs, rethink-rationale.md if present, and
+   paper/sections/*.tex.
+
+   Global: update or create the thread page for this research line, write the
+   result (positive, negative, or null) into the relevant concept pages, and
+   write what the PROCESS learned into lessons/ — sourced from the audit, the
+   next-steps reflection, and the run logs. Do not invent lessons; a run that hit
+   no process problems adds nothing to lessons/ and that is a fine outcome.
+
+   Repo: write <run-dir>/knowledge/ (README, findings, dead-ends, methods,
+   open-questions) so a follow-up run six months from now can resume without
+   re-deriving anything. If <run-dir>/prior/knowledge/ exists, carry it forward
+   and extend it rather than starting fresh.
+   """)
+   ```
+
+   If this errors, log it and continue — the paper is already written and a
+   failed ingest must not fail a completed run. Note in `state.md` whether the
+   ingest succeeded so a later `/researcher-continue` can retry it.
+
+7. Update `state.md`: `current_step: 11, status: complete`.
 
 ---
 

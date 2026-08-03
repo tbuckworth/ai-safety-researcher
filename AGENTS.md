@@ -15,15 +15,17 @@ an automated AI Safety research workflow.
   - `$researcher:researcher <topic>` — Codex interactive mode
   - `scripts/researcher-cron.sh [topic]` — Autonomous mode (no human interaction, for cron)
   - `/researcher-review` or `$researcher:researcher-review` — Interactive review
+  - `/researcher-continue` or `$researcher:researcher-continue` — Pick a next step from a finished run and queue the follow-up
 
 ## Key Directories
 
-- `agents/` — Agent definitions (11 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, mentor-review, pre-mortem, experiment, results-auditor, report)
+- `agents/` — Agent definitions (12 agents: search-planner, search, novelty-analyst, criteria, decomposition, assumption-challenger, mentor-review, pre-mortem, experiment, results-auditor, report, knowledge)
 - `commands/` — Slash command entry points (orchestrator)
 - `skills/` — Auto-trigger skill definitions
 - `docs/` — Architecture and workflow specifications (WORKFLOW.md is the master document)
 - `templates/` — LaTeX templates for paper compilation
 - `data/model-organisms/` — Curated database of reusable misaligned "model organisms" (organisms.yaml + models.md) an autonomous run can pick from to test methods against
+- `templates/kb-schema.md` — Schema for the global research wiki, copied into the wiki root by `scripts/kb-init.sh`
 - `output/` — Research artefacts (gitignored)
 
 ## Development Notes
@@ -52,4 +54,6 @@ an automated AI Safety research workflow.
 - **Follow-ups**: Issues with label `type:follow-up` trigger follow-up mode — clones prior artifacts into `prior/`, fast-forwards past unchanged steps, pushes results to a branch on the existing repo. Created via `/researcher-review` during interactive review sessions.
 - **Constraints**: Per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`, default local RTX 3090; presets: `local`, `mats` for the MATS Slurm cluster — see `docs/COMPUTE-MATS.md`; also supports cloud/managed backends), max 5 experiments, all loops capped at 1 iteration.
 - **Construct-validity gate** (Step 6): a strawman/known-outcome construct loops back to Step 1 once to redesign, rather than being disclaimed. Limitations are triaged (fix-now vs future-work) at Steps 6/10 and written up with a dedicated resource-scoped Future Work section at Step 11.
+- **Next steps**: every run writes `next-steps.md` (reflection + ranked, resourced next round), including runs that failed or produced a negative result. The results email carries it and tells the reader exactly how to act on it via `/researcher-continue`.
+- **Knowledge bases** (`docs/KNOWLEDGE-BASE.md`): a global wiki (`RESEARCHER_KB_DIR`) queried at Steps 2/3/6 and ingested at Steps 2/11, plus a per-repo `knowledge/` directory. Both optional — every KB action is skipped silently when absent and never blocks a step.
 - **Setup**: See `docs/AUTONOMOUS.md` for cron configuration, prerequisites, and follow-up workflow.

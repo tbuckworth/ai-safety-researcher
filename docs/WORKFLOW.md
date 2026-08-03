@@ -49,6 +49,14 @@ output/<run-id>/
 ├── audit/
 │   ├── results-audit.md        # Results auditor's findings (Step 10)
 │   └── claim-anchor-*.md        # Round-1 results, frozen across remediation rounds
+├── knowledge/                  # This research line's knowledge base (Step 11)
+│   ├── README.md
+│   ├── findings.md             # Established, each with its confidence
+│   ├── dead-ends.md            # Ruled out, with the evidence that ruled it out
+│   ├── methods.md              # How to reproduce: data, harness, commands, gotchas
+│   └── open-questions.md
+├── next-steps.md               # Reflection + ranked next round (always written)
+├── briefing.md                 # Run summary for review/continue
 ├── references.bib              # Accumulated throughout workflow
 ├── citation-registry.md        # cite_key -> one-line description
 └── paper/
@@ -449,6 +457,22 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
    If `pdflatex` is not available, inform the user and leave the .tex files for manual compilation.
 
 5. Present the final paper location to the user.
+
+6. **Write `next-steps.md`** — the canonical next-round plan, written for whoever
+   picks the work up rather than for a reader of the paper. `## Reflection` (what
+   the round established, or what blocked it and whether that blocker is
+   escapable), then 2–4 **ranked** steps, each with **Do** / **Tests** / **Needs**
+   / **Kills the idea if**, then `## Not Worth Pursuing`. Written for a negative
+   result too: a dead end's next step is the cheapest experiment distinguishing
+   "the idea is wrong" from "this test of it was wrong", or a reasoned
+   recommendation to stop. This is what the results email and
+   `/researcher-continue` both read.
+
+7. **Ingest into the knowledge bases** — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md).
+   Global: thread page, the result (including a null) into concept pages, and what
+   the *process* learned into `lessons/`. Repo: write `knowledge/`, extending
+   `prior/knowledge/` on a follow-up rather than restarting it. Non-blocking — a
+   failed ingest is logged, never fatal to a completed run.
 
 ---
 

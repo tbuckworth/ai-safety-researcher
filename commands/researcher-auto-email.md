@@ -34,9 +34,39 @@ The run directory is: **{{argument}}**
    - `novelty-assessment.md` — novelty verdict and closest existing work
    - `experiments/*/results.md` — individual experiment results
    - `paper/sections/abstract.tex` — paper abstract (if exists)
+   - `next-steps.md` — the ranked next-round plan and the run's self-reflection (written by Step 11). **This is the primary source for the "Proposed Next Steps" section.** If it is missing, see step 2b.
+   - `paper/sections/future-work.tex` — the paper's Future Work section (fallback source for next steps)
    - `rethink-rationale.md` — why the approach doesn't work (if exists)
    - `audit/results-audit.md` — the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
    - `.repo_url` — GitHub repo URL. **This file only exists if the repo push was confirmed successful.** If it is missing or empty, the code did NOT reach GitHub — OMIT the "Repo" row in the Bottom Line table and the GitHub entry in the Links section entirely, and do NOT invent a URL. In that case add a one-line note that results are attached/local (in the run directory) rather than linking to a repo.
+
+2b. **If `next-steps.md` does not exist, write it yourself before composing.**
+
+   A run only reaches Step 11 — and therefore only writes `next-steps.md` — if it
+   completed. Runs that crashed, timed out, were aborted, or pivoted still get an
+   email, and **every email carries proposed next steps**. There is no such thing
+   as a run with nothing to say about what to do next: a run that failed for
+   mechanical reasons has "fix the mechanism and re-run" as its next step, and a
+   run that failed for scientific reasons has "the cheapest experiment that would
+   tell us whether the idea or the test was wrong."
+
+   Read `state.md` (status, `current_step`, and the decision log), any
+   `experiments/*/results.md` that exist, `rethink-rationale.md`,
+   `challenge/limitation-triage.md`, and the tail of the run log if one is
+   reachable. Then write `<run-dir>/next-steps.md` in the same format Step 11
+   uses — `# Proposed Next Steps`, `## Reflection`, `## Ranked Next Steps` (2–4
+   entries, each with **Do** / **Tests** / **Needs** / **Kills the idea if**), and
+   `## Not Worth Pursuing`.
+
+   Diagnose honestly in `## Reflection`: distinguish an **orchestration failure**
+   (the workflow broke — a step errored, a provider limit, a job-wait bug; the
+   science is untouched and the next step is to resume) from a **scientific
+   failure** (the hypothesis or the construct didn't survive contact with the
+   data; the next step is a redesign). Naming which one it was is the single most
+   useful sentence in the email when a run falls over.
+
+   Write the file even if it duplicates what the paper already says — it is the
+   artifact `/researcher-continue` reads, and it ships in the repo.
 
 3. **Compose the email as HTML**.
 
@@ -181,6 +211,55 @@ The run directory is: **{{argument}}**
        </ol>
      </div>
 
+     <!-- Proposed Next Steps — REQUIRED IN EVERY EMAIL, including failed runs -->
+     <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
+       <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #166534;">Proposed Next Steps</h2>
+       <p style="font-size: 14px; margin: 0 0 12px 0;">
+         <!-- The Reflection paragraph from next-steps.md, in plain English. For a
+              negative/null result or a run that fell over, say what specifically
+              blocked it and whether that blocker is escapable — and say plainly
+              whether the failure was orchestration (workflow broke, science
+              untouched) or scientific (the idea or the test didn't survive).
+              For a positive result, the strongest remaining threat to the claim. -->
+       </p>
+       <ol style="font-size: 14px; padding-left: 20px; margin: 0;">
+         <!-- One <li> per ranked step from next-steps.md, in order. Each: bold the
+              action, then one sentence on what it would test, then the resources in
+              lighter text. Keep to the top 3 — the full list is in the repo.
+              Example:
+              <li style="margin-bottom: 12px;">
+                <strong>Re-run the filter against a ranking loss.</strong>
+                The target-independence proof only applies to single-output MSE, so a
+                ranking objective is the cheapest test of whether the filter can ever
+                be target-aware.
+                <span style="color: #475569;">Needs: same L40 job, ~2 GPU-hours, no new data.</span>
+              </li> -->
+         <li style="margin-bottom: 12px;">...</li>
+       </ol>
+     </div>
+
+     <!-- Continue This Research — REQUIRED. Literal, copy-pasteable, in order. -->
+     <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
+       <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1e293b;">How to Continue This Research</h2>
+       <ol style="font-size: 14px; padding-left: 20px; margin: 0 0 8px 0;">
+         <!-- Fill these from the "Autonomous Email Handoff" block in your prompt,
+              which gives the run host, its SSH alias, the run directory, and the
+              plugin directory. Use the REAL absolute paths — never a placeholder.
+              OMIT the ssh step entirely when the handoff says the run host is local. -->
+         <li style="margin-bottom: 6px;">Open a terminal on your laptop.</li>
+         <li style="margin-bottom: 6px;">Connect to the machine the run lives on: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">ssh &lt;alias&gt;</code></li>
+         <li style="margin-bottom: 6px;">Go to the plugin: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">cd &lt;plugin dir&gt;</code></li>
+         <li style="margin-bottom: 6px;">Start the agent: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">&lt;agent binary from the handoff&gt;</code></li>
+         <li style="margin-bottom: 6px;">Run: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">&lt;continue command&gt; &lt;run dir&gt;</code></li>
+       </ol>
+       <p style="font-size: 13px; color: #475569; margin: 8px 0 0 0;">
+         That loads this run's proposed next steps, lets you pick or edit one, and
+         queues it as a follow-up run against the existing repo.
+         <!-- Only include this sentence if .repo_url exists: -->
+         To read the artifacts without a terminal, browse the repo linked below.
+       </p>
+     </div>
+
      <!-- Links -->
      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
        <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1e293b;">Links</h2>
@@ -204,6 +283,9 @@ The run directory is: **{{argument}}**
    - **Define every metric before using it in a table** — the reader must know what "good" vs "bad" looks like
    - Keep it scannable — the "Bottom Line" box should answer the research question in 10 seconds
    - For negative results / RETHINK, the "What We Investigated" section should still explain the idea, and add a prominent "Why It Failed" section after the results
+   - **"Proposed Next Steps" and "How to Continue This Research" are mandatory in every email**, whatever the outcome — complete, negative, aborted, or crashed. An email without them is incomplete. A failed run gets *more* next-steps detail, not less.
+   - **Next steps must be specific and resourced.** "Try a bigger model" is not a next step; "re-run exp-002 on a 7B model, which needs a 40GB+ GPU and ~2 GPU-hours" is. Every item states what it would test and what it would cost.
+   - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block — never `<run-dir>`, `/path/to/...`, or a guessed hostname. If the handoff says the run host is local, drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.
    - **The results audit is an automated self-check by the same model family — frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
    - **GitHub repo names**: Keep the repo slug under 40 characters to avoid URL truncation. If the `.repo_url` file contains a truncated URL, read the actual URL from the file and use it as-is.
@@ -212,6 +294,9 @@ The run directory is: **{{argument}}**
 4. **Write durable composition artifacts**:
    - Save the HTML to `<run-dir>/email-draft.html`.
    - Save the subject, as one plain-text line, to `<run-dir>/email-subject.txt`.
+   - Confirm `<run-dir>/next-steps.md` exists and is non-empty — you either read it
+     or wrote it in step 2b. It ships in the repo and is what
+     `/researcher-continue` reads, so a missing one is a defect, not a detail.
 
 5. **Complete the requested delivery mode**:
    - In compose-only mode, stop after validating that both files are non-empty.

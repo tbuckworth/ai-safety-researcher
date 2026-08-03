@@ -98,6 +98,7 @@ specialised leaf-node agents for focused work.
 | experiment | `agents/experiment.md` | 9 | fable | deep | Executes a single experiment, reports pass/fail |
 | results-auditor | `agents/results-auditor.md` | 10 | fable | deep | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
 | report | `agents/report.md` | 11 | fable | deep | Compiles all artefacts into LaTeX paper with real BibTeX |
+| knowledge | `agents/knowledge.md` | 2, 3, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
 
 Codex `fast` and `deep` are runtime roles, defaulting to
 `gpt-5.6-terra`/medium and `gpt-5.6-sol`/xhigh respectively. They are

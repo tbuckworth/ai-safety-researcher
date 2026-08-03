@@ -367,7 +367,45 @@ Before anything is written up, an **independent auditor red-teams the results**.
    ```
 
 2. Once complete, inform the user where to find the paper.
-3. Update `state.md`: `current_step: 11, status: complete`.
+
+3. **Write `next-steps.md`** — the ranked next-round plan (`## Reflection`,
+   `## Ranked Next Steps` with **Do** / **Tests** / **Needs** / **Kills the idea
+   if** per entry, `## Not Worth Pursuing`). Write it for a negative result too:
+   a dead end's next step is the cheapest experiment that would distinguish "the
+   idea is wrong" from "this test of it was wrong", or a reasoned recommendation
+   to stop. This is what `/researcher-continue` reads.
+
+4. **Ingest the run into the knowledge bases** — see Knowledge Bases below.
+
+5. Update `state.md`: `current_step: 11, status: complete`.
+
+---
+
+## Knowledge Bases
+
+Research compounds through two optional knowledge bases. A run without them
+behaves identically — **never block the workflow on a knowledge-base action.**
+
+- **Global wiki** — `$RESEARCHER_KB_DIR` (default `~/pyg/research-wiki`), if it
+  exists and contains `KB-SCHEMA.md`. Literature plus `lessons/`: what the
+  research process itself has learned. Bootstrap with
+  `${CLAUDE_PLUGIN_ROOT}/scripts/kb-init.sh`.
+- **Per-repo** — `output/<run-id>/knowledge/`, published with the research line's
+  repo so later work can resume without re-deriving.
+
+Dispatch the `researcher:knowledge` agent (`${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md`)
+at these points, passing the operation, scope, KB paths, and subject:
+
+| Step | Operation | Purpose |
+|------|-----------|---------|
+| 2, before searching | query, global | Don't re-search what the wiki holds — aim searches at the gaps |
+| 2, after synthesis | ingest, global | File the new sources |
+| 3 | query, global | Novelty against accumulated knowledge; prior runs count against novelty too |
+| 6 | query, global | Read `lessons/` before committing to a design |
+| 11 | ingest, both | File the outcome, the process lessons, and the repo KB |
+
+Ask the user before writing to the global wiki in interactive mode — it is shared
+state across every project, and they may want to see the diff first.
 
 ---
 

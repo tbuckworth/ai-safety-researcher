@@ -142,6 +142,8 @@ required.
 | `RESEARCHER_JOB_WAIT_POLL_SECONDS` | Poll interval while waiting (default 120) |
 | `RESEARCHER_JOB_WAIT_MAX_SECONDS` | Cap on a single wait (default 14400) |
 | `RESEARCHER_JOB_WAIT_MAX_REFUNDS` | Cap on refunded attempts (default 10) |
+| `RESEARCHER_KB_DIR` | Global knowledge base (default `~/pyg/research-wiki`). `none`, or a path without `KB-SCHEMA.md`, disables it. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
+| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps. Defaults to `desktop` on the desktop, `local` elsewhere (which drops the ssh step) |
 
 ## Decision Heuristics
 
@@ -192,6 +194,34 @@ The default profile keeps the historical behaviour (local RTX 3090, no cloud). N
 ## Limitation Triage & Future Work
 
 Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **Step 10** (results-time), each limitation is classified against the compute profile and remaining budget as **fix-now-free** (re-analysis of existing data), **fix-now-cheap** (a small run that fits the profile + experiment cap), or **future-work** (needs resources beyond the profile). Fix-now items are done; future-work items carry their precise resource asks into the paper's **Future Work** section, which states a resource-scoped next-round plan precise enough to seed a follow-up run. Step 11 refuses to write a limitation without a disposition.
+
+## Next Steps (every run, including failed ones)
+
+Step 11 writes `next-steps.md`: a `## Reflection` on what the round established
+or what blocked it, then 2–4 **ranked** next steps, each with what to do, the
+hypothesis it tests, the resources it needs, and the result that would kill the
+line — plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
+ground.
+
+A run that never reaches Step 11 still gets one: the email composer writes it
+from whatever artifacts exist, and diagnoses explicitly whether the failure was
+**orchestration** (the workflow broke, the science is untouched, resume) or
+**scientific** (the hypothesis or construct didn't survive, redesign). Every
+results email carries the top steps and a literal, copy-pasteable
+"How to Continue This Research" block.
+
+## Knowledge Bases
+
+Optional and non-blocking; see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md). The
+global wiki (`RESEARCHER_KB_DIR`) is queried before searching (Step 2), for
+novelty (Step 3), and for accumulated `lessons/` before the design is committed
+(Step 6); sources are ingested after synthesis (Step 2) and the whole run —
+result plus process lessons — after the paper (Step 11). Step 11 also writes the
+research line's own `knowledge/` directory into the repo, which a follow-up run
+clones into `prior/knowledge/` and extends.
+
+Every knowledge-base action is skipped silently when there is no knowledge base,
+and a failed one is logged and stepped past. It never fails a step.
 
 ## Safety Constraints
 
@@ -265,9 +295,25 @@ After a run completes, use the interactive review command:
 
 This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand — experiment code, challenge analysis, literature, paper sections — to answer your questions.
 
+## Continuing a Run
+
+```bash
+/researcher-continue                    # most recent run
+/researcher-continue /path/to/run-dir   # specific run
+```
+
+The command the results email points at. It reads `next-steps.md`, presents the
+ranked options, drafts the follow-up brief from the one you pick, confirms it,
+creates the issue, and offers to launch the run immediately (defaulting to the
+prior run's compute profile — a follow-up that silently drops from `mats` to the
+local GPU would fail to run the experiment it proposed).
+
+If the prior run died for orchestration reasons, it offers *resuming* instead,
+since a redesign would answer a question that was never actually asked.
+
 ## Follow-Up Runs
 
-The review command can create follow-up research issues. During a review session, say "create a follow-up" or describe what to investigate next, and the command will create a GitHub Issue tagged for follow-up.
+`/researcher-continue` is the direct path. `/researcher-review` can also create follow-up research issues: during a review session, say "create a follow-up" or describe what to investigate next, and it will create a GitHub Issue tagged for follow-up.
 
 ### How Follow-Ups Work
 
@@ -315,6 +361,8 @@ output/<date>-followup-<slug>/
 │   ├── literature/synthesis.md
 │   ├── decomposition.md
 │   ├── challenge/
+│   ├── next-steps.md           #   the prior round's ranked plan + reflection
+│   ├── knowledge/              #   the line's KB — dead-ends.md stops re-treading
 │   └── experiments/exp-*/results.md
 ├── followup-context.md         # Feedback + metadata
 ├── followup-summary.md         # Written by Step 1: what changed and why

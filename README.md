@@ -132,6 +132,42 @@ In Codex, use `$researcher:researcher-review` or ask to review a run.
 
 This loads the run's briefing and lets you ask questions — it reads experiment code, challenge analysis, literature, and paper sections on demand to answer.
 
+### Continuing Research
+
+Every run — including one that failed — produces `next-steps.md`: a ranked,
+resourced next-round plan with the run's own reflection on what blocked it. The
+results email carries it, and points at the command that acts on it:
+
+```bash
+claude
+> /researcher-continue                    # most recent run
+> /researcher-continue /path/to/run-dir   # specific run
+```
+
+In Codex, use `$researcher:researcher-continue`.
+
+It presents the ranked next steps, lets you pick or edit one, creates the
+follow-up issue, and offers to launch the run immediately. `/researcher-review`
+is for understanding a run; `/researcher-continue` is for proceeding from it.
+
+### Knowledge Bases
+
+Research compounds through two knowledge bases, both optional — a run without
+them behaves identically. See [`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md).
+
+```bash
+scripts/kb-init.sh                        # bootstrap ~/pyg/research-wiki
+export RESEARCHER_KB_DIR=~/pyg/research-wiki
+```
+
+- **Global wiki** — spans every research line: literature, entities, concepts,
+  and `lessons/` (what the research *process* has learned: common failures,
+  strawman constructs, real compute costs, tooling traps). Queried before
+  searching, before assessing novelty, and before committing to an experiment
+  design; ingested after literature search and after every completed run.
+- **Per-repo** — `knowledge/` inside each research repo (findings, dead-ends,
+  methods, open questions), so a follow-up run resumes without re-deriving.
+
 ## Architecture
 
 **Hub-and-spoke orchestrator.** The Claude `/researcher` command or Codex
@@ -185,6 +221,14 @@ output/<run-id>/
 │       └── report-section.md
 ├── audit/
 │   └── results-audit.md
+├── knowledge/                  # This research line's own knowledge base
+│   ├── README.md
+│   ├── findings.md             #   established, with confidence
+│   ├── dead-ends.md            #   ruled out, with the evidence
+│   ├── methods.md              #   how to reproduce
+│   └── open-questions.md
+├── next-steps.md               # Ranked next-round plan + reflection (always written)
+├── briefing.md                 # Run summary for review/continue
 ├── references.bib
 ├── citation-registry.md
 └── paper/
@@ -200,8 +244,9 @@ researcher/
 │   ├── researcher.md              # Interactive orchestrator (main entry point)
 │   ├── researcher-auto-step.md    # Autonomous per-step executor
 │   ├── researcher-auto-email.md   # Email composer for autonomous results
-│   └── researcher-review.md       # Interactive result reviewer
-├── agents/                        # 11 leaf-node agent definitions
+│   ├── researcher-review.md       # Interactive result reviewer
+│   └── researcher-continue.md     # Pick a next step and queue the follow-up
+├── agents/                        # 12 leaf-node agent definitions
 │   ├── search-planner.md          # Creates structured search plan
 │   ├── search.md                  # Executes one search task (parallelizable)
 │   ├── novelty-analyst.md         # Assesses whether the idea is novel
@@ -212,14 +257,18 @@ researcher/
 │   ├── pre-mortem.md              # Failure scenario analysis
 │   ├── experiment.md              # Executes a single experiment
 │   ├── results-auditor.md         # Independently audits the results (Step 10)
-│   └── report.md                  # Compiles LaTeX paper
+│   ├── report.md                  # Compiles LaTeX paper
+│   └── knowledge.md               # Queries/ingests/lints the knowledge bases
 ├── scripts/
 │   ├── researcher-cron.sh         # Dual-backend autonomous runner
+│   ├── kb-init.sh                 # Bootstraps the global knowledge base
+│   ├── create-followup-issue.sh   # Creates a type:follow-up research issue
+│   ├── check-voice-blocks.sh      # Voice-block and KEEP-token guard
 │   └── test-researcher-backends.sh # Mock provider integration tests
 ├── skills/
 │   ├── research-workflow/         # Auto-trigger skill definition
 │   └── researcher*/               # Codex workflow adapters
-├── templates/                     # LaTeX templates (preamble, paper, Makefile)
+├── templates/                     # LaTeX templates + kb-schema.md (wiki schema)
 ├── data/
 │   └── model-organisms/           # Curated DB of reusable misaligned model organisms
 │       ├── organisms.yaml         #   family-level index (machine-readable)
@@ -230,6 +279,7 @@ researcher/
 │   ├── ARCHITECTURE.md            # Architecture and agent inventory
 │   ├── AUTONOMOUS.md              # Autonomous mode setup and reference
 │   ├── COMPUTE-MATS.md            # Running on the MATS Slurm cluster
+│   ├── KNOWLEDGE-BASE.md          # Global wiki + per-repo knowledge bases
 │   ├── STANCE.md                  # Truth-seeking Voice block + KEEP/REFRAME rubric
 │   └── DIAGRAM.md                 # Mermaid architecture diagrams
 ├── output/                        # Research artifacts (gitignored)

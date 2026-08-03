@@ -62,6 +62,7 @@ case "$BACKEND" in
         PROVIDER_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
         MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CLAUDE_MODEL:-fable}}"
         AGENT_LABEL="Claude ${MODEL}"
+        CONTINUE_COMMAND="/researcher-continue"
         COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
         ;;
     codex)
@@ -76,6 +77,7 @@ case "$BACKEND" in
         CODEX_APPROVAL_POLICY="${RESEARCHER_CODEX_APPROVAL_POLICY:-never}"
         CODEX_MAX_SUBAGENTS="${RESEARCHER_CODEX_MAX_SUBAGENTS:-4}"
         AGENT_LABEL="OpenAI Codex ${MODEL} (${CODEX_REASONING})"
+        CONTINUE_COMMAND="\$researcher:researcher-continue"
         COMMIT_ATTRIBUTION="Generated-By: OpenAI Codex (${MODEL}, ${CODEX_REASONING})"
         ;;
     *)
@@ -89,6 +91,20 @@ PROCESSED_LABEL="status:${BACKEND}-processed"
 EMAIL_TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
 EMAIL_LABEL="${RESEARCHER_EMAIL_LABEL:-Researcher}"
 SEND_EMAIL_SCRIPT="${RESEARCHER_SEND_EMAIL_SCRIPT:-${HOME}/pyg/claude-remote-setup/plugins/report-email/scripts/send_report_email.py}"
+
+# How the reader of the results email reaches the machine this run executed on, so
+# the email's "How to Continue This Research" steps are literally runnable. This is
+# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — set
+# RESEARCHER_HOST_ALIAS explicitly on any machine not in the table below. The value
+# "local" suppresses the ssh step entirely (run and reader on the same machine).
+if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
+    case "$(hostname -s 2>/dev/null || echo unknown)" in
+        titus-MS-7A59) HOST_ALIAS="desktop" ;;
+        *)             HOST_ALIAS="local" ;;
+    esac
+else
+    HOST_ALIAS="$RESEARCHER_HOST_ALIAS"
+fi
 
 # Compute profile for this run — a human-readable description of the hardware/budget
 # experiments may use. Hardware-agnostic: the default describes the local desktop, but
@@ -114,6 +130,16 @@ case "${RESEARCHER_COMPUTE_PROFILE:-}" in
         ;;
     *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;
 esac
+
+# Global research knowledge base (the compounding wiki). Optional: a run works
+# identically without one. Set RESEARCHER_KB_DIR=none to disable explicitly, or
+# bootstrap one with scripts/kb-init.sh. Only a directory that actually holds a
+# KB-SCHEMA.md counts — a path pointing at nothing is treated as "no KB" rather
+# than silently sending agents to write pages into an unstructured directory.
+KB_DIR="${RESEARCHER_KB_DIR:-${HOME}/pyg/research-wiki}"
+if [ "$KB_DIR" = "none" ] || [ ! -f "${KB_DIR}/KB-SCHEMA.md" ]; then
+    KB_DIR=""
+fi
 
 is_true() {
     case "$1" in
@@ -340,6 +366,7 @@ agent_backend: ${BACKEND}
 agent_model: "${MODEL}"
 issue_number: ${ISSUE_NUMBER:-none}
 compute_profile: "${COMPUTE_PROFILE}"
+knowledge_base: "${KB_DIR:-none}"
 clarifications: []
 decisions: []
 ---
@@ -420,8 +447,13 @@ setup_followup_run() {
             [ -f "$tmp_clone/decomposition.md" ] && cp "$tmp_clone/decomposition.md" "${RUN_DIR}/prior/decomposition.md"
             [ -f "$tmp_clone/novelty-assessment.md" ] && cp "$tmp_clone/novelty-assessment.md" "${RUN_DIR}/prior/novelty-assessment.md"
             [ -f "$tmp_clone/success-criteria.md" ] && cp "$tmp_clone/success-criteria.md" "${RUN_DIR}/prior/success-criteria.md"
+            [ -f "$tmp_clone/next-steps.md" ] && cp "$tmp_clone/next-steps.md" "${RUN_DIR}/prior/next-steps.md"
             [ -d "$tmp_clone/literature" ] && cp -r "$tmp_clone/literature" "${RUN_DIR}/prior/literature"
             [ -d "$tmp_clone/challenge" ] && cp -r "$tmp_clone/challenge" "${RUN_DIR}/prior/challenge"
+            # The prior repo's own knowledge base — what this research line has
+            # established, ruled out, and how to reproduce it. Carried forward and
+            # extended at Step 11, not started from scratch.
+            [ -d "$tmp_clone/knowledge" ] && cp -r "$tmp_clone/knowledge" "${RUN_DIR}/prior/knowledge"
             # Copy experiment results (not full code) to keep it lightweight
             if [ -d "$tmp_clone/experiments" ]; then
                 mkdir -p "${RUN_DIR}/prior/experiments"
@@ -487,6 +519,7 @@ parent_issue: ${PARENT_ISSUE:-none}
 prior_repo: ${PRIOR_REPO_URL}
 prior_run_id: ${PRIOR_RUN_ID}
 compute_profile: "${COMPUTE_PROFILE}"
+knowledge_base: "${KB_DIR:-none}"
 clarifications: []
 decisions: []
 ---
@@ -604,7 +637,8 @@ ensure_runtime_state() {
     # on an LLM preserving YAML keys during an otherwise valid state rewrite.
     upsert_frontmatter_field "agent_backend" "$BACKEND" \
         && upsert_frontmatter_field "agent_model" "$(yaml_quote "$MODEL")" \
-        && upsert_frontmatter_field "compute_profile" "$(yaml_quote "$COMPUTE_PROFILE")"
+        && upsert_frontmatter_field "compute_profile" "$(yaml_quote "$COMPUTE_PROFILE")" \
+        && upsert_frontmatter_field "knowledge_base" "$(yaml_quote "${KB_DIR:-none}")"
 }
 
 build_codex_preamble() {
@@ -638,14 +672,31 @@ build_runtime_header() {
 - Parent model: ${MODEL}
 - Plugin root: ${REPO_DIR}
 - Run output root: ${OUTPUT_DIR}
+- Global knowledge base: ${KB_DIR:-none (this run is not using one)}
 EOF
+}
+
+# Strip a command file's YAML frontmatter, and NOTHING else.
+#
+# The obvious `sed '/^---$/,/^---$/d'` is wrong and was wrong here for a long
+# time: sed pairs up EVERY `---` in the file, so with markdown section
+# separators it deletes alternating sections of the document. That silently
+# dropped half the workflow — including whole steps — from every step prompt.
+# Match only the frontmatter: a `---` on line 1, up to the next `---`.
+strip_frontmatter() {
+    awk '
+        NR == 1 && $0 == "---" { in_fm = 1; next }
+        in_fm && $0 == "---"   { in_fm = 0; next }
+        in_fm                  { next }
+        { print }
+    ' "$1"
 }
 
 build_step_prompt() {
     local step="$1"
     local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
     local cmd_body
-    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    cmd_body=$(strip_frontmatter "$cmd_file")
     build_runtime_header
     if [ "$BACKEND" = "codex" ]; then
         build_codex_preamble
@@ -656,7 +707,7 @@ build_step_prompt() {
 build_email_prompt() {
     local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
     local cmd_body
-    cmd_body=$(sed '1,/^---$/{ /^---$/!d; /^---$/d; }' "$cmd_file" | sed '/^---$/,/^---$/d')
+    cmd_body=$(strip_frontmatter "$cmd_file")
     build_runtime_header
     cat <<EOF
 
@@ -667,6 +718,19 @@ build_email_prompt() {
 - Write the single-line subject to: ${RUN_DIR}/email-subject.txt
 - The wrapper will send only to: ${EMAIL_TO}
 - Footer agent label: ${AGENT_LABEL}
+
+## Continuation facts (use these verbatim in "How to Continue This Research")
+
+- Run host SSH alias: ${HOST_ALIAS}
+  (If this is exactly \`local\`, the reader is already on the run machine: OMIT the
+  ssh step and renumber. Otherwise the step is literally \`ssh ${HOST_ALIAS}\`.)
+- Plugin directory on the run host: ${REPO_DIR}
+- Run directory on the run host: ${RUN_DIR}
+- Continue command: ${CONTINUE_COMMAND} ${RUN_DIR}
+- Agent to start in the plugin directory: ${PROVIDER_BIN}
+
+These are the real paths on the machine that produced this run. Use them exactly;
+never substitute a placeholder, a guessed path, or a different hostname.
 EOF
     echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
 }
@@ -695,6 +759,15 @@ invoke_provider() {
                 --cd "$REPO_DIR"
                 --add-dir "$OUTPUT_DIR"
                 --sandbox "$CODEX_SANDBOX"
+            )
+            # The knowledge base lives outside the plugin and output roots, so
+            # Codex cannot write to it unless it is explicitly granted.
+            # (an `[ ... ] && ...` one-liner would return 1 with no KB and, under
+            # set -e, abort the run rather than skip the flag)
+            if [ -n "$KB_DIR" ]; then
+                codex_args+=(--add-dir "$KB_DIR")
+            fi
+            codex_args+=(
                 --model "$MODEL"
                 -c "model_reasoning_effort=\"${CODEX_REASONING}\""
                 -c "agents.default_subagent_model=\"${CODEX_DEEP_MODEL}\""

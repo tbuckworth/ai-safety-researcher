@@ -66,6 +66,12 @@ JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
 JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
 JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
+# Optional hook: a shell command run before each step ("{run_id}" substituted).
+# If it prints anything, its first line is the reason and the run pauses there,
+# exactly as on a provider limit: resumable, nothing published. Steps are never
+# interrupted, and the run never pauses while JOB_WAIT_CMD still reports jobs.
+# agent-board's spare-capacity launcher uses it. Empty = old behaviour.
+GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
 TOPIC="${1:-}"
 
 # Provider selection. RESEARCHER_MODEL remains a backwards-compatible
@@ -954,6 +960,15 @@ outstanding_jobs() {
     ( set +e +o pipefail; eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' ) || true
 }
 
+guard_hold() {
+    [ -n "$GUARD_CMD" ] || return 0
+    local cmd run_id
+    run_id=$(basename "$RUN_DIR")
+    cmd=${GUARD_CMD//\{run_id\}/$run_id}
+    # Output decides, not the exit code: a guard that fails silently holds nothing.
+    ( set +e +o pipefail; eval "$cmd" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1 ) || true
+}
+
 run_step() {
     local step="$1"
     local prev_step
@@ -1151,6 +1166,21 @@ while true; do
         # Step 11 advanced current_step but left a non-terminal status.
         set_status complete
         break
+    fi
+
+    HOLD=$(guard_hold)
+    if [ -n "$HOLD" ]; then
+        OUTSTANDING=$(outstanding_jobs)
+        if [ -n "${OUTSTANDING// /}" ]; then
+            # Pausing now would leave this run's cluster jobs unwatched (and a
+            # paid one billing); the step that collects them goes ahead.
+            log "Guard asked to hold (${HOLD}), but job(s) ${OUTSTANDING% } are still outstanding; carrying on."
+        else
+            log "Guard: ${HOLD}"
+            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$HOLD")" || true
+            pause_run "$NEXT_STEP"
+            break
+        fi
     fi
 
     STEP_RC=0

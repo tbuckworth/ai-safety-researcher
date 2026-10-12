@@ -598,6 +598,43 @@ assert_eq "$RC" "3" "exit code (paused)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "provider calls"
 assert_eq "$(field status "${OUT}/2026-01-05-audit-limit")" "audit_remediating" "status left resumable"
 
+# 15c. A guard (RESEARCHER_GUARD_CMD) holds the run between steps: it pauses
+#      before calling the provider, records why, and resumes once it is quiet.
+new_case guard-hold
+write_run 2026-01-06-guard 3 mock_step_complete
+echo "other agents are busy on this login" > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused by guard)"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "the provider ran although the guard held"; ok
+assert_eq "$(field current_step "${OUT}/2026-01-06-guard")" "3" "current_step kept"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-06-guard")" "other agents are busy on this login" "pause reason"
+assert_grep "Guard: other agents are busy" "${CASE_DIR}/stdout.log"
+: > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "4 5 6 7 8 9 10 11 " "resumed at step 4"
+
+# 15d. ...but never while the run's cluster jobs are outstanding, and a guard
+#      that fails without printing anything holds nothing.
+new_case guard-jobs
+write_run 2026-01-07-guard-jobs 10 audit_complete
+mkdir -p "${OUT}/2026-01-07-guard-jobs/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-07-guard-jobs/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-07-guard-jobs/experiments/exp-001/preflight.md"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
+assert_grep "job\(s\) 4242 are still outstanding" "${CASE_DIR}/stdout.log"
+new_case guard-broken
+write_run 2026-01-08-guard-broken 10 audit_complete
+mkdir -p "${OUT}/2026-01-08-guard-broken/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/preflight.md"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=false" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "a silent failing guard holds nothing"
+
 # =============================================================================
 # 16. A pause inside the timeout fast-track resumes at Step 11, not at the
 #     step after the one that timed out.

@@ -104,9 +104,10 @@ Or let it pick from your GitHub Issues (label `list:research-ideas` on `tbuckwor
 ```
 
 Autonomous mode runs the same 11-step workflow but makes all decisions automatically using built-in heuristics (see `docs/AUTONOMOUS.md`). On completion it:
-- Creates a public GitHub repo with all artifacts
-- Sends an HTML email with results summary
-- Updates the source GitHub issue
+- Publishes all artifacts to a **private** GitHub repo (or a branch of the prior repo for a follow-up) and verifies the remote branch holds exactly the run's commit
+- Records a final outcome from what actually exists (`complete` only if the workflow finished, there are valid results, and the push verified; otherwise `unpublished`, `no-results`, `partial`, `failed` or `paused`) and exits non-zero for anything short of complete
+- Sends an HTML email with results summary (subject flagged when the outcome is not `complete`)
+- Comments the findings, verdicts, links and next steps back on the source GitHub issue
 
 #### Cron setup (daily at 2am):
 ```bash
@@ -262,9 +263,13 @@ researcher/
 ├── scripts/
 │   ├── researcher-cron.sh         # Dual-backend autonomous runner
 │   ├── kb-init.sh                 # Bootstraps the global knowledge base
-│   ├── create-followup-issue.sh   # Creates a type:follow-up research issue
+│   ├── researcher_lib.py          # Issue picking/dedupe, final outcome, issue comment (used by the runner)
+│   ├── preflight_checks.py        # Experiment pre-flight checks: degeneracy, training, metric separation, clustered stats
+│   ├── create-followup-issue.sh   # Creates a type:follow-up research issue (idempotent)
 │   ├── check-voice-blocks.sh      # Voice-block and KEEP-token guard
-│   └── test-researcher-backends.sh # Mock provider integration tests
+│   ├── test-researcher-backends.sh # Mock provider integration tests
+│   ├── test-researcher-lifecycle.sh # Mock pick/timeout/publish/outcome/issue tests
+│   └── tests/                     # Unit tests for the two Python helpers
 ├── skills/
 │   ├── research-workflow/         # Auto-trigger skill definition
 │   └── researcher*/               # Codex workflow adapters
@@ -304,6 +309,7 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Adversarial challenge phase** (Step 6): Three independent reviews run in parallel before committing to experiments — catches flawed assumptions and predictable failures early.
 - **Lambda ordering**: Experiments are sorted by `lambda = -ln(P_success) / T` — the component most likely to fail per hour of work gets tested first.
 - **Negative results are results**: If experiments fail, the agent compiles a "here's why this doesn't work" paper rather than producing nothing.
+- **Method spec + pre-flight gate** (Steps 1, 9): Step 1 pins every named method and metric to a testable definition (`method-spec.md`). Before its main run, each experiment checks method fidelity, a known-answer smoke test, training sanity (non-degenerate generations), organism validity, metric separation and its statistics plan (`preflight.md`, `scripts/preflight_checks.py`). A failed check makes the verdict `INCONCLUSIVE`, never a negative result.
 - **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
 - **Construct-validity gate** (Step 6): If a covert/target construct is a strawman whose result is knowable a priori, the plan loops back to Step 1 to redesign it rather than disclaiming it — so experiments carry real information value.
 - **Limitation triage → Future Work**: Limitations are triaged (fix-now vs future-work) at Steps 6 and 10 against the run's compute profile; fix-now items fold into the plan, and the rest become a precise, resource-scoped Future Work section (Step 11) that can seed a follow-up run.
@@ -317,13 +323,21 @@ Run provider-free integration tests before deploying:
 
 ```bash
 bash -n scripts/researcher-cron.sh
-shellcheck scripts/researcher-cron.sh scripts/test-researcher-backends.sh
+shellcheck scripts/researcher-cron.sh scripts/test-researcher-backends.sh scripts/test-researcher-lifecycle.sh
 scripts/test-researcher-backends.sh
+scripts/test-researcher-lifecycle.sh
+python3 -m unittest discover -s scripts/tests
+scripts/check-voice-blocks.sh
 ```
 
-The test executes all eleven state transitions with mocked Claude and Codex
-CLIs, forces one transient Codex failure to exercise retries, and verifies the
-email handoff without sending anything.
+The backend test executes all eleven state transitions with mocked Claude and
+Codex CLIs, forces one transient Codex failure to exercise retries, and verifies
+the email handoff without sending anything. The lifecycle test drives the runner
+against a mock `gh` and local bare git repositories: private repo creation, a
+`main` push under `init.defaultBranch=master`, a failed push and a full disk
+surfacing as `unpublished`, the timeout keeping a finished run `complete`,
+duplicate and stale-run handling, in-place follow-up branches, slug collisions,
+and idempotent follow-up filing.
 
 ## License
 

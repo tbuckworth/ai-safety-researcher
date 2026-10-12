@@ -18,7 +18,9 @@ The voice shift changes **prose, output-template slots, and user-facing language
 
 | Token | Where it matters |
 |-------|------------------|
-| `PASS` / `FAIL` | experiment verdicts; matched by orchestrator + email composer + cron |
+| `PASS` / `FAIL` / `INCONCLUSIVE` | experiment verdicts (`## Verdict:` in results.md); matched by orchestrator + email composer + `scripts/researcher_lib.py` |
+| `PASS` / `FAIL` / `WARN` / `N/A` in `preflight.md` | pre-flight check table; parsed by `scripts/researcher_lib.py` (a `FAIL` turns the experiment's verdict into `INCONCLUSIVE`) |
+| filename `method-spec.md` | the binding definition of each named method; read by decomposition, experiment, auditor, report |
 | `[SKIP]` / `[SHOWSTOPPER]` | decomposition component status |
 | Verdict enums: `NOVEL` / `PARTIALLY_NOVEL` / `ALREADY_DONE`, `PROCEED_AS_IS` / `MINOR_REVISIONS` / `MAJOR_REVISIONS` / `RETHINK_APPROACH`, and the audit enum `SUPPORTED` / `FIXABLE-DEFECT` / `TRUE-NULL` / `UNSALVAGEABLE` | step decisions |
 | `lambda`, `P_success` | decomposition math |

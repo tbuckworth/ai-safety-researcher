@@ -142,6 +142,7 @@ Do this yourself — no agent needed.
    - Copy `prior/decomposition.md` → `decomposition.md`
    - Copy `prior/challenge/` files → `challenge/`
    - Copy `prior/references.bib` → `references.bib` (if exists)
+   - Copy `prior/method-spec.md` → `method-spec.md` (if exists), then amend it for anything the feedback changes. If the prior run has none, write one (step 3a below) — always, whatever the `followup_focus`.
 
    Write a `followup-summary.md` file summarizing: what the prior run did, what changed, which artifacts are reused vs regenerated. This helps downstream steps understand the context.
 
@@ -162,6 +163,19 @@ Do this yourself — no agent needed.
    If the topic.txt contains rich detail (links to papers, background, motivation), incorporate that information into the clarifications rather than using defaults.
 
 3. The run directory and subdirectories already exist (created by the cron wrapper). Verify they exist.
+
+3a. **Write `method-spec.md`** — the binding operational definition of every *named* method, condition, intervention and metric in the topic. Later steps implement and audit against this file, so a method cannot quietly turn into a different one (one past run defined "Salad" as alternating tokens between two models, then implemented logit ensembling for three runs and reported it as Salad). For each named thing:
+
+   ```markdown
+   ## <Name as used in the topic, e.g. "Salad">
+   - **Source wording**: "<verbatim phrase from topic.txt / the issue body that defines it>"
+   - **Operational definition**: <exactly what is computed or done>
+   - **Defining property (testable)**: <a property a tiny code test can assert, e.g. "consecutive generated tokens come from model A, then B, then A, ...">
+   - **Not this**: <near-miss methods that must not be substituted under this name, e.g. "logit/probability ensembling; weight averaging">
+   - **Measured by**: <for a metric: what a known positive and a known negative should score — the check that it can separate them>
+   ```
+
+   If the topic leaves a definition genuinely open, choose the most literal reading of the source wording, and say so. A follow-up keeps the prior spec unless the feedback changes a definition, in which case it records the change.
 
 4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups):
    ```yaml
@@ -199,7 +213,7 @@ Do this yourself — no agent needed.
    # If re-entered from a Step 6 construct-redesign, also preserve: construct_loop_count: 1
    ---
 
-   Step 1 complete. Topic clarified autonomously.
+   Step 1 complete. Topic clarified autonomously. Method spec: method-spec.md.
    ```
 
 ---
@@ -381,6 +395,17 @@ If `state.md` contains `is_followup: true`:
    Do not assume a specific device — use only what the profile authorizes. Design
    experiments that fit within it. If a component requires more than the profile provides,
    note it as a SHOWSTOPPER or design a scaled-down test that does fit.
+
+   IMPORTANT CONSTRAINT — VALIDITY BEFORE EFFECTS: Read <run-dir>/method-spec.md;
+   every component that uses a named method must implement THAT method (its defining
+   property), not a near-miss. Where the plan trains a model or builds a model
+   organism, an early component must establish that it works — fluent outputs on
+   held-out prompts, and the implanted behaviour firing on triggers but not on
+   controls — before any component measures an intervention against it. Every
+   headline metric must have a planned check that it separates a known positive from a
+   known negative (e.g. treatment vs control at step 0); a metric that would score both
+   the same cannot test the hypothesis. Plan comparisons with ≥3 seeds where the compute
+   profile allows, and with prompts/scenarios (not repeated samples) as the unit of analysis.
    """)
    ```
 
@@ -553,6 +578,10 @@ If `state.md` contains `is_followup: true`:
       Experiment plan: <run-dir>/experiments/exp-NNN/plan.md
       Success criteria: <run-dir>/success-criteria.md
       Literature: <run-dir>/literature/synthesis.md
+      Method spec (binding): <run-dir>/method-spec.md
+      Pre-flight tooling: ${CLAUDE_PLUGIN_ROOT}/scripts/preflight_checks.py
+      Pre-flight record template: ${CLAUDE_PLUGIN_ROOT}/templates/preflight.md
+      Write the pre-flight record to: <run-dir>/experiments/exp-NNN/preflight.md
       Write results to: <run-dir>/experiments/exp-NNN/results.md
 
       CRITICAL CONSTRAINTS:
@@ -574,13 +603,19 @@ If `state.md` contains `is_followup: true`:
         CSV/JSON metric files are what matter — not multi-GB model weights.
       - GitHub has a 100MB per-file hard limit. No single file in the experiment
         directory should exceed 50MB.
+      - Do not create git repositories inside the run directory (no `git init`, and
+        clone third-party code outside it, e.g. under $TMPDIR). A nested repository
+        cannot be published with the run; record a library's URL and commit instead.
+      - PRE-FLIGHT GATE (mandatory): run the pre-flight checks in your instructions
+        BEFORE the main run, and record them in preflight.md. Do not report a PASS or
+        FAIL from a pipeline that failed a check: fix it, or report INCONCLUSIVE.
       """)
       ```
-   c. Read results.
+   c. Read results. Check that `preflight.md` exists and that no experiment claims PASS or FAIL alongside a `FAIL` pre-flight row; if one does, send it back once to fix the pipeline or re-label the verdict INCONCLUSIVE (the wrapper counts such a verdict as inconclusive regardless).
 
-3. **On FAIL** (fail_fast_agreement is true):
-   - Stop further experiments.
-   - Record the result details in state.md.
+3. **On FAIL or INCONCLUSIVE** (fail_fast_agreement is true):
+   - Stop further experiments. (An INCONCLUSIVE load-bearing experiment means later ones would rest on an unvalidated pipeline.)
+   - Record the result details in state.md — for INCONCLUSIVE, the failed pre-flight check and what fixing it would take.
    - Set `status: experiments_done_with_failure`.
    - The wrapper advances to Step 10 (audit); the auditor triages whether the FAIL is a genuine null or a botched run, then Step 11 compiles whatever results exist.
 
@@ -615,6 +650,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
 
    Run directory: <run-dir>/
+   Method spec (binding definitions): <run-dir>/method-spec.md
+   Pre-flight tooling: ${CLAUDE_PLUGIN_ROOT}/scripts/preflight_checks.py
    Frozen anchor: <run-dir>/success-criteria.md  (on a follow-up: <run-dir>/prior/success-criteria.md)
    Audit only this run's experiments: <run-dir>/experiments/exp-*  (IGNORE the prior/ directory)
    This is audit round <n>.
@@ -655,7 +692,10 @@ An independent **results-auditor** red-teams the experiment outputs before write
    audit/results-audit.md (including its Limitation triage table), and the
    compute_profile in state.md. Use the pre-mortem risk analysis plus any unresolved
    audit findings (and the audit_exit_reason) for Limitations. Present positive and
-   negative/null results with the same framing.
+   negative/null results with the same framing. Read method-spec.md and each
+   experiments/exp-*/preflight.md: name methods only as spec'd, report every headline
+   number with its interval and number of independent units, and report INCONCLUSIVE
+   experiments as unable to answer their question, not as negative evidence.
 
    The Results section MUST open with a headline results table (and a summary figure
    near the top where the data supports one). Every Limitation MUST carry a triage
@@ -717,7 +757,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    ## Results
    | # | Component | Result | Key Finding |
    |---|-----------|--------|-------------|
-   <from experiment results>
+   <from experiment results; Result is PASS / FAIL / INCONCLUSIVE>
 
    <If negative result: 1-paragraph summary of why the approach doesn't work>
 

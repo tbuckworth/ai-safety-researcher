@@ -22,7 +22,8 @@ You help the user understand, question, and explore the results of an autonomous
 4. **Present a quick summary** to the user:
    - Topic (1 line)
    - Novelty verdict
-   - Experiments: N pass / M fail
+   - Experiments: N pass / M fail / K inconclusive (an inconclusive experiment failed its pre-flight checks and says nothing about the hypothesis)
+   - Final outcome: `final_outcome` from state.md / `run-outcome.json` (e.g. `unpublished` = results never reached GitHub)
    - Key finding (1-2 sentences)
    - Status (complete / failed / aborted)
    - Then: "What would you like to explore?"

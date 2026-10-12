@@ -1,0 +1,642 @@
+#!/usr/bin/env bash
+# End-to-end tests for the autonomous runner's run lifecycle: picking issues,
+# timeouts, publishing, the final outcome, and reporting back to the issue.
+#
+# Every external service is mocked: a fake `gh` reads issues from a JSON file and
+# records what it was asked to do, git pushes go to local bare repositories
+# (RESEARCHER_GIT_REMOTE_BASE=file://...), and the model provider and email
+# helper are stubs. No model, GitHub, GPU, or email calls are made.
+#
+# Each case reproduces a failure from the 2026 forensic review (tasks#2254).
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(dirname "$SCRIPT_DIR")"
+CRON="${REPO_DIR}/scripts/researcher-cron.sh"
+LIB="${REPO_DIR}/scripts/researcher_lib.py"
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/researcher-lifecycle.XXXXXX")
+trap '[ -n "${KEEP_TEST_ROOT:-}" ] || rm -rf "$TEST_ROOT"' EXIT
+
+MOCK_BIN="${TEST_ROOT}/bin"
+REMOTES="${TEST_ROOT}/remotes"
+mkdir -p "$MOCK_BIN" "$REMOTES"
+
+# Isolated git: no user config, no credential helpers, and git's historical
+# default branch name — the condition under which runs committed on 'master'
+# and pushed 'main' into empty repos.
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL="${TEST_ROOT}/gitconfig"
+git config --global user.name "Lifecycle Test"
+git config --global user.email "test@example.test"
+git config --global init.defaultBranch master
+git config --global advice.defaultBranchName false
+
+PASSES=0
+fail() { echo "FAIL [${CASE:-setup}]: $*" >&2; exit 1; }
+ok() { PASSES=$((PASSES + 1)); }
+assert_grep() { grep -qE -- "$1" "$2" || fail "expected /$1/ in $(basename "$2")"; ok; }
+assert_no_grep() { if grep -qE -- "$1" "$2"; then fail "did not expect /$1/ in $(basename "$2")"; fi; ok; }
+assert_eq() { [ "$1" = "$2" ] || fail "$3: expected '$2', got '$1'"; ok; }
+
+# --- mock gh -----------------------------------------------------------------
+cat > "${MOCK_BIN}/gh" <<'MOCK_GH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "$MOCK_GH_LOG"
+
+label=""; jq_expr=""; json=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[$i]}" in
+        --label) label="${args[$((i + 1))]}" ;;
+        --jq) jq_expr="${args[$((i + 1))]}" ;;
+        --json) json="${args[$((i + 1))]}" ;;
+    esac
+done
+
+case "${1:-} ${2:-}" in
+    "auth status") exit 0 ;;
+    "label create") exit 0 ;;
+    "repo create")
+        if [ "${MOCK_GH_CREATE_FAIL:-false}" = "true" ]; then
+            echo "HTTP 500: mock repo create failure" >&2
+            exit 1
+        fi
+        bare="${MOCK_REMOTES}/$3.git"
+        if [ -d "$bare" ]; then
+            echo "GraphQL: Name already exists on this account" >&2
+            exit 1
+        fi
+        git init -q --bare "$bare"
+        vis=public
+        case " $* " in *" --private "*) vis=private ;; *" --internal "*) vis=internal ;; esac
+        echo "${MOCK_GH_FORCE_VISIBILITY:-$vis}" > "${bare}/mock-visibility"
+        echo "https://github.com/$3"
+        ;;
+    "repo view")
+        bare="${MOCK_REMOTES}/$3.git"
+        [ -d "$bare" ] || { echo "GraphQL: Could not resolve to a Repository" >&2; exit 1; }
+        if [ "$json" = "visibility" ]; then
+            tr '[:lower:]' '[:upper:]' < "${bare}/mock-visibility"
+        elif [ -n "$(git --git-dir="$bare" for-each-ref)" ]; then echo false; else echo true; fi
+        ;;
+    "issue list")
+        if [ -n "$label" ]; then
+            jq --arg l "$label" '[.[] | select(.labels | map(.name) | index($l))]' "$MOCK_ISSUES"
+        else
+            cat "$MOCK_ISSUES"
+        fi
+        ;;
+    "issue view")
+        obj=$(jq --argjson n "$3" '.[] | select(.number == $n)' "$MOCK_ISSUES")
+        [ -n "$obj" ] || { echo "GraphQL: Could not resolve to an issue" >&2; exit 1; }
+        if [ -n "$jq_expr" ]; then echo "$obj" | jq -r "$jq_expr"; else echo "$obj"; fi
+        ;;
+    "issue comment")
+        n=$(ls "$MOCK_COMMENTS" | wc -l | tr -d ' ')
+        for ((i = 0; i < ${#args[@]}; i++)); do
+            case "${args[$i]}" in
+                --body-file) cp "${args[$((i + 1))]}" "${MOCK_COMMENTS}/$3-$n.md" ;;
+                --body) printf '%s\n' "${args[$((i + 1))]}" > "${MOCK_COMMENTS}/$3-$n.md" ;;
+            esac
+        done
+        echo "https://github.com/tbuckworth/tasks/issues/$3#issuecomment-$n"
+        ;;
+    "issue create")
+        jq '. + [{number: 999, title: "created", body: "", state: "OPEN", labels: []}]' "$MOCK_ISSUES" > "${MOCK_ISSUES}.tmp"
+        mv "${MOCK_ISSUES}.tmp" "$MOCK_ISSUES"
+        echo "https://github.com/tbuckworth/tasks/issues/999"
+        ;;
+    *) : ;;
+esac
+MOCK_GH
+chmod +x "${MOCK_BIN}/gh"
+
+# --- mock provider -----------------------------------------------------------
+cat > "${MOCK_BIN}/claude" <<'MOCK_PROVIDER'
+#!/usr/bin/env bash
+set -euo pipefail
+prompt=$(cat)
+
+if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
+    run_dir=$(printf '%s\n' "$prompt" | sed -n 's/^The run directory is: \*\*\(.*\)\*\*$/\1/p' | head -1)
+    printf '%s\n' "$prompt" > "${run_dir}/.email-prompt.txt"
+    printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
+    printf '%s\n' '[Auto-Research] Mock result — 1 pass, 0 fail' > "${run_dir}/email-subject.txt"
+    exit 0
+fi
+
+argument=$(printf '%s\n' "$prompt" | sed -n 's/^The argument is: \*\*\([0-9][0-9]*\) \(.*\)\*\*$/\1|\2/p' | head -1)
+step=${argument%%|*}
+run_dir=${argument#*|}
+state_file="${run_dir}/state.md"
+echo "$step" >> "$MOCK_STEPS_LOG"
+
+if [ "${MOCK_LIMIT_AT_STEP:-}" = "$step" ]; then
+    # The headless CLI's limit notice, printed as the final line with exit 0.
+    echo "Working on step ${step}..."
+    echo "Claude AI usage limit reached|1754060400"
+    exit 0
+fi
+
+case "$step" in
+    9)
+        exp="${run_dir}/experiments/exp-001"
+        mkdir -p "$exp"
+        printf '# exp-001 Results\n\n## Component Tested\nRouting localises the capability\n\n## Verdict: %s\n' \
+            "${MOCK_VERDICT:-PASS}" > "${exp}/results.md"
+        printf '| Check | Status | Evidence |\n|---|---|---|\n| method-fidelity | PASS | test |\n| training-sanity | %s | samples.json |\n' \
+            "${MOCK_PREFLIGHT:-PASS}" > "${exp}/preflight.md"
+        if [ "${MOCK_BIG_FILE:-false}" = "true" ]; then
+            head -c 2097152 /dev/zero > "${exp}/big.dat"
+        fi
+        if [ "${MOCK_NESTED_REPO:-false}" = "true" ]; then
+            # An experiment that cloned a library, which it then dirtied.
+            mkdir -p "${exp}/vendored-lib"
+            git -C "${exp}/vendored-lib" init -q
+            echo "lib" > "${exp}/vendored-lib/lib.py"
+            git -C "${exp}/vendored-lib" add -A
+            git -C "${exp}/vendored-lib" commit -q -m lib
+            echo "dirty" > "${exp}/vendored-lib/output.txt"
+        fi
+        ;;
+    11)
+        mkdir -p "${run_dir}/paper"
+        printf '%%PDF-1.4 mock\n' > "${run_dir}/paper/paper.pdf"
+        printf '# Proposed Next Steps\n\n**Outcome**: Mock finding holds on the toy setup.\n\n## Ranked Next Steps\n\n### 1. Validate the metric at t=0\n- **Do**: x\n' \
+            > "${run_dir}/next-steps.md"
+        ;;
+esac
+
+if [ "${MOCK_STRIP_FIELDS_AT_STEP:-}" = "$step" ]; then
+    # A model rewrite that drops wrapper-owned keys.
+    grep -v -E '^(run_id|topic|issue_number|mode):' "$state_file" > "${state_file}.stripped"
+    mv "${state_file}.stripped" "$state_file"
+fi
+
+new_status="mock_step_complete"
+[ "$step" = "11" ] && new_status="complete"
+sed -e "s/^current_step:.*/current_step: ${step}/" -e "s/^status:.*/status: ${new_status}/" \
+    "$state_file" > "${state_file}.tmp"
+mv "${state_file}.tmp" "$state_file"
+echo "Mock step ${step} complete."
+MOCK_PROVIDER
+chmod +x "${MOCK_BIN}/claude"
+
+cat > "${TEST_ROOT}/send-email.py" <<'MOCK_EMAIL'
+import os, sys
+args = sys.argv[1:]
+with open(os.environ["MOCK_EMAIL_LOG"], "a", encoding="utf-8") as handle:
+    handle.write("--subject " + args[args.index("--subject") + 1] + "\n")
+MOCK_EMAIL
+
+# --- helpers -----------------------------------------------------------------
+issue_json() {
+    # number title labels(comma-separated) body
+    jq -n --argjson n "$1" --arg t "$2" --arg l "$3" --arg b "${4:-}" \
+        '{number: $n, title: $t, body: $b, state: "OPEN",
+          url: ("https://github.com/tbuckworth/tasks/issues/" + ($n | tostring)),
+          labels: ($l | split(",") | map(select(length > 0)) | map({name: .}))}'
+}
+
+new_case() {
+    CASE="$1"
+    CASE_DIR="${TEST_ROOT}/case-${CASE}"
+    OUT="${CASE_DIR}/output"
+    mkdir -p "$OUT" "${CASE_DIR}/comments" "${CASE_DIR}/tmp"
+    : > "${CASE_DIR}/gh.log"
+    : > "${CASE_DIR}/steps.log"
+    : > "${CASE_DIR}/email.log"
+    echo '[]' > "${CASE_DIR}/issues.json"
+}
+
+set_issues() {
+    jq -s '.' "$@" > "${CASE_DIR}/issues.json"
+}
+
+# run_researcher [VAR=value ...] [-- topic]
+run_researcher() {
+    local topic=()
+    local env_args=()
+    while [ $# -gt 0 ]; do
+        if [ "$1" = "--" ]; then shift; topic=("$@"); break; fi
+        env_args+=("$1"); shift
+    done
+    set +e
+    env PATH="${MOCK_BIN}:${PATH}" \
+        TMPDIR="${CASE_DIR}/tmp" \
+        MOCK_GH_LOG="${CASE_DIR}/gh.log" \
+        MOCK_ISSUES="${CASE_DIR}/issues.json" \
+        MOCK_COMMENTS="${CASE_DIR}/comments" \
+        MOCK_REMOTES="$REMOTES" \
+        MOCK_STEPS_LOG="${CASE_DIR}/steps.log" \
+        MOCK_EMAIL_LOG="${CASE_DIR}/email.log" \
+        RESEARCHER_BACKEND=claude \
+        RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+        RESEARCHER_CLAUDE_MODEL=mock-claude \
+        RESEARCHER_OUTPUT_DIR="$OUT" \
+        RESEARCHER_LOCKFILE="${CASE_DIR}/lock" \
+        RESEARCHER_LINK_OUTPUT=false \
+        RESEARCHER_SKIP_GPU_CHECK=true \
+        RESEARCHER_STEP_ATTEMPTS=1 \
+        RESEARCHER_RETRY_DELAY_SECONDS=0 \
+        RESEARCHER_KB_DIR=none \
+        RESEARCHER_HOST_ALIAS=mock-host \
+        RESEARCHER_EMAIL_TO=self@example.test \
+        RESEARCHER_SEND_EMAIL_SCRIPT="${TEST_ROOT}/send-email.py" \
+        RESEARCHER_GIT_REMOTE_BASE="file://${REMOTES}" \
+        RESEARCHER_MIN_FREE_MB=1 \
+        ${env_args[@]+"${env_args[@]}"} \
+        "$CRON" ${topic[@]+"${topic[@]}"} > "${CASE_DIR}/stdout.log" 2>&1
+    RC=$?
+    set -e
+}
+
+run_dir_for_issue() {
+    grep -l "^issue_number: $1\$" "$OUT"/*/state.md 2>/dev/null | head -1 | xargs -r dirname
+}
+
+field() { grep -m1 "^$1:" "$2/state.md" | sed "s/^$1: *//; s/^\"//; s/\"\$//"; }
+
+make_bare_remote() {
+    # owner/name, then files as path=content pairs; commits them to main.
+    # Visibility comes from REMOTE_VISIBILITY (default private).
+    local name="$1"; shift
+    local work="${TEST_ROOT}/work-${name//\//-}"
+    git init -q --bare "${REMOTES}/${name}.git"
+    git init -q "$work"
+    local pair
+    for pair in "$@"; do
+        mkdir -p "$(dirname "${work}/${pair%%=*}")"
+        printf '%s\n' "${pair#*=}" > "${work}/${pair%%=*}"
+    done
+    git -C "$work" add -A
+    git -C "$work" commit -q -m "prior run"
+    git -C "$work" push -q "file://${REMOTES}/${name}.git" HEAD:refs/heads/main
+    git --git-dir="${REMOTES}/${name}.git" symbolic-ref HEAD refs/heads/main
+    echo "${REMOTE_VISIBILITY:-private}" > "${REMOTES}/${name}.git/mock-visibility"
+    rm -rf "$work"
+}
+
+age_file_days() {
+    python3 -c 'import os, sys, time; t = time.time() - float(sys.argv[2]) * 86400; os.utime(sys.argv[1], (t, t))' "$1" "$2"
+}
+
+write_run() {
+    # dir current_step status [mode]
+    local dir="${OUT}/$1"
+    mkdir -p "${dir}/experiments"
+    cat > "${dir}/state.md" <<STATE
+---
+run_id: $1
+topic: "Pre-existing run $1"
+current_step: $2
+status: $3
+mode: ${4:-autonomous}
+agent_backend: claude
+agent_model: "mock-claude"
+issue_number: ${5:-none}
+---
+
+Pre-existing run.
+STATE
+}
+
+# =============================================================================
+# 1. Publish: private repo, main branch even with init.defaultBranch=master,
+#    verified push, oversized file left out, findings posted to the issue.
+# =============================================================================
+new_case publish
+set_issues <(issue_json 101 "Gradient routing persistence" "list:research-ideas" "Does routing persist?")
+run_researcher RESEARCHER_MAX_FILE_MB=1 MOCK_BIG_FILE=true MOCK_NESTED_REPO=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 101)
+[ -n "$RUN" ] || fail "no run directory for #101"
+SLUG="research-gradient-routing-persistence"
+assert_grep "^repo create tbuckworth/${SLUG} --private " "${CASE_DIR}/gh.log"
+assert_no_grep "--public" "${CASE_DIR}/gh.log"
+assert_eq "$(git -C "$RUN" rev-parse --abbrev-ref HEAD)" "main" "local branch"
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" rev-parse refs/heads/main)" \
+    "$(git -C "$RUN" rev-parse HEAD)" "remote main = local HEAD"
+[ -z "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" for-each-ref refs/heads/master)" ] || fail "master was pushed"; ok
+assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/${SLUG}" ".repo_url"
+if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" ls-tree -r --name-only main | grep -q 'big.dat'; then
+    fail "oversized file was published"
+fi; ok
+[ -f "${RUN}/experiments/exp-001/big.dat" ] || fail "oversized file was deleted locally"; ok
+assert_grep "not publishing experiments/exp-001/big.dat" "${CASE_DIR}/stdout.log"
+if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" ls-tree -r --name-only main | grep -q 'vendored-lib'; then
+    fail "nested git repo was published"
+fi; ok
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p "main:experiments/exp-001/results.md" | grep -c Verdict)" "1" "experiment results published"
+assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
+assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
+assert_eq "$(jq -r .outcome "${RUN}/run-outcome.json")" "complete" "run-outcome.json"
+COMMENT=$(ls "${CASE_DIR}"/comments/101-*.md)
+assert_grep "outcome: complete" "$COMMENT"
+assert_grep "https://github.com/tbuckworth/${SLUG}/tree/main \(private\)" "$COMMENT"
+assert_grep "https://github.com/tbuckworth/${SLUG}/blob/main/paper/paper.pdf" "$COMMENT"
+assert_grep "\| exp-001 \| Routing localises the capability \| PASS \|" "$COMMENT"
+assert_grep "Mock finding holds on the toy setup" "$COMMENT"
+assert_grep "1\. Validate the metric at t=0" "$COMMENT"
+assert_grep "vendored-lib/ not published: it is a separate git repository" "$COMMENT"
+assert_grep "big.dat not published" "$COMMENT"
+assert_grep "issue edit 101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
+assert_grep "^--subject \[Auto-Research\] Mock result" "${CASE_DIR}/email.log"
+assert_grep "Final outcome: complete" "${RUN}/.email-prompt.txt"
+[ ! -e "${RUN}/.issue-comment.md" ] || fail "comment scratch file left behind"; ok
+
+# =============================================================================
+# 2. Push failure is surfaced: no link anywhere, outcome 'unpublished',
+#    flagged email subject, non-zero exit.
+# =============================================================================
+new_case push-failure
+set_issues <(issue_json 102 "Memetic disease transmission" "list:research-ideas")
+run_researcher MOCK_GH_CREATE_FAIL=true
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 102)
+[ ! -e "${RUN}/.repo_url" ] || fail ".repo_url written for a failed push"; ok
+assert_eq "$(field final_outcome "$RUN")" "unpublished" "final_outcome"
+COMMENT=$(ls "${CASE_DIR}"/comments/102-*.md)
+assert_grep "finished but NOT PUBLISHED" "$COMMENT"
+assert_grep "local only at \`mock-host:" "$COMMENT"
+assert_no_grep "github.com/tbuckworth/research-" "$COMMENT"
+assert_grep "^--subject \[UNPUBLISHED\] \[Auto-Research\]" "${CASE_DIR}/email.log"
+assert_grep "Published: NO" "${RUN}/.email-prompt.txt"
+
+# =============================================================================
+# 3. A nearly full disk stops publishing before git touches it, and says why.
+# =============================================================================
+new_case disk-full
+set_issues <(issue_json 103 "Salad versus soup" "list:research-ideas")
+run_researcher RESEARCHER_MIN_FREE_MB=999999999
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 103)
+[ ! -d "${RUN}/.git" ] || fail "git ran on a full disk"; ok
+assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
+jq -e '.reasons | any(test("disk nearly full"))' "${RUN}/run-outcome.json" > /dev/null || fail "disk reason missing"; ok
+assert_grep "disk nearly full" "$(ls "${CASE_DIR}"/comments/103-*.md)"
+
+# =============================================================================
+# 4. A timeout after experiments compiles the report and the run stays
+#    'complete' (it used to be overwritten to 'failed').
+# =============================================================================
+new_case timeout-after-experiments
+write_run 2026-01-01-timeout 9 experiments_complete
+mkdir -p "${OUT}/2026-01-01-timeout/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: FAIL\n' > "${OUT}/2026-01-01-timeout/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-01-timeout/experiments/exp-001/preflight.md"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN="${OUT}/2026-01-01-timeout"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "steps run (audit skipped, report compiled)"
+assert_eq "$(field status "$RUN")" "complete" "status"
+assert_eq "$(field timed_out "$RUN")" "true" "timed_out"
+assert_eq "$(field final_outcome "$RUN")" "complete-local" "final_outcome"
+jq -e '.reasons | any(test("audit was skipped"))' "${RUN}/run-outcome.json" > /dev/null || fail "timeout reason missing"; ok
+
+# =============================================================================
+# 5. A timeout before any results ends 'timed_out' / 'failed', never complete.
+# =============================================================================
+new_case timeout-early
+write_run 2026-01-02-early 2 research_complete
+run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+assert_eq "$RC" "4" "exit code"
+assert_eq "$(field status "${OUT}/2026-01-02-early")" "timed_out" "status"
+assert_eq "$(field final_outcome "${OUT}/2026-01-02-early")" "failed" "final_outcome"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran after the timeout"; ok
+
+# =============================================================================
+# 6. Picking: an issue that already ran here is not run again (tasks#1898),
+#    a weeks-old unfinished run and an interactive run are not resumed.
+# =============================================================================
+new_case pick-dedupe
+write_run 2026-03-24-old-run 11 complete autonomous 201
+write_run 2026-08-25-stale 5 active autonomous
+age_file_days "${OUT}/2026-08-25-stale/state.md" 30
+write_run 2026-10-01-interactive 7 experiments_planned interactive
+set_issues <(issue_json 201 "Loss basin hypothesis" "list:research-ideas") \
+           <(issue_json 200 "Out-of-context scheming" "list:research-ideas")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "not resuming .*2026-08-25-stale" "${CASE_DIR}/stdout.log"
+assert_grep "skip #201: already has a local run" "${CASE_DIR}/stdout.log"
+assert_grep "Picked issue #200" "${CASE_DIR}/stdout.log"
+[ -n "$(run_dir_for_issue 200)" ] || fail "no run for #200"; ok
+assert_eq "$(field status "${OUT}/2026-08-25-stale")" "active" "stale run untouched"
+assert_eq "$(field status "${OUT}/2026-10-01-interactive")" "experiments_planned" "interactive run untouched"
+
+# =============================================================================
+# 7. The same follow-up request filed twice runs once (tasks#1919/#1920).
+# =============================================================================
+new_case duplicate-followup
+DUP_BODY=$'Needs a more realistic model organism.\n\n---\nParent: #1874 | Repo: https://github.com/tbuckworth/research-salad | Run: 2026-04-03-salad'
+set_issues <(issue_json 1920 "[Follow-up] Needs a more realistic model organism" "list:research-ideas,type:follow-up,status:claude-processed" "$DUP_BODY") \
+           <(issue_json 1919 "[Follow-up] Needs a more realistic model organism" "list:research-ideas,type:follow-up" "$DUP_BODY")
+run_researcher
+assert_eq "$RC" "0" "exit code"
+assert_grep "skip #1919: duplicate follow-up" "${CASE_DIR}/stdout.log"
+assert_grep "No unprocessed research ideas found" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+
+# =============================================================================
+# 8. Follow-up publishing works in place: the branch continues the prior repo,
+#    keeps its files, adds this run's, excludes prior/, and nothing is staged
+#    in TMPDIR (the April follow-ups filled /tmp and were lost).
+# =============================================================================
+new_case followup
+make_bare_remote tbuckworth/research-prior \
+    "README.md=prior readme" "prior-only.txt=kept" "state.md=prior state" \
+    "method-spec.md=## Salad" "experiments/exp-001/results.md=## Verdict: PASS"
+FOLLOWUP_BODY=$'Use a bigger model organism.\n\n---\nParent: #399 | Repo: https://github.com/tbuckworth/research-prior | Run: prior-run'
+set_issues <(issue_json 400 "[Follow-up] Use a bigger model organism" "list:research-ideas,type:follow-up" "$FOLLOWUP_BODY")
+run_researcher
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 400)
+[ -f "${RUN}/prior/method-spec.md" ] || fail "prior method-spec.md not carried over"; ok
+grep -qE '^followup_key: [0-9a-f]{16}$' "${RUN}/state.md" || fail "followup_key not recorded"; ok
+BARE="${REMOTES}/tbuckworth/research-prior.git"
+BRANCH=$(git --git-dir="$BARE" for-each-ref --format='%(refname:short)' 'refs/heads/followup-*')
+[ -n "$BRANCH" ] || fail "no follow-up branch pushed"; ok
+TREE=$(git --git-dir="$BARE" ls-tree -r --name-only "$BRANCH")
+for path in prior-only.txt followup-context.md topic.txt experiments/exp-001/results.md .gitignore; do
+    printf '%s\n' "$TREE" | grep -qx "$path" || fail "branch is missing ${path}"
+    ok
+done
+if printf '%s\n' "$TREE" | grep -q '^prior/'; then fail "prior/ was published"; fi; ok
+assert_eq "$(git --git-dir="$BARE" rev-parse "${BRANCH}^")" "$(git --git-dir="$BARE" rev-parse main)" "branch parent is prior main"
+assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-prior/tree/${BRANCH}" ".repo_url"
+assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/400-*.md)"
+assert_grep "^Follow-up #400 finished" "$(ls "${CASE_DIR}"/comments/399-*.md)"
+[ -z "$(ls -A "${CASE_DIR}/tmp")" ] || fail "files left in TMPDIR: $(ls -A "${CASE_DIR}/tmp")"; ok
+[ -z "$(ls -A "${OUT}/.tmp" 2>/dev/null)" ] || fail "prior clone left behind"; ok
+
+# =============================================================================
+# 9. A slug already holding another run's repo is not pushed into.
+# =============================================================================
+new_case slug-collision
+make_bare_remote tbuckworth/research-collision-topic "README.md=another run"
+OTHER_HEAD=$(git --git-dir="${REMOTES}/tbuckworth/research-collision-topic.git" rev-parse main)
+set_issues <(issue_json 500 "Collision topic" "list:research-ideas")
+run_researcher
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 500)
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/research-collision-topic.git" rev-parse main)" "$OTHER_HEAD" "other run's repo untouched"
+NEW_SLUG=$(cat "${RUN}/.publish_repo")
+[ "$NEW_SLUG" != "research-collision-topic" ] || fail "reused the occupied slug"; ok
+assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/${NEW_SLUG}" ".repo_url"
+
+# =============================================================================
+# 10. Filing a follow-up is idempotent.
+# =============================================================================
+new_case create-followup
+printf '%s\n' "Needs a more realistic model organism." > "${CASE_DIR}/feedback.txt"
+FILED_BODY=$'Needs a more realistic model organism.\n\n---\nParent: #1874 | Repo: https://github.com/tbuckworth/research-salad | Run: 2026-04-03-salad'
+set_issues <(issue_json 1919 "[Follow-up] Needs a more realistic model organism" "list:research-ideas,type:follow-up" "$FILED_BODY")
+followup() {
+    env PATH="${MOCK_BIN}:${PATH}" MOCK_GH_LOG="${CASE_DIR}/gh.log" MOCK_ISSUES="${CASE_DIR}/issues.json" \
+        MOCK_COMMENTS="${CASE_DIR}/comments" \
+        "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1874 \
+        --repo-url https://github.com/tbuckworth/research-salad --run-id 2026-04-03-salad \
+        --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out"
+}
+followup
+assert_grep "Follow-up already exists \(same request\): https://github.com/tbuckworth/tasks/issues/1919" "${CASE_DIR}/followup.out"
+assert_no_grep "^issue create" "${CASE_DIR}/gh.log"
+echo '[]' > "${CASE_DIR}/issues.json"
+followup
+assert_grep "issue create .*<!-- followup-key: [0-9a-f]{16} -->" <(tr '\n' ' ' < "${CASE_DIR}/gh.log")
+assert_grep "Created follow-up issue" "${CASE_DIR}/followup.out"
+
+# =============================================================================
+# 11. An EMPTY public repo left by the old master/main bug is not reused:
+#     results would go public while every report said private.
+# =============================================================================
+new_case empty-public-repo
+git init -q --bare "${REMOTES}/tbuckworth/research-empty-public-topic.git"
+echo public > "${REMOTES}/tbuckworth/research-empty-public-topic.git/mock-visibility"
+set_issues <(issue_json 700 "Empty public topic" "list:research-ideas")
+run_researcher
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 700)
+[ -z "$(git --git-dir="${REMOTES}/tbuckworth/research-empty-public-topic.git" for-each-ref)" ] || fail "pushed into the empty public repo"; ok
+NEW_SLUG=$(cat "${RUN}/.publish_repo")
+assert_eq "$(cat "${REMOTES}/tbuckworth/${NEW_SLUG}.git/mock-visibility")" "private" "new repo visibility"
+assert_grep "\(private\)" "$(ls "${CASE_DIR}"/comments/700-*.md)"
+
+# =============================================================================
+# 12. If GitHub reports a different visibility than requested, nothing is pushed.
+# =============================================================================
+new_case visibility-mismatch
+set_issues <(issue_json 701 "Visibility mismatch topic" "list:research-ideas")
+run_researcher MOCK_GH_FORCE_VISIBILITY=public
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 701)
+assert_eq "$(field final_outcome "$RUN")" "unpublished" "final_outcome"
+[ -z "$(git --git-dir="${REMOTES}/tbuckworth/research-visibility-mismatch-topic.git" for-each-ref)" ] || fail "pushed into a public repo"; ok
+jq -e '.reasons | any(test("is public, not private"))' "${RUN}/run-outcome.json" > /dev/null || fail "visibility reason missing"; ok
+
+# =============================================================================
+# 13. A follow-up of a follow-up continues the named branch
+#     (.../tree/<branch>), not the default branch.
+# =============================================================================
+new_case followup-of-followup
+make_bare_remote tbuckworth/research-chain "README.md=chain readme" "state.md=main state"
+CHAIN_WORK="${CASE_DIR}/chain-work"
+git clone -q "file://${REMOTES}/tbuckworth/research-chain.git" "$CHAIN_WORK"
+git -C "$CHAIN_WORK" checkout -q -b followup-2026-09-01-first
+echo "first follow-up state" > "${CHAIN_WORK}/state.md"
+echo "only on the follow-up branch" > "${CHAIN_WORK}/chain-only.txt"
+git -C "$CHAIN_WORK" add -A && git -C "$CHAIN_WORK" commit -q -m "first follow-up"
+git -C "$CHAIN_WORK" push -q origin followup-2026-09-01-first
+CHAIN_BASE=$(git -C "$CHAIN_WORK" rev-parse HEAD)
+CHAIN_BODY=$'Now try a 7B organism.\n\n---\nParent: #398 | Repo: https://github.com/tbuckworth/research-chain/tree/followup-2026-09-01-first | Run: first-followup'
+set_issues <(issue_json 401 "[Follow-up] Now try a 7B organism" "list:research-ideas,type:follow-up" "$CHAIN_BODY")
+run_researcher
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 401)
+assert_grep "first follow-up state" "${RUN}/prior/state.md"
+BARE="${REMOTES}/tbuckworth/research-chain.git"
+BRANCH=$(git --git-dir="$BARE" for-each-ref --format='%(refname:short)' 'refs/heads/followup-*' | grep -v first)
+assert_eq "$(git --git-dir="$BARE" rev-parse "${BRANCH}^")" "$CHAIN_BASE" "based on the continued branch"
+git --git-dir="$BARE" ls-tree -r --name-only "$BRANCH" | grep -qx chain-only.txt || fail "continued branch's files missing"; ok
+assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-chain/tree/${BRANCH}" ".repo_url"
+
+# =============================================================================
+# 14. A follow-up never pushes private-mode results into a public prior repo.
+# =============================================================================
+new_case followup-public-prior
+REMOTE_VISIBILITY=public make_bare_remote tbuckworth/research-public-prior "README.md=public"
+PUB_BODY=$'More seeds please.\n\n---\nParent: #397 | Repo: https://github.com/tbuckworth/research-public-prior | Run: public-run'
+set_issues <(issue_json 402 "[Follow-up] More seeds please" "list:research-ideas,type:follow-up" "$PUB_BODY")
+run_researcher
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 402)
+assert_eq "$(field final_outcome "$RUN")" "unpublished" "final_outcome"
+[ -z "$(git --git-dir="${REMOTES}/tbuckworth/research-public-prior.git" for-each-ref 'refs/heads/followup-*')" ] || fail "pushed into a public prior repo"; ok
+assert_grep "is public but RESEARCHER_REPO_VISIBILITY is private" "$(ls "${CASE_DIR}"/comments/402-*.md)"
+
+# =============================================================================
+# 15. A usage-limit notice during Step 11 pauses the run; it is not counted as
+#     a completed step (which used to hot-loop the provider until timeout).
+# =============================================================================
+new_case limit-at-report
+write_run 2026-01-03-limit 10 audit_complete
+run_researcher MOCK_LIMIT_AT_STEP=11 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "provider calls"
+assert_eq "$(field status "${OUT}/2026-01-03-limit")" "audit_complete" "status left resumable"
+[ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a paused run commented on an issue"; ok
+
+# 15b. ...and the same during a Step 10 remediation round: the notice must not
+#      count as a finished audit round (that silently skipped remediation).
+new_case limit-at-audit
+write_run 2026-01-05-audit-limit 10 audit_remediating
+run_researcher MOCK_LIMIT_AT_STEP=10 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "provider calls"
+assert_eq "$(field status "${OUT}/2026-01-05-audit-limit")" "audit_remediating" "status left resumable"
+
+# =============================================================================
+# 16. A pause inside the timeout fast-track resumes at Step 11, not at the
+#     step after the one that timed out.
+# =============================================================================
+new_case timeout-pause-resume
+write_run 2026-01-04-tpr 7 experiments_planned
+mkdir -p "${OUT}/2026-01-04-tpr/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-04-tpr/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-04-tpr/experiments/exp-001/preflight.md"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 MOCK_LIMIT_AT_STEP=11 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+assert_eq "$RC" "3" "first invocation pauses"
+assert_eq "$(field current_step "${OUT}/2026-01-04-tpr")" "10" "current_step after fast-track"
+: > "${CASE_DIR}/steps.log"
+run_researcher RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "resume runs only the report"
+assert_eq "$(field final_outcome "${OUT}/2026-01-04-tpr")" "complete-local" "final_outcome"
+jq -e '.reasons | any(test("audit was skipped"))' "${OUT}/2026-01-04-tpr/run-outcome.json" > /dev/null || fail "timeout caveat lost on resume"; ok
+
+# =============================================================================
+# 17. Two runs of the same topic on the same day get separate directories.
+# =============================================================================
+new_case same-day-rerun
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Same topic"
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Same topic"
+assert_eq "$(ls -d "$OUT"/*-same-topic* | wc -l | tr -d ' ')" "2" "run directories"
+ls -d "$OUT"/*-same-topic-2 > /dev/null || fail "second run not suffixed"; ok
+
+# =============================================================================
+# 18. A model rewrite that drops run_id/topic/issue_number does not silently
+#     kill the wrapper before publishing and reporting.
+# =============================================================================
+new_case stripped-state
+set_issues <(issue_json 800 "Stripped state topic" "list:research-ideas")
+run_researcher MOCK_STRIP_FIELDS_AT_STEP=11
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 800)
+[ -n "$RUN" ] || fail "issue_number not restored"; ok
+assert_eq "$(field run_id "$RUN")" "$(basename "$RUN")" "run_id restored"
+assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/800-*.md)"
+
+echo "Researcher lifecycle tests passed (${PASSES} assertions)."

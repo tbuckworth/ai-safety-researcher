@@ -132,7 +132,15 @@ required.
 | Setting | Purpose |
 |---------|---------|
 | `RESEARCHER_OUTPUT_DIR` | Override `/media/titus/big/researcher-output` |
-| `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues |
+| `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues (outcome `complete-local`) |
+| `RESEARCHER_REPO_VISIBILITY` | Visibility of new run repos: `private` (default), `internal`, or `public` |
+| `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024) and reports why |
+| `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (default 50; GitHub rejects >100 MB, failing the whole push) |
+| `RESEARCHER_ALLOW_RERUN=true` | Let the queue pick an issue that already has a run directory here (default: skip it; `RESEARCHER_ISSUE=<n>` also re-runs one deliberately) |
+| `RESEARCHER_RESUME_MAX_AGE_DAYS` | An unfinished autonomous run untouched for longer is not auto-resumed (default 14; 0 disables). Interactive runs (`mode: interactive`) are never resumed |
+| `RESEARCHER_TIMEOUT_SECONDS` | Run timeout in seconds; overrides `RESEARCHER_TIMEOUT_HOURS` |
+| `RESEARCHER_GITHUB_OWNER` / `RESEARCHER_TASKS_REPO` | Owner of run repos (default `tbuckworth`) / the issue queue (default `tbuckworth/tasks`) |
+| `RESEARCHER_GIT_REMOTE_BASE` | Where git pushes (default `https://github.com`; tests point it at local bare repos) |
 | `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
 | `RESEARCHER_EMAIL_TO` | Fixed self-recipient for autonomous delivery |
 | `RESEARCHER_SEND_EMAIL_SCRIPT` | Override shared Gmail helper |
@@ -247,8 +255,22 @@ and a failed one is logged and stepped past. It never fails a step.
   - `status:claude-processed` — completed
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
-- **Repos**: Created as `tbuckworth/research-<slug>`, public, with PR for audit trail
-- **Issue comments**: Bot adds a comment with repo link and status on completion
+- **Repos**: Created as `tbuckworth/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
+- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`:
+
+  | Outcome | Meaning | Exit |
+  |---------|---------|------|
+  | `complete` | Workflow finished, ≥1 valid PASS/FAIL verdict (or a theory-only negative result), push verified | 0 |
+  | `complete-local` | As complete, but publishing was skipped on purpose | 0 |
+  | `unpublished` | Finished with results, but publishing failed (reason recorded: push error, disk nearly full, ...) | 4 |
+  | `no-results` | Finished, but no experiment produced a valid verdict (e.g. all `INCONCLUSIVE`) | 4 |
+  | `partial` | Stopped early (timeout or failure) with some valid results | 4 |
+  | `failed` | Stopped early with no valid results | 4 |
+  | `paused` | Provider usage limit; resumable, nothing published | 3 |
+
+  A timeout no longer overwrites a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
+- **Issue comments**: on completion the issue gets a findings comment: the outcome and its caveats, repo / paper / next-steps links (or the local path when nothing was published), the per-experiment verdict table, the audit disposition, and the ranked next steps. A follow-up's parent issue gets the same comment.
+- **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming.
 
 ## Logs
 
@@ -320,7 +342,7 @@ since a redesign would answer a question that was never actually asked.
 1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas` and `type:follow-up`.
 
 2. **Autonomous pickup**: The cron wrapper picks the follow-up issue like any other research idea. When it detects the `type:follow-up` label, it:
-   - Clones the prior repo to copy key artifacts into a `prior/` subdirectory
+   - Clones the prior repo (on the output volume, never `/tmp`) to copy key artifacts into a `prior/` subdirectory
    - Creates a `followup-context.md` with the feedback
    - Creates a fresh run directory (not inside the prior repo)
 
@@ -329,7 +351,9 @@ since a redesign would answer a question that was never actually asked.
    - "Redesign the approach" → skips to Step 5 (copies prior literature)
    - "Wrong framing, needs new literature" → runs full workflow from Step 2
 
-4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo. Both the follow-up issue and the parent issue get completion comments with cross-links.
+4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo, published in place: the branch starts from the branch being continued (the prior repo's default branch, or the `/tree/<branch>` in the issue's `Repo:` link for a follow-up of a follow-up) and the run directory is laid over it (`prior/` excluded), so nothing is copied. **A follow-up is not pushed into a prior repo whose visibility differs from `RESEARCHER_REPO_VISIBILITY`** (e.g. an older public repo while the default is private): the run ends `unpublished` with that reason, so making results public stays a deliberate choice. Both the follow-up issue and the parent issue get the findings comment.
+
+`create-followup-issue.sh` is idempotent: it embeds a follow-up key (a hash of the request) in the issue body and reports an existing issue with the same key instead of filing a second one. `--force` files anyway.
 
 ### Issue Labels
 

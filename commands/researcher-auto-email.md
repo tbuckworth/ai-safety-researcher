@@ -38,6 +38,8 @@ The run directory is: **{{argument}}**
    - `paper/sections/future-work.tex` — the paper's Future Work section (fallback source for next steps)
    - `rethink-rationale.md` — why the approach doesn't work (if exists)
    - `audit/results-audit.md` — the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
+   - `run-outcome.json` — the wrapper's verified final outcome (`outcome`, `reasons`, `publish_state`, per-experiment verdicts). In autonomous mode the same facts are in the handoff above. **It is authoritative**: if `outcome` is not `complete`, the email's first line says so plainly (e.g. "This run finished but its results are not on GitHub", "No experiment produced a valid result"), and nothing in the email may contradict it.
+   - `experiments/*/preflight.md` — each experiment's pre-flight checks. An experiment whose verdict is `INCONCLUSIVE` (or whose pre-flight has a `FAIL`) could not answer its question: describe it that way, never as a negative result.
    - `.repo_url` — GitHub repo URL. **This file only exists if the repo push was confirmed successful.** If it is missing or empty, the code did NOT reach GitHub — OMIT the "Repo" row in the Bottom Line table and the GitHub entry in the Links section entirely, and do NOT invent a URL. In that case add a one-line note that results are attached/local (in the run directory) rather than linking to a repo.
 
 2b. **If `next-steps.md` does not exist, write it yourself before composing.**
@@ -70,7 +72,7 @@ The run directory is: **{{argument}}**
 
 3. **Compose the email as HTML**.
 
-   **Subject**: `[Auto-Research] <short plain-English topic> — <verdict> — <N pass, M fail>`
+   **Subject**: `[Auto-Research] <short plain-English topic> — <verdict> — <N pass, M fail[, K inconclusive]>` (counts as in `run-outcome.json`; the wrapper prefixes a non-`complete` outcome itself, so do not add it)
    If RETHINK_APPROACH: `[Auto-Research] <short plain-English topic> — Negative Result`
 
    **HTML body** — use this structure with inline styles (Gmail strips `<style>` blocks, so ALL styles must be inline):

@@ -31,6 +31,28 @@ LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
 LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
 TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
+TIMEOUT_SECONDS="${RESEARCHER_TIMEOUT_SECONDS:-$(( TIMEOUT_HOURS * 3600 ))}"
+# A non-terminal run untouched for this long is not resumed automatically: an
+# abandoned run from weeks ago must not silently take over tonight's slot.
+# 0 disables the check.
+RESUME_MAX_AGE_DAYS="${RESEARCHER_RESUME_MAX_AGE_DAYS:-14}"
+# An issue that already has a run directory here is not picked from the queue
+# again (tasks#1898 was run twice). RESEARCHER_ISSUE=<n> re-runs one deliberately.
+ALLOW_RERUN="${RESEARCHER_ALLOW_RERUN:-false}"
+
+# GitHub publication. Run repos hold unreviewed research and are private unless
+# deliberately made public.
+REPO_OWNER="${RESEARCHER_GITHUB_OWNER:-tbuckworth}"
+TASKS_REPO="${RESEARCHER_TASKS_REPO:-tbuckworth/tasks}"
+REPO_VISIBILITY="${RESEARCHER_REPO_VISIBILITY:-private}"
+# Where git pushes to. Only tests override this (with a file:// directory of bare repos).
+GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-https://github.com}"
+# Publishing refuses to start below this much free space on the run volume, and
+# never publishes a single file at or above MAX_FILE_MB (GitHub rejects files
+# over 100 MB, which fails the whole push).
+MIN_FREE_MB="${RESEARCHER_MIN_FREE_MB:-1024}"
+MAX_FILE_MB="${RESEARCHER_MAX_FILE_MB:-50}"
+LIB="${SCRIPT_DIR}/researcher_lib.py"
 # Per-step retry: a connection drop mid-step
 # leaves state.md un-advanced; re-running the step from current state recovers it.
 # Bounded so a genuinely stuck step still fails instead of looping forever.
@@ -148,6 +170,14 @@ is_true() {
     esac
 }
 
+# https://github.com/<owner>/<name>[.git][/] -> the git remote to fetch/push.
+git_remote_for() {
+    local path="${1%/}"
+    path="${path%.git}"
+    path="${path#https://github.com/}"
+    printf '%s/%s.git\n' "$GIT_REMOTE_BASE" "$path"
+}
+
 if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$HDD" ]; then
     echo "ERROR: storage root not mounted at ${HDD}." >&2
     echo "Set RESEARCHER_OUTPUT_DIR to use a different location." >&2
@@ -208,6 +238,19 @@ if [ "$BACKEND" = "codex" ]; then
     esac
 fi
 
+case "$REPO_VISIBILITY" in
+    private|internal|public) ;;
+    *)
+        log "ERROR: RESEARCHER_REPO_VISIBILITY must be private, internal or public, got '${REPO_VISIBILITY}'."
+        exit 2
+        ;;
+esac
+
+if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
+    log "ERROR: python3 and ${LIB} are required. Exiting."
+    exit 1
+fi
+
 log "Agent backend: ${BACKEND}; model: ${MODEL}"
 
 # Check if GPU is busy (>500MB VRAM used by any single process = busy)
@@ -230,19 +273,52 @@ PARENT_ISSUE=""
 PRIOR_REPO_URL=""
 PRIOR_RUN_ID=""
 FEEDBACK=""
+FOLLOWUP_KEY=""
+
+is_terminal_status() {
+    case "$1" in
+        complete|failed|aborted_rethink|timed_out) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 find_in_progress_run() {
+    # Prints the run to resume on stdout; everything else goes to stderr.
+    local state_file status mode
     # Runs live under machine-generated slug paths without whitespace.
     # shellcheck disable=SC2045
     for state_file in $(ls -1t "$OUTPUT_DIR"/*/state.md 2>/dev/null); do
-        local status
         status=$(grep '^status:' "$state_file" | head -1 | awk '{print $2}')
-        if [ "$status" != "complete" ] && [ "$status" != "failed" ] && [ "$status" != "aborted_rethink" ]; then
-            dirname "$state_file"
-            return 0
+        is_terminal_status "$status" && continue
+        # An interactive /researcher run shares the output directory; cron must
+        # never take one over.
+        mode=$(grep '^mode:' "$state_file" | head -1 | awk '{print $2}')
+        if [ -n "$mode" ] && [ "$mode" != "autonomous" ]; then
+            continue
         fi
+        if [ "$RESUME_MAX_AGE_DAYS" -gt 0 ] 2>/dev/null \
+            && [ -n "$(find "$state_file" -mtime +"$(( RESUME_MAX_AGE_DAYS - 1 ))" 2>/dev/null)" ]; then
+            log "WARN: not resuming $(dirname "$state_file"): status '${status}', untouched for over ${RESUME_MAX_AGE_DAYS} days. Resume it by hand or set its status to failed." >&2
+            continue
+        fi
+        dirname "$state_file"
+        return 0
     done
     return 1
+}
+
+issue_is_claimed() {
+    # Re-read the issue's labels right before claiming it: the listing may be
+    # minutes old, and another runner (the other backend, another machine) may
+    # have claimed it since.
+    local number="$1" include_processed="$2" fresh
+    fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state 2>/dev/null) || return 1
+    echo "$fresh" | jq -e --arg p "$include_processed" '
+        (.state != "OPEN") or
+        (.labels | map(.name) | any(
+            . == "status:claude-researching" or . == "status:codex-researching" or
+            ($p == "true" and (. == "status:claude-processed" or . == "status:codex-processed"))
+        ))' > /dev/null
 }
 
 pick_issue() {
@@ -253,7 +329,7 @@ pick_issue() {
         # Still refuses one already claimed, so two runs can't collide.
         local target gh_err gh_status
         gh_err="${TMPDIR:-/tmp}/researcher-gh-$$.err"
-        target=$(gh issue view "$RESEARCHER_ISSUE" --repo tbuckworth/tasks \
+        target=$(gh issue view "$RESEARCHER_ISSUE" --repo "$TASKS_REPO" \
             --json number,title,body,labels,state 2>"$gh_err") && gh_status=0 || gh_status=$?
         if [ "$gh_status" -ne 0 ] || [ -z "$target" ]; then
             local gh_msg
@@ -264,12 +340,12 @@ pick_issue() {
             # is fatal: unlike the queue path, an explicitly requested issue
             # that doesn't resolve means the run cannot do what was asked.
             if [ "$gh_status" -eq 0 ]; then
-                log "ERROR: issue #${RESEARCHER_ISSUE} returned no data from tbuckworth/tasks."
+                log "ERROR: issue #${RESEARCHER_ISSUE} returned no data from ${TASKS_REPO}."
                 exit 1
             fi
             case "$gh_msg" in
                 *"Could not resolve to"*|*"Not Found"*|*"not found"*)
-                    log "ERROR: issue #${RESEARCHER_ISSUE} not found in tbuckworth/tasks."
+                    log "ERROR: issue #${RESEARCHER_ISSUE} not found in ${TASKS_REPO}."
                     ;;
                 *)
                     log "ERROR: could not read issue #${RESEARCHER_ISSUE} (gh exit ${gh_status}): ${gh_msg:-no stderr}"
@@ -279,32 +355,31 @@ pick_issue() {
             exit 1
         fi
         rm -f "$gh_err"
-        picked=$(echo "$target" | jq -r '
+        picked=$(echo "$target" | jq -c '
             select(.state == "OPEN")
-            | select(.labels | map(.name) | index("list:research-ideas"))
-            | select(
-                (.labels | map(.name) | index("status:claude-researching") | not) and
-                (.labels | map(.name) | index("status:codex-researching") | not)
-              ) // empty')
+            | select(.labels | map(.name) | index("list:research-ideas")) // empty')
+        if [ -n "$picked" ]; then
+            # Refuses an issue being researched right now or with a run already
+            # in progress here; allows a deliberate re-run of a finished one.
+            picked=$(echo "$picked" | python3 "$LIB" pick --explicit --output-dir "$OUTPUT_DIR")
+        fi
         if [ -z "$picked" ] || [ "$picked" = "null" ]; then
             log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed list:research-ideas issue."
             exit 1
         fi
     else
-    local issues
-    issues=$(gh issue list --repo tbuckworth/tasks \
+    local issues allow_rerun_flag=()
+    issues=$(gh issue list --repo "$TASKS_REPO" \
         --label "list:research-ideas" \
         --state open \
         --json number,title,body,labels \
         --limit 50)
 
-    picked=$(echo "$issues" | jq -r '
-        [.[] | select(
-            (.labels | map(.name) | index("status:claude-researching") | not) and
-            (.labels | map(.name) | index("status:claude-processed") | not) and
-            (.labels | map(.name) | index("status:codex-researching") | not) and
-            (.labels | map(.name) | index("status:codex-processed") | not)
-        )] | first // empty')
+    # Skips claimed/processed issues, issues already run on this machine, and
+    # duplicate follow-up requests (tasks#1919/#1920 were the same request filed
+    # twice and run on consecutive nights).
+    is_true "$ALLOW_RERUN" && allow_rerun_flag=(--allow-rerun)
+    picked=$(echo "$issues" | python3 "$LIB" pick --output-dir "$OUTPUT_DIR" ${allow_rerun_flag[@]+"${allow_rerun_flag[@]}"})
     fi
 
     if [ -z "$picked" ] || [ "$picked" = "null" ]; then
@@ -313,18 +388,25 @@ pick_issue() {
     fi
 
     ISSUE_NUMBER=$(echo "$picked" | jq -r '.number')
-    local title body
+    FOLLOWUP_KEY=$(echo "$picked" | jq -r '.followup_key // ""')
+    local title body include_processed=true
     title=$(echo "$picked" | jq -r '.title')
     body=$(echo "$picked" | jq -r '.body // ""')
+
+    [ -n "${RESEARCHER_ISSUE:-}" ] && include_processed=false
+    if issue_is_claimed "$ISSUE_NUMBER" "$include_processed"; then
+        log "Issue #${ISSUE_NUMBER} was claimed or closed by another runner since the listing. Exiting."
+        exit 0
+    fi
 
     log "Picked issue #${ISSUE_NUMBER}: ${title}"
 
     gh label create "$PROCESSING_LABEL" \
-        --repo tbuckworth/tasks \
+        --repo "$TASKS_REPO" \
         --color "0E8A16" \
         --description "Currently being researched by the ${BACKEND} autonomous agent" \
         2>/dev/null || true
-    gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks --add-label "$PROCESSING_LABEL"
+    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" --add-label "$PROCESSING_LABEL"
 
     TOPIC="$title"
     if [ -n "$body" ] && [ "$body" != "null" ]; then
@@ -346,39 +428,12 @@ ${body}"
     fi
 }
 
-create_run_dir() {
-    local slug date_prefix run_id
-    date_prefix=$(date +%Y-%m-%d)
-    slug=$(echo "$TOPIC" | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
-    run_id="${date_prefix}-${slug}"
-    RUN_DIR="${OUTPUT_DIR}/${run_id}"
-
-    mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge"
-
-    cat > "${RUN_DIR}/state.md" << STATEEOF
----
-run_id: ${run_id}
-topic: "$(echo "$TOPIC" | head -1 | sed 's/"/\\"/g')"
-current_step: 0
-status: initialized
-mode: autonomous
-agent_backend: ${BACKEND}
-agent_model: "${MODEL}"
-issue_number: ${ISSUE_NUMBER:-none}
-compute_profile: "${COMPUTE_PROFILE}"
-knowledge_base: "${KB_DIR:-none}"
-clarifications: []
-decisions: []
----
-
-Autonomous research run initialized.
-Topic: $(echo "$TOPIC" | head -1)
-STATEEOF
-
-    echo "$TOPIC" > "${RUN_DIR}/topic.txt"
-
-    # .gitignore for when we git-init this directory later
-    cat > "${RUN_DIR}/.gitignore" << 'GIEOF'
+write_gitignore() {
+    # Written into every run directory, which is git-initialised in place at
+    # publish time. A follow-up also ignores prior/ (the previous run's copied
+    # artifacts, already in the repo it continues).
+    local dir="$1"
+    cat > "${dir}/.gitignore" << 'GIEOF'
 # Model checkpoints and weights (GitHub 100MB hard limit)
 *.pt
 *.pth
@@ -422,6 +477,43 @@ Thumbs.db
 *.bak
 *.swp
 GIEOF
+    if [ -f "${dir}/followup-context.md" ] || [ -d "${dir}/prior" ]; then
+        printf '\n# Previous run artifacts copied in for context (already in the repo)\n/prior/\n' >> "${dir}/.gitignore"
+    fi
+}
+
+create_run_dir() {
+    local slug date_prefix run_id
+    date_prefix=$(date +%Y-%m-%d)
+    slug=$(echo "$TOPIC" | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
+    run_id="${date_prefix}-${slug}"
+    RUN_DIR="${OUTPUT_DIR}/${run_id}"
+
+    mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge"
+
+    cat > "${RUN_DIR}/state.md" << STATEEOF
+---
+run_id: ${run_id}
+topic: "$(echo "$TOPIC" | head -1 | sed 's/"/\\"/g')"
+current_step: 0
+status: initialized
+mode: autonomous
+agent_backend: ${BACKEND}
+agent_model: "${MODEL}"
+issue_number: ${ISSUE_NUMBER:-none}
+compute_profile: "${COMPUTE_PROFILE}"
+knowledge_base: "${KB_DIR:-none}"
+clarifications: []
+decisions: []
+---
+
+Autonomous research run initialized.
+Topic: $(echo "$TOPIC" | head -1)
+STATEEOF
+
+    echo "$TOPIC" > "${RUN_DIR}/topic.txt"
+
+    write_gitignore "$RUN_DIR"
 
     log "Created run directory: ${RUN_DIR}"
 }
@@ -435,12 +527,15 @@ setup_followup_run() {
 
     mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge" "${RUN_DIR}/prior"
 
-    # Clone the prior repo into a temp dir and copy key artifacts
+    # Clone the prior repo and copy key artifacts. The clone goes on the output
+    # volume, never /tmp: /tmp is on the small root disk.
     if [ -n "$PRIOR_REPO_URL" ]; then
         local tmp_clone
-        tmp_clone=$(mktemp -d)
+        mkdir -p "${OUTPUT_DIR}/.tmp"
+        tmp_clone=$(mktemp -d "${OUTPUT_DIR}/.tmp/prior-clone.XXXXXX")
         log "Cloning prior repo ${PRIOR_REPO_URL} for context..."
-        if gh repo clone "$PRIOR_REPO_URL" "$tmp_clone" -- --depth 1 2>/dev/null; then
+        if git clone -q --depth 1 "$(git_remote_for "$PRIOR_REPO_URL")" "$tmp_clone" 2>/dev/null \
+            && git -C "$tmp_clone" rev-parse -q --verify HEAD >/dev/null; then
             # Copy key prior artifacts
             [ -f "$tmp_clone/state.md" ] && cp "$tmp_clone/state.md" "${RUN_DIR}/prior/state.md"
             [ -f "$tmp_clone/briefing.md" ] && cp "$tmp_clone/briefing.md" "${RUN_DIR}/prior/briefing.md"
@@ -448,6 +543,7 @@ setup_followup_run() {
             [ -f "$tmp_clone/novelty-assessment.md" ] && cp "$tmp_clone/novelty-assessment.md" "${RUN_DIR}/prior/novelty-assessment.md"
             [ -f "$tmp_clone/success-criteria.md" ] && cp "$tmp_clone/success-criteria.md" "${RUN_DIR}/prior/success-criteria.md"
             [ -f "$tmp_clone/next-steps.md" ] && cp "$tmp_clone/next-steps.md" "${RUN_DIR}/prior/next-steps.md"
+            [ -f "$tmp_clone/method-spec.md" ] && cp "$tmp_clone/method-spec.md" "${RUN_DIR}/prior/method-spec.md"
             [ -d "$tmp_clone/literature" ] && cp -r "$tmp_clone/literature" "${RUN_DIR}/prior/literature"
             [ -d "$tmp_clone/challenge" ] && cp -r "$tmp_clone/challenge" "${RUN_DIR}/prior/challenge"
             # The prior repo's own knowledge base — what this research line has
@@ -472,7 +568,7 @@ setup_followup_run() {
             fi
             log "Prior artifacts copied to ${RUN_DIR}/prior/"
         else
-            log "WARN: Failed to clone ${PRIOR_REPO_URL}. Proceeding without prior context."
+            log "WARN: Failed to clone ${PRIOR_REPO_URL} (unreachable or empty). Proceeding without prior context."
         fi
         rm -rf "$tmp_clone"
     fi
@@ -518,6 +614,7 @@ is_followup: true
 parent_issue: ${PARENT_ISSUE:-none}
 prior_repo: ${PRIOR_REPO_URL}
 prior_run_id: ${PRIOR_RUN_ID}
+followup_key: ${FOLLOWUP_KEY:-none}
 compute_profile: "${COMPUTE_PROFILE}"
 knowledge_base: "${KB_DIR:-none}"
 clarifications: []
@@ -528,6 +625,8 @@ Follow-up research run initialized.
 Topic: ${original_topic}
 Parent issue: #${PARENT_ISSUE}
 STATEEOF
+
+    write_gitignore "$RUN_DIR"
 
     log "Follow-up run directory ready: ${RUN_DIR}"
 }
@@ -641,6 +740,13 @@ ensure_runtime_state() {
         && upsert_frontmatter_field "knowledge_base" "$(yaml_quote "${KB_DIR:-none}")"
 }
 
+set_status() {
+    # Frontmatter only: a bare `sed s/^status:/` also rewrote any body line
+    # that happened to start with "status:".
+    upsert_frontmatter_field "status" "$1" \
+        || sed -i.bak "s/^status:.*/status: $1/" "${RUN_DIR}/state.md"
+}
+
 build_codex_preamble() {
     cat <<EOF
 # Codex Runtime Adapter
@@ -731,6 +837,18 @@ build_email_prompt() {
 
 These are the real paths on the machine that produced this run. Use them exactly;
 never substitute a placeholder, a guessed path, or a different hostname.
+
+## Wrapper-verified outcome (authoritative; state it, never contradict it)
+
+- Final outcome: ${FINAL_OUTCOME:-unknown}
+- Workflow status: ${STATUS:-unknown}
+- Published: $(if [ "${PUBLISH_STATE:-}" = "pushed" ]; then echo "yes, verified on GitHub (${REPO_VISIBILITY} repo): $(cat "${RUN_DIR}/.repo_url" 2>/dev/null)"; elif [ "${PUBLISH_STATE:-}" = "failed" ]; then echo "NO - ${PUBLISH_ERROR}. Say so near the top of the email and give no repo link."; else echo "no (publishing skipped for this run); give no repo link."; fi)
+- Caveats:
+${OUTCOME_REASONS:-  - none}
+
+The full machine-readable outcome is in ${RUN_DIR}/run-outcome.json. If the
+final outcome is anything other than \`complete\`, the email's first line must
+say so plainly (e.g. "This run finished but its results are NOT on GitHub").
 EOF
     echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
 }
@@ -883,14 +1001,14 @@ run_step() {
                 # not per wait, so waiting can never outrun the run timeout.
                 while [ -n "${outstanding// /}" ] \
                     && [ "$total_waited" -lt "$JOB_WAIT_MAX_SECONDS" ] \
-                    && [ $(( $(date +%s) - START_TIME )) -lt $(( TIMEOUT_HOURS * 3600 )) ]; do
+                    && [ $(( $(date +%s) - START_TIME )) -lt "$TIMEOUT_SECONDS" ]; do
                     sleep "$JOB_WAIT_POLL_SECONDS"
                     waited=$((waited + JOB_WAIT_POLL_SECONDS))
                     total_waited=$((total_waited + JOB_WAIT_POLL_SECONDS))
                     outstanding=$(outstanding_jobs)
                 done
                 if [ -n "${outstanding// /}" ]; then
-                    log "Step ${step}: job(s) still outstanding after ${waited}s (cumulative ${total_waited}s of ${JOB_WAIT_MAX_SECONDS}s, run timeout ${TIMEOUT_HOURS}h); giving up on waiting."
+                    log "Step ${step}: job(s) still outstanding after ${waited}s (cumulative ${total_waited}s of ${JOB_WAIT_MAX_SECONDS}s, run timeout ${TIMEOUT_SECONDS}s); giving up on waiting."
                 else
                     refunds=$((refunds + 1))
                     attempt=$((attempt - 1))
@@ -904,32 +1022,57 @@ run_step() {
     done
 
     log "Step ${step} failed after ${STEP_MAX_ATTEMPTS} attempts. Marking run failed."
-    sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+    set_status failed
     return 1
 }
+
+pause_run() {
+    # Paused on a provider limit, not finished: publishing a partial repo,
+    # emailing a non-result, and marking the issue processed would all be
+    # wrong, and would strand the run. Leave everything resumable.
+    log "Run PAUSED at step $1. Skipping repo publish, email, and issue update."
+    log "Resume with the same command once the provider limit resets."
+    SKIP_PUBLISH=true
+    SKIP_EMAIL=true
+    PAUSED=true
+}
+
+# A timeout is recorded in state.md, so a run paused during its timeout
+# fast-track still reports the skipped audit when it is resumed.
+TIMED_OUT=false
+grep -q '^timed_out: true' "${RUN_DIR}/state.md" && TIMED_OUT=true
 
 # Main step loop
 while true; do
     CURRENT_STEP=$(get_current_step)
     STATUS=$(get_status)
 
-    case "$STATUS" in
-        complete|failed|aborted_rethink)
-            log "Run reached terminal state: ${STATUS}"
-            break
-            ;;
-    esac
+    if is_terminal_status "$STATUS"; then
+        log "Run reached terminal state: ${STATUS}"
+        break
+    fi
 
     ELAPSED=$(( $(date +%s) - START_TIME ))
-    if [ $ELAPSED -gt $(( TIMEOUT_HOURS * 3600 )) ]; then
-        log "Timeout (${TIMEOUT_HOURS}h) reached at step ${CURRENT_STEP}. Fast-tracking to the report."
+    if [ "$ELAPSED" -gt "$TIMEOUT_SECONDS" ]; then
+        TIMED_OUT=true
+        upsert_frontmatter_field "timed_out" "true" || true
+        log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
+        STEP_RC=0
         if [ "$CURRENT_STEP" -ge 5 ]; then
             # Bypass the audit (Step 10) on a timed-out run — never re-enter a
             # multi-hour remediation re-run — and compile whatever exists (Step 11).
-            sed -i.bak "s/^status:.*/status: audit_complete/" "${RUN_DIR}/state.md"
-            run_step 11 || true
+            log "Skipping the results audit and compiling the report from what exists."
+            set_status audit_complete
+            run_step 11 || STEP_RC=$?
         fi
-        sed -i.bak "s/^status:.*/status: failed/" "${RUN_DIR}/state.md"
+        if [ "$STEP_RC" -eq 2 ]; then
+            pause_run 11
+        elif [ "$(get_status)" != "complete" ]; then
+            # Only a run whose report did NOT complete is marked timed out. A
+            # finished report keeps status complete: the timeout used to
+            # overwrite finished runs to "failed" (tasks#1874).
+            set_status timed_out
+        fi
         break
     fi
 
@@ -938,11 +1081,12 @@ while true; do
     if [ "$CURRENT_STEP" -eq 10 ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
         if [ "$AUDIT_ROUNDS" -ge 4 ]; then
+            # Hand over to the report like any other audit exit; the report's
+            # own success or failure then decides the status. (Forcing
+            # "complete" here used to mark runs complete whose report failed.)
             log "Audit-remediation ceiling reached (${AUDIT_ROUNDS} rounds). Forcing the report."
-            sed -i.bak "s/^status:.*/status: audit_complete/" "${RUN_DIR}/state.md"
-            run_step 11 || true
-            sed -i.bak "s/^status:.*/status: complete/" "${RUN_DIR}/state.md"
-            break
+            set_status audit_complete
+            continue
         fi
         NEXT_STEP=10
     else
@@ -953,20 +1097,15 @@ while true; do
 
     if [ "$NEXT_STEP" -gt 11 ]; then
         log "All steps completed."
+        # Step 11 advanced current_step but left a non-terminal status.
+        set_status complete
         break
     fi
 
     STEP_RC=0
     run_step "$NEXT_STEP" || STEP_RC=$?
     if [ "$STEP_RC" -eq 2 ]; then
-        # Paused on a provider limit, not finished: publishing a partial repo,
-        # emailing a non-result, and marking the issue processed would all be
-        # wrong, and would strand the run. Leave everything resumable.
-        log "Run PAUSED at step ${NEXT_STEP}. Skipping repo publish, email, and issue update."
-        log "Resume with the same command once the provider limit resets."
-        SKIP_PUBLISH=true
-        SKIP_EMAIL=true
-        PAUSED=true
+        pause_run "$NEXT_STEP"
         break
     elif [ "$STEP_RC" -ne 0 ]; then
         log "Step ${NEXT_STEP} did not complete. Stopping."
@@ -974,40 +1113,155 @@ while true; do
     fi
 done
 
-# --- Post-completion: Create GitHub repo (git init in place, no copying) ---
+# --- Post-completion: publish to GitHub (git init in place, no copying) ---
 STATUS=$(get_status)
 RUN_ID=$(grep '^run_id:' "${RUN_DIR}/state.md" | head -1 | sed 's/run_id: *//')
 TOPIC_LINE=$(grep '^topic:' "${RUN_DIR}/state.md" | head -1 | sed 's/topic: *"*//;s/"*$//')
-REPO_URL=""
 
-create_github_repo() {
-    # Follow-up runs push to the existing repo on a new branch
-    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]; then
-        push_followup_results
-        return
+# Publication result, consumed by the outcome, the email and the issue comment.
+#   PUBLISH_STATE: pushed (the remote branch verifiably holds this run's HEAD),
+#                  failed, or skipped (deliberately not published)
+PUBLISH_STATE="skipped"
+PUBLISH_ERROR=""
+REPO_WEB=""
+REPO_BRANCH="main"
+
+publish_fail() {
+    PUBLISH_STATE="failed"
+    PUBLISH_ERROR="$1"
+    log "ERROR: publishing failed: $1. Results remain local in ${RUN_DIR}; no repo link will be advertised."
+}
+
+free_mb() {
+    df -Pm "$1" 2>/dev/null | awk 'NR == 2 {print $4}'
+}
+
+check_free_space() {
+    local free
+    free=$(free_mb "$RUN_DIR")
+    if [ -n "$free" ] && [ "$free" -lt "$MIN_FREE_MB" ] 2>/dev/null; then
+        publish_fail "disk nearly full: ${free} MB free on the run volume, publishing needs ${MIN_FREE_MB} MB"
+        return 1
+    fi
+}
+
+prepare_local_repo() {
+    # Run inside RUN_DIR. Sets up the repo, the branch and the remote, and keeps
+    # wrapper bookkeeping and oversized files out of the commit.
+    local branch="$1" remote="$2"
+    [ -d .git ] || git init -q
+    if git rev-parse -q --verify HEAD >/dev/null; then
+        git branch -M "$branch"
+    else
+        # Name the unborn branch explicitly. Relying on git's default branch
+        # name is what left 14 repos empty: runs committed on 'master' and
+        # pushed 'main' ("src refspec main does not match any").
+        git symbolic-ref HEAD "refs/heads/${branch}"
+    fi
+    git remote remove origin 2>/dev/null || true
+    git remote add origin "$remote"
+    [ -f .gitignore ] || write_gitignore "$RUN_DIR"
+    local exclude=".git/info/exclude"
+    mkdir -p .git/info
+    grep -qxF '/.repo_url' "$exclude" 2>/dev/null \
+        || printf '%s\n' '/.repo_url' '/.publish_repo' '/.publish_branch' '/run-outcome.json' '*.runtime.tmp' >> "$exclude"
+}
+
+exclude_large_files() {
+    # GitHub rejects any file over 100 MB, and one such file fails the whole
+    # push. Leave oversized files out of the commit (they stay on disk) rather
+    # than lose the publication.
+    local file bytes limit=$(( MAX_FILE_MB * 1024 * 1024 ))
+    while IFS= read -r -d '' file; do
+        [ -f "$file" ] || continue
+        bytes=$(wc -c < "$file" | tr -d ' ')
+        if [ "$bytes" -ge "$limit" ]; then
+            printf '/%s\n' "$file" | sed 's/[][*?\\!#]/\\&/g' >> .git/info/exclude
+            log "WARN: not publishing ${file} ($(( bytes / 1048576 )) MB, limit ${MAX_FILE_MB} MB); it stays in the run directory."
+        fi
+    done < <(git ls-files --others --modified --exclude-standard -z)
+}
+
+commit_all() {
+    # $1: add mode ("all" stages deletions; "overlay" keeps files only the
+    # remote base has). Returns non-zero unless every change is committed.
+    local add_args=(-A)
+    [ "$1" = "overlay" ] && add_args=(--ignore-removal .)
+    if ! git add "${add_args[@]}"; then
+        publish_fail "git add failed (disk full?)"
+        return 1
+    fi
+    git commit -q -m "$2" || true
+    local leftover
+    leftover=$(git status --porcelain)
+    if [ "$1" = "overlay" ]; then
+        # Files only the base branch has show as deleted here, by design.
+        leftover=$(printf '%s\n' "$leftover" | grep -v '^ D ' || true)
+    fi
+    if ! git rev-parse -q --verify HEAD >/dev/null || [ -n "$leftover" ]; then
+        publish_fail "git commit failed; the run directory is not fully committed (disk full?)"
+        return 1
+    fi
+}
+
+push_and_verify() {
+    # Success means the remote branch now points at exactly our HEAD — not
+    # just that git push exited 0, and not that the repo is non-empty.
+    local branch="$1" head remote_head
+    head=$(git rev-parse HEAD)
+    if ! git push origin "HEAD:refs/heads/${branch}" 2>&1 | tee -a "${LOG_DIR}/gh-push.log"; then
+        publish_fail "git push of ${branch} failed (see ${LOG_DIR}/gh-push.log)"
+        return 1
+    fi
+    remote_head=$(git ls-remote origin "refs/heads/${branch}" 2>/dev/null | awk '{print $1}')
+    if [ "$remote_head" != "$head" ]; then
+        publish_fail "push reported success but remote ${branch} is '${remote_head:-missing}', expected ${head}"
+        return 1
+    fi
+}
+
+repo_has_content() {
+    [ "$(gh repo view "$1" --json isEmpty --jq '.isEmpty' 2>/dev/null)" = "false" ]
+}
+
+publish_new_repo() {
+    local slug topic_slug candidate repo_desc attempt
+    if [ -s "${RUN_DIR}/.publish_repo" ]; then
+        # Re-publishing this run: reuse the repo it already created.
+        slug=$(cat "${RUN_DIR}/.publish_repo")
+    else
+        # Truncate at word boundary (max ~40 chars for the topic portion)
+        topic_slug=$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
+        if [ "${#topic_slug}" -gt 40 ]; then
+            # Cut to 40 chars, then drop the partial word the cut left behind.
+            topic_slug=$(echo "$topic_slug" | head -c 40 | sed 's/-[^-]*$//')
+        fi
+        slug="research-${topic_slug}"
+        # Truncated slugs collide (two runs of the same idea). Never push into
+        # another run's non-empty repo: that push is rejected and the results
+        # stay local.
+        candidate="$slug"
+        for attempt in "$(echo "$RUN_ID" | cut -c1-10 | tr -d '-')" "$(date +%H%M%S)"; do
+            repo_has_content "${REPO_OWNER}/${candidate}" || break
+            log "WARN: ${REPO_OWNER}/${candidate} already holds another run; trying a new name."
+            candidate="${slug}-${attempt}"
+        done
+        slug="$candidate"
     fi
 
-    local slug
-    # Truncate at word boundary (max ~40 chars for the topic portion)
-    local topic_slug
-    topic_slug=$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
-    # Cut to 40 chars then remove any trailing partial word
-    topic_slug=$(echo "$topic_slug" | head -c 40 | sed 's/-[^-]*$//')
-    slug="research-${topic_slug}"
-
-    log "Creating GitHub repo: tbuckworth/${slug}"
+    log "Publishing to GitHub repo ${REPO_OWNER}/${slug} (${REPO_VISIBILITY})"
 
     # GitHub caps repo descriptions at 350 chars; the topic can be far longer (a whole
     # paragraph), which makes `gh repo create` fail with a 422. Truncate to stay under.
-    local repo_desc
     repo_desc="AI safety research (autonomous): ${TOPIC_LINE}"
     repo_desc="$(printf '%s' "$repo_desc" | tr '\n' ' ' | head -c 300)"
 
-    # Do NOT swallow the error silently — log it. If the repo already exists this returns
-    # non-zero too, which is fine: the push+verify below is the real success signal.
-    gh repo create "tbuckworth/${slug}" --public --description "$repo_desc" 2>&1 \
+    # Non-zero when the repo already exists, which is fine: push-and-verify
+    # below is the real success signal.
+    gh repo create "${REPO_OWNER}/${slug}" "--${REPO_VISIBILITY}" --description "$repo_desc" 2>&1 \
         | tee -a "${LOG_DIR}/gh-repo-create.log" \
-        || log "WARN: gh repo create returned non-zero for tbuckworth/${slug} (may already exist); will still attempt push."
+        || log "WARN: gh repo create returned non-zero for ${REPO_OWNER}/${slug} (may already exist); will still attempt push."
+    printf '%s\n' "$slug" > "${RUN_DIR}/.publish_repo"
 
     # Generate README
     local abstract=""
@@ -1031,9 +1285,10 @@ ${abstract:-See paper/ directory for full results.}
 
 - \`paper/\` — LaTeX paper and compiled PDF
 - \`literature/\` — Literature review artifacts
-- \`experiments/\` — Experiment code and results
+- \`experiments/\` — Experiment code, results and pre-flight checks
 - \`challenge/\` — Adversarial review (assumptions, mentor-review, pre-mortem)
 - \`decomposition.md\` — Steinhardt fail-fast decomposition
+- \`next-steps.md\` — Ranked next round
 - \`state.md\` — Workflow state log
 
 ---
@@ -1041,13 +1296,11 @@ ${abstract:-See paper/ directory for full results.}
 *Generated by the autonomous AI safety researcher agent.*
 READMEEOF
 
-    # Git init in place — .gitignore already excludes large files
+    REPO_BRANCH="main"
     cd "$RUN_DIR"
-    git init -q
-    git remote remove origin 2>/dev/null || true
-    git remote add origin "https://github.com/tbuckworth/${slug}.git"
-    git add -A
-    git commit -q -m "$(cat <<COMMITEOF
+    prepare_local_repo "$REPO_BRANCH" "$(git_remote_for "${REPO_OWNER}/${slug}")"
+    exclude_large_files
+    if commit_all all "$(cat <<COMMITEOF
 Research artifacts: ${TOPIC_LINE}
 
 Autonomous research run (${STATUS}).
@@ -1055,59 +1308,45 @@ Run ID: ${RUN_ID}
 
 ${COMMIT_ATTRIBUTION}
 COMMITEOF
-)" || log "WARN: git commit produced no commit (nothing to commit?)."
-
-    # Rename the just-committed branch to 'main' regardless of git's default (older git
-    # inits 'master', so `git push origin main` was silently failing with
-    # 'src refspec main does not match any' — leaving every repo empty).
-    git branch -M main 2>/dev/null || true
-
-    cd "$REPO_DIR"
-
-    # Only advertise the repo link if the push actually succeeded AND the remote is
-    # non-empty. Previously the URL was written unconditionally, so a failed push still
-    # produced an email/issue-comment linking to an empty (or nonexistent) repo.
-    if ( cd "$RUN_DIR" && git push -u origin main ) 2>&1 | tee -a "${LOG_DIR}/gh-push.log"; then
-        if gh repo view "tbuckworth/${slug}" --json isEmpty --jq '.isEmpty' 2>/dev/null | grep -q '^false$'; then
-            REPO_URL="https://github.com/tbuckworth/${slug}"
-            echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
-            log "GitHub repo pushed and verified: ${REPO_URL}"
-        else
-            log "ERROR: push reported success but tbuckworth/${slug} is still empty. Not advertising a repo link."
-        fi
-    else
-        log "ERROR: git push to tbuckworth/${slug} failed. Results remain local in ${RUN_DIR}; no repo link will be advertised."
+)" && push_and_verify "$REPO_BRANCH"; then
+        PUBLISH_STATE="pushed"
+        REPO_WEB="https://github.com/${REPO_OWNER}/${slug}"
+        echo "$REPO_WEB" > "${RUN_DIR}/.repo_url"
+        log "GitHub repo pushed and verified: ${REPO_WEB}"
     fi
+    cd "$REPO_DIR"
 }
 
-push_followup_results() {
-    local date_slug branch tmp_clone
-    date_slug=$(date +%Y-%m-%d)
-    branch="followup-${date_slug}-$(echo "$RUN_ID" | tail -c 20 | sed 's/^-//')"
-
-    log "Pushing follow-up results to ${PRIOR_REPO_URL} on branch ${branch}"
-
-    tmp_clone=$(mktemp -d)
-    if ! gh repo clone "$PRIOR_REPO_URL" "$tmp_clone" -- --depth 1 2>/dev/null; then
-        log "WARN: Failed to clone ${PRIOR_REPO_URL} for push. Results stay local."
-        rm -rf "$tmp_clone"
-        return 1
+publish_followup() {
+    # Follow-ups push a new branch to the existing repo, in place: the branch
+    # starts from the prior repo's default branch and this run's files are
+    # laid over it. Nothing is copied — the old version cloned the prior repo
+    # into /tmp and copied the whole run into it, which filled the root disk
+    # and lost both 2026-04 follow-ups (tasks#1919/#1920).
+    local branch
+    if [ -s "${RUN_DIR}/.publish_branch" ]; then
+        branch=$(cat "${RUN_DIR}/.publish_branch")
+    else
+        branch="followup-$(date +%Y-%m-%d)-$(echo "$RUN_ID" | tail -c 20 | sed 's/^-//')"
     fi
+    REPO_BRANCH="$branch"
+    REPO_WEB="${PRIOR_REPO_URL%/}"
+    REPO_WEB="${REPO_WEB%.git}"
 
-    cd "$tmp_clone"
-    git checkout -b "$branch"
-
-    # Copy new artifacts from the run directory (excluding prior/ to avoid duplication)
-    for item in "$RUN_DIR"/*; do
-        local basename
-        basename=$(basename "$item")
-        [ "$basename" = "prior" ] && continue
-        [ "$basename" = ".git" ] && continue
-        cp -r "$item" "$tmp_clone/" 2>/dev/null || true
-    done
-
-    git add -A
-    git commit -m "$(cat <<COMMITEOF
+    log "Publishing follow-up results to ${REPO_WEB} on branch ${branch}"
+    cd "$RUN_DIR"
+    printf '%s\n' "$branch" > .publish_branch
+    prepare_local_repo "$branch" "$(git_remote_for "$REPO_WEB")"
+    if ! git rev-parse -q --verify HEAD >/dev/null; then
+        if git fetch -q --depth 1 origin HEAD 2>>"${LOG_DIR}/gh-push.log"; then
+            # Index = the prior tree; the working tree (this run) is untouched.
+            git reset -q --mixed FETCH_HEAD
+        else
+            log "WARN: could not fetch ${REPO_WEB} (empty or unreachable); the branch will hold only this run's files."
+        fi
+    fi
+    exclude_large_files
+    if commit_all overlay "$(cat <<COMMITEOF
 Follow-up research: ${TOPIC_LINE}
 
 Follow-up run (${STATUS}).
@@ -1116,25 +1355,66 @@ Parent issue: #${PARENT_ISSUE}
 
 ${COMMIT_ATTRIBUTION}
 COMMITEOF
-)" || true
-
-    # Only advertise the branch link if the push actually succeeded.
-    if git push -u origin "$branch" 2>&1 | tee -a "${LOG_DIR}/gh-push.log"; then
-        REPO_URL="${PRIOR_REPO_URL}/tree/${branch}"
-        echo "$REPO_URL" > "${RUN_DIR}/.repo_url"
-        log "Follow-up pushed: ${REPO_URL}"
+)" && push_and_verify "$branch"; then
+        PUBLISH_STATE="pushed"
+        echo "${REPO_WEB}/tree/${branch}" > "${RUN_DIR}/.repo_url"
+        log "Follow-up pushed and verified: ${REPO_WEB}/tree/${branch}"
     else
-        log "ERROR: git push of follow-up branch ${branch} to ${PRIOR_REPO_URL} failed. No branch link will be advertised."
+        REPO_WEB=""
     fi
     cd "$REPO_DIR"
-    rm -rf "$tmp_clone"
+}
+
+publish_run() {
+    # A stale link from an earlier attempt must never outlive a failed one.
+    rm -f "${RUN_DIR}/.repo_url"
+    check_free_space || return 0
+    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]; then
+        publish_followup
+    else
+        publish_new_repo
+    fi
 }
 
 if is_true "$SKIP_PUBLISH"; then
     log "Skipping GitHub publication (RESEARCHER_SKIP_PUBLISH=${SKIP_PUBLISH})."
 else
-    create_github_repo || log "Note: GitHub repo creation did not complete. Continuing to email."
+    # Any unexpected error inside publishing must still end as a recorded
+    # failure, never as a silently missing repo.
+    publish_run || publish_fail "publishing stopped unexpectedly (see log)"
+    cd "$REPO_DIR"
+    if [ "$PUBLISH_STATE" = "skipped" ] && [ -z "$PUBLISH_ERROR" ]; then
+        publish_fail "publishing did not complete (see log)"
+    fi
 fi
+
+# --- Post-completion: final outcome ---
+# The run's final status, from what actually exists: did the workflow finish,
+# are there valid results, and is it on GitHub. Recorded in state.md and
+# run-outcome.json, and used verbatim by the email and the issue comment.
+OUTCOME_JSON=$(python3 "$LIB" outcome \
+    --run-dir "$RUN_DIR" \
+    --status "$STATUS" \
+    --timed-out "$TIMED_OUT" \
+    --publish-state "$PUBLISH_STATE" \
+    --publish-error "$PUBLISH_ERROR" \
+    --paused "$PAUSED") \
+    || OUTCOME_JSON=$(jq -n --arg s "$STATUS" --arg p "$PUBLISH_STATE" \
+        '{outcome: "unknown", status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
+printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json"
+FINAL_OUTCOME=$(echo "$OUTCOME_JSON" | jq -r '.outcome')
+OUTCOME_REASONS=$(echo "$OUTCOME_JSON" | jq -r '.reasons[]' | sed 's/^/  - /')
+upsert_frontmatter_field "final_outcome" "$FINAL_OUTCOME" || true
+upsert_frontmatter_field "publish_state" "$PUBLISH_STATE" || true
+log "Final outcome: ${FINAL_OUTCOME} (workflow status ${STATUS}, publish ${PUBLISH_STATE})"
+[ -n "$OUTCOME_REASONS" ] && printf '%s\n' "$OUTCOME_REASONS"
+
+outcome_is_success() {
+    case "$FINAL_OUTCOME" in
+        complete|complete-local) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 # --- Post-completion: Send email ---
 send_email() {
@@ -1142,6 +1422,7 @@ send_email() {
     email_log="${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
     log "Composing results email with ${BACKEND}..."
     cd "$REPO_DIR"
+    rm -f "${RUN_DIR}/email-draft.html" "${RUN_DIR}/email-subject.txt"
     set +e
     run_email_provider 2>&1 | tee "$email_log"
     compose_status=${PIPESTATUS[0]}
@@ -1161,6 +1442,11 @@ send_email() {
     fi
 
     subject=$(head -1 "${RUN_DIR}/email-subject.txt")
+    if ! outcome_is_success; then
+        # Deterministic, whatever the composer wrote: an unpublished or
+        # result-less run is visible from the inbox.
+        subject="[$(printf '%s' "$FINAL_OUTCOME" | tr '[:lower:]' '[:upper:]')] ${subject}"
+    fi
     set +e
     python3 "$SEND_EMAIL_SCRIPT" \
         --to "$EMAIL_TO" \
@@ -1183,31 +1469,43 @@ else
     send_email || log "Note: email did not send. Results remain in ${RUN_DIR}."
 fi
 
-# --- Post-completion: Update GitHub issue ---
+# --- Post-completion: report back on the GitHub issue ---
+post_issue_comment() {
+    local number="$1" body_file="$2"
+    gh issue comment "$number" --repo "$TASKS_REPO" --body-file "$body_file" >/dev/null \
+        || log "WARN: could not comment on issue #${number}."
+}
+
 if ! is_true "$SKIP_PUBLISH" && [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
-    REPO_URL=$(cat "${RUN_DIR}/.repo_url" 2>/dev/null || echo "N/A")
+    COMMENT_FILE="${RUN_DIR}/.issue-comment.md"
+    python3 "$LIB" issue-comment \
+        --run-dir "$RUN_DIR" \
+        --status "$STATUS" \
+        --timed-out "$TIMED_OUT" \
+        --publish-state "$PUBLISH_STATE" \
+        --publish-error "$PUBLISH_ERROR" \
+        --paused "$PAUSED" \
+        --run-id "$RUN_ID" \
+        --repo-web "$REPO_WEB" \
+        --branch "$REPO_BRANCH" \
+        --agent-label "$AGENT_LABEL" \
+        --host "$HOST_ALIAS" \
+        --followup "$IS_FOLLOWUP" \
+        --visibility "$REPO_VISIBILITY" > "$COMMENT_FILE" \
+        || printf 'Autonomous research run `%s` finished with outcome `%s` (the findings summary could not be generated; see the cron log).\n' \
+            "$RUN_ID" "$FINAL_OUTCOME" > "$COMMENT_FILE"
 
+    post_issue_comment "$ISSUE_NUMBER" "$COMMENT_FILE"
     if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
-        # Follow-up: comment on both the follow-up issue and the parent
-        gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-            --body "Follow-up research complete (${STATUS}, ${AGENT_LABEL}).
-Branch: ${REPO_URL}
-Run: ${RUN_ID}
-Parent: #${PARENT_ISSUE}" 2>/dev/null || true
-
-        gh issue comment "$PARENT_ISSUE" --repo tbuckworth/tasks \
-            --body "Follow-up #${ISSUE_NUMBER} completed (${STATUS}, ${AGENT_LABEL}).
-Branch: ${REPO_URL}" 2>/dev/null || true
-    else
-        gh issue comment "$ISSUE_NUMBER" --repo tbuckworth/tasks \
-            --body "Autonomous research complete (${STATUS}, ${AGENT_LABEL}).
-Repo: ${REPO_URL}
-Run: ${RUN_ID}" 2>/dev/null || true
+        { printf 'Follow-up #%s finished.\n\n' "$ISSUE_NUMBER"; cat "$COMMENT_FILE"; } > "${COMMENT_FILE}.parent"
+        post_issue_comment "$PARENT_ISSUE" "${COMMENT_FILE}.parent"
+        rm -f "${COMMENT_FILE}.parent"
     fi
+    rm -f "$COMMENT_FILE"
 
-    gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks \
+    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
         --remove-label "$PROCESSING_LABEL" 2>/dev/null || true
-    gh issue edit "$ISSUE_NUMBER" --repo tbuckworth/tasks \
+    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
         --add-label "$PROCESSED_LABEL" 2>/dev/null || true
 
     log "Updated issue #${ISSUE_NUMBER}"
@@ -1218,6 +1516,13 @@ if is_true "$PAUSED"; then
     # cron, `at`, or any wrapper checking the status.
     log "PAUSED (not complete). Run directory: ${RUN_DIR}"
     exit 3
+fi
+
+if ! outcome_is_success; then
+    # Distinct exit code for a run that finished without a usable, published
+    # result, so it cannot pass for a completed one.
+    log "Done, but the run is NOT complete (outcome: ${FINAL_OUTCOME}). Run directory: ${RUN_DIR}"
+    exit 4
 fi
 
 log "Done. Run directory: ${RUN_DIR}"

@@ -15,3 +15,6 @@ logs/
 # Environment / secrets
 .env
 .env.*
+
+# Python bytecode
+__pycache__/

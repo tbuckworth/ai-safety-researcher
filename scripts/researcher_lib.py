@@ -1,0 +1,542 @@
+#!/usr/bin/env python3
+"""Pure-logic helpers for the autonomous researcher wrapper (researcher-cron.sh).
+
+The bash wrapper owns every side effect (gh, git, email). This module owns the
+decisions that used to be made by ad-hoc grep/jq and got them wrong:
+
+  pick           which queued issue to run, refusing duplicates
+  followup-key   a stable identity for a follow-up request, so the same request
+                 filed twice is run once
+  outcome        the run's final status, derived from what actually exists:
+                 did the workflow finish, are there valid results, did the push
+                 land
+  issue-comment  the findings comment posted back to the originating issue
+
+Standard library only: it runs under whatever python3 cron finds.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+BUSY_LABELS = (
+    "status:claude-researching",
+    "status:codex-researching",
+    "status:claude-processed",
+    "status:codex-processed",
+)
+RESEARCHING_LABELS = ("status:claude-researching", "status:codex-researching")
+FOLLOWUP_LABEL = "type:follow-up"
+FOLLOWUP_KEY_RE = re.compile(r"<!--\s*followup-key:\s*([0-9a-f]{8,64})\s*-->")
+
+# Workflow statuses after which a run is finished and never auto-resumed.
+TERMINAL_STATUSES = ("complete", "failed", "aborted_rethink", "timed_out")
+
+VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr)
+
+
+# --------------------------------------------------------------------------
+# state.md frontmatter
+# --------------------------------------------------------------------------
+
+def read_frontmatter(path: Path) -> dict[str, str]:
+    """Return the scalar `key: value` pairs of a state.md YAML frontmatter.
+
+    Deliberately not a YAML parser: state.md is rewritten by models and is not
+    always valid YAML, but the scalar keys the wrapper relies on always sit on
+    their own line.
+    """
+    fields: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return fields
+    if not lines or lines[0].strip() != "---":
+        return fields
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$", line)
+        if match:
+            value = match.group(2).strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            fields.setdefault(match.group(1), value)
+    return fields
+
+
+def local_runs(output_dir: Path) -> list[dict[str, str]]:
+    runs = []
+    if not output_dir.is_dir():
+        return runs
+    for state in sorted(output_dir.glob("*/state.md")):
+        fields = read_frontmatter(state)
+        fields["_dir"] = str(state.parent)
+        runs.append(fields)
+    return runs
+
+
+# --------------------------------------------------------------------------
+# Follow-up identity
+# --------------------------------------------------------------------------
+
+def compute_followup_key(body: str) -> str:
+    """Hash of a follow-up body with the key marker removed, whitespace-normalised."""
+    text = FOLLOWUP_KEY_RE.sub("", body or "")
+    lines = [line.rstrip() for line in text.replace("\r\n", "\n").split("\n")]
+    normalised = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return hashlib.sha256(normalised.encode("utf-8")).hexdigest()[:16]
+
+
+def followup_key(body: str) -> str:
+    """The key recorded in the body if there is one, else the computed key.
+
+    Preferring the recorded marker keeps the identity stable if someone edits
+    the issue text after it was filed.
+    """
+    match = FOLLOWUP_KEY_RE.search(body or "")
+    return match.group(1) if match else compute_followup_key(body)
+
+
+# --------------------------------------------------------------------------
+# Issue picking
+# --------------------------------------------------------------------------
+
+def label_names(issue: dict) -> set[str]:
+    return {label.get("name", "") for label in issue.get("labels") or []}
+
+
+def is_followup(issue: dict) -> bool:
+    return FOLLOWUP_LABEL in label_names(issue)
+
+
+def pick_issue(issues: list[dict], runs: list[dict[str, str]], *,
+               explicit: bool = False, allow_rerun: bool = False) -> dict | None:
+    """Return the first issue that is safe to run, or None.
+
+    Queue mode (explicit=False) skips anything claimed or processed by either
+    backend, anything that already has a run directory on this machine, and any
+    follow-up whose request (follow-up key) is already claimed, processed, run
+    locally, or filed again under a lower issue number.
+
+    Explicit mode (RESEARCHER_ISSUE) is a deliberate request: it refuses only an
+    issue that some backend is researching right now, or one with a run already
+    in progress here, and otherwise allows a re-run.
+    """
+    runs_by_issue: dict[str, list[dict[str, str]]] = {}
+    runs_by_key: dict[str, list[dict[str, str]]] = {}
+    for run in runs:
+        runs_by_issue.setdefault(run.get("issue_number", ""), []).append(run)
+        if run.get("followup_key"):
+            runs_by_key.setdefault(run["followup_key"], []).append(run)
+
+    keys = {issue["number"]: followup_key(issue.get("body") or "")
+            for issue in issues if is_followup(issue)}
+
+    for issue in issues:
+        number = issue["number"]
+        labels = label_names(issue)
+        prior = runs_by_issue.get(str(number), [])
+
+        if explicit:
+            if labels & set(RESEARCHING_LABELS):
+                log(f"skip #{number}: already being researched ({', '.join(sorted(labels & set(RESEARCHING_LABELS)))})")
+                continue
+            active = [r for r in prior if r.get("status") not in TERMINAL_STATUSES]
+            if active:
+                log(f"skip #{number}: a run is already in progress in {active[0]['_dir']}")
+                continue
+            if prior:
+                log(f"WARN: #{number} was already run here ({', '.join(r['_dir'] for r in prior)}); re-running because it was requested explicitly")
+        else:
+            if labels & set(BUSY_LABELS):
+                continue
+            if prior and not allow_rerun:
+                log(f"skip #{number}: already has a local run ({prior[0]['_dir']}, status {prior[0].get('status', '?')}). "
+                    f"Re-run deliberately with RESEARCHER_ISSUE={number}.")
+                continue
+
+        if number in keys and not (explicit or allow_rerun):
+            key = keys[number]
+            duplicate = None
+            for other in issues:
+                other_number = other["number"]
+                if other_number == number or keys.get(other_number) != key:
+                    continue
+                if label_names(other) & set(BUSY_LABELS):
+                    duplicate = f"same follow-up request as #{other_number}, which is already claimed or processed"
+                    break
+                if other_number < number:
+                    duplicate = f"same follow-up request as earlier issue #{other_number}"
+                    break
+            if duplicate is None and key in runs_by_key:
+                duplicate = f"same follow-up request already run locally in {runs_by_key[key][0]['_dir']}"
+            if duplicate:
+                log(f"skip #{number}: duplicate follow-up ({duplicate})")
+                continue
+
+        picked = dict(issue)
+        if number in keys:
+            picked["followup_key"] = keys[number]
+        return picked
+    return None
+
+
+# --------------------------------------------------------------------------
+# Results and outcome
+# --------------------------------------------------------------------------
+
+def _section(text: str, heading: str) -> str:
+    """Body of the first markdown section whose heading starts with `heading`."""
+    pattern = re.compile(rf"^#+\s*{re.escape(heading)}\b.*$", re.IGNORECASE | re.MULTILINE)
+    match = pattern.search(text)
+    if not match:
+        return ""
+    rest = text[match.end():]
+    end = re.search(r"^#+\s", rest, re.MULTILINE)
+    return (rest[:end.start()] if end else rest).strip()
+
+
+def parse_verdict(text: str) -> str:
+    """Normalise a results.md verdict line to PASS / FAIL / MIXED / INCONCLUSIVE / UNKNOWN."""
+    match = re.search(r"^\s*(?:#+\s*|\*\*)?Verdict\s*:?\s*\**\s*(.*)$", text, re.IGNORECASE | re.MULTILINE)
+    if not match:
+        return "UNKNOWN"
+    line = match.group(1).strip()
+    if not line:
+        # "## Verdict" heading with the verdict on the next non-empty line
+        after = text[match.end():].lstrip().splitlines()
+        line = after[0] if after else ""
+    if line.lstrip("*` ").startswith("<"):
+        return "UNKNOWN"  # an unfilled template placeholder, e.g. "<PASS | FAIL>"
+    words = re.findall(r"[A-Za-z_-]+", line.upper())
+    if not words:
+        return "UNKNOWN"
+    first = words[0]
+    if first in ("INCONCLUSIVE", "INVALID"):
+        return "INCONCLUSIVE"
+    if first in ("PARTIAL", "MIXED"):
+        return "MIXED"
+    if first in ("PASS", "FAIL"):
+        return first
+    return "UNKNOWN"
+
+
+def parse_preflight(path: Path) -> dict[str, str]:
+    """Map check name -> PASS/FAIL/WARN/N/A from a preflight.md table."""
+    checks: dict[str, str] = {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return checks
+    for line in text.splitlines():
+        cells = [cell.strip().strip("`*") for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        status = cells[1].upper().replace(" ", "")
+        if status in ("PASS", "FAIL", "WARN", "N/A", "NA"):
+            checks[cells[0].lower()] = "N/A" if status == "NA" else status
+    return checks
+
+
+def scan_experiments(run_dir: Path) -> list[dict]:
+    """This run's experiments (never prior/), with verdict and pre-flight state."""
+    experiments = []
+    for exp_dir in sorted((run_dir / "experiments").glob("exp-*")):
+        if not exp_dir.is_dir():
+            continue
+        results = exp_dir / "results.md"
+        if not results.is_file():
+            continue
+        text = results.read_text(encoding="utf-8", errors="replace")
+        component = _section(text, "Component Tested").splitlines()
+        stated = parse_verdict(text)
+        preflight_file = exp_dir / "preflight.md"
+        preflight = parse_preflight(preflight_file) if preflight_file.is_file() else None
+        failed_checks = sorted(k for k, v in (preflight or {}).items() if v == "FAIL")
+        verdict = stated
+        note = ""
+        if failed_checks and stated in VALID_VERDICTS:
+            # A verdict produced by a pipeline that failed its own pre-flight
+            # gate says nothing about the hypothesis (tasks#1863).
+            verdict = "INCONCLUSIVE"
+            note = f"stated {stated}, but pre-flight failed: {', '.join(failed_checks)}"
+        experiments.append({
+            "id": exp_dir.name,
+            "component": component[0].strip() if component else "",
+            "stated_verdict": stated,
+            "verdict": verdict,
+            "preflight": "missing" if preflight is None else ("fail" if failed_checks else "ok"),
+            "preflight_failed": failed_checks,
+            "note": note,
+        })
+    return experiments
+
+
+def first_bold_field(text: str, field: str) -> str:
+    match = re.search(rf"^\*\*{re.escape(field)}\*\*\s*:\s*(.+)$", text, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def next_step_titles(run_dir: Path, limit: int = 4) -> list[str]:
+    path = run_dir / "next-steps.md"
+    if not path.is_file():
+        return []
+    text = path.read_text(encoding="utf-8", errors="replace")
+    ranked = _section(text, "Ranked Next Steps") or text
+    titles = re.findall(r"^###\s*\d+\.\s*(.+)$", ranked, re.MULTILINE)
+    return [t.strip() for t in titles[:limit]]
+
+
+def audit_summary(run_dir: Path) -> str:
+    path = run_dir / "audit" / "results-audit.md"
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    disposition = re.search(r"Overall disposition\s*:\s*([A-Z_-]+)", text)
+    reason = re.search(r"audit_exit_reason\s*:\s*([^\n]+)", text)
+    if not disposition:
+        return ""
+    summary = disposition.group(1)
+    if reason:
+        summary += f" ({reason.group(1).strip().strip('#').strip()})"
+    return summary
+
+
+def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_state: str,
+                    publish_error: str = "", paused: bool = False) -> dict:
+    """Decide the run's final outcome from what actually exists on disk.
+
+    complete        workflow finished, valid results, pushed and verified
+    complete-local  as complete, but publishing was deliberately skipped
+    unpublished     workflow finished with valid results, but the push failed
+    no-results      workflow finished, but no experiment produced a valid verdict
+    partial         workflow stopped early (timeout / failure) with some valid results
+    failed          workflow stopped early with no valid results
+    paused          provider usage limit; resumable, nothing published
+    """
+    experiments = scan_experiments(run_dir)
+    counts: dict[str, int] = {}
+    for exp in experiments:
+        counts[exp["verdict"]] = counts.get(exp["verdict"], 0) + 1
+    valid = sum(counts.get(v, 0) for v in VALID_VERDICTS)
+    theory_only = not experiments and (run_dir / "rethink-rationale.md").is_file()
+    has_results = valid > 0 or (theory_only and status == "complete")
+    finished = status == "complete"
+
+    reasons: list[str] = []
+    if paused:
+        outcome = "paused"
+        reasons.append("provider usage limit reached; the run is resumable")
+    elif not has_results:
+        outcome = "no-results" if finished else "failed"
+        if not experiments:
+            reasons.append("no experiment produced a results.md")
+        else:
+            reasons.append(f"none of {len(experiments)} experiment(s) produced a valid PASS/FAIL verdict")
+    elif not finished:
+        outcome = "partial"
+    elif publish_state == "pushed":
+        outcome = "complete"
+    elif publish_state == "skipped":
+        outcome = "complete-local"
+    else:
+        outcome = "unpublished"
+
+    if timed_out:
+        if finished:
+            reasons.append("hit the run timeout after experiments; the results audit was skipped")
+        else:
+            reasons.append("hit the run timeout before the workflow finished")
+    elif not finished and not paused:
+        reasons.append(f"workflow stopped with status '{status}'")
+    if publish_state == "failed" and not paused:
+        reasons.append(f"not on GitHub: {publish_error or 'push failed'}")
+    if counts.get("INCONCLUSIVE"):
+        reasons.append(f"{counts['INCONCLUSIVE']} experiment(s) inconclusive (pre-flight failed or invalid measurement)")
+    if counts.get("UNKNOWN"):
+        reasons.append(f"{counts['UNKNOWN']} experiment(s) without a '## Verdict: PASS|FAIL|INCONCLUSIVE' line")
+    unchecked = [e["id"] for e in experiments if e["preflight"] == "missing"]
+    if unchecked:
+        reasons.append(f"no pre-flight record for {', '.join(unchecked)}")
+    if theory_only and has_results:
+        reasons.append("theory-only negative result (no experiments were run)")
+
+    return {
+        "outcome": outcome,
+        "reasons": reasons,
+        "has_results": has_results,
+        "workflow_finished": finished,
+        "status": status,
+        "timed_out": timed_out,
+        "publish_state": publish_state,
+        "counts": counts,
+        "experiments": experiments,
+        "paper": (run_dir / "paper" / "paper.pdf").is_file(),
+        "next_steps": (run_dir / "next-steps.md").is_file(),
+    }
+
+
+OUTCOME_HEADLINES = {
+    "complete": "complete",
+    "complete-local": "complete (not published by request)",
+    "unpublished": "finished but NOT PUBLISHED",
+    "no-results": "finished with NO VALID RESULTS",
+    "partial": "stopped early (partial results)",
+    "failed": "FAILED",
+    "paused": "paused",
+}
+
+
+def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, branch: str,
+                  agent_label: str, host: str, is_followup: bool, visibility: str) -> str:
+    outcome = facts["outcome"]
+    lines = [
+        f"<!-- researcher-run: {run_id} outcome: {outcome} -->",
+        f"### Autonomous research run: {OUTCOME_HEADLINES.get(outcome, outcome)}",
+        "",
+    ]
+    counts = facts["counts"]
+    tally = ", ".join(f"{counts[v]} {v.lower()}" for v in ("PASS", "FAIL", "MIXED", "INCONCLUSIVE", "UNKNOWN") if counts.get(v))
+    lines.append(f"**Outcome:** `{outcome}`" + (f" — experiments: {tally}" if tally else ""))
+    for reason in facts["reasons"]:
+        lines.append(f"- {reason}")
+    lines.append("")
+
+    lines.append("| | |")
+    lines.append("|---|---|")
+    if repo_web:
+        label = "Branch" if is_followup else "Repo"
+        lines.append(f"| {label} | {repo_web}/tree/{branch} ({visibility}) |")
+        if facts["paper"]:
+            lines.append(f"| Paper | {repo_web}/blob/{branch}/paper/paper.pdf |")
+        if facts["next_steps"]:
+            lines.append(f"| Next steps | {repo_web}/blob/{branch}/next-steps.md |")
+    else:
+        where = f"`{host}:{run_dir}`" if host and host != "local" else f"`{run_dir}`"
+        lines.append(f"| Results | not on GitHub; local only at {where} |")
+    lines.append(f"| Run | `{run_id}` ({agent_label}) |")
+    lines.append("")
+
+    briefing_outcome = ""
+    next_steps_file = run_dir / "next-steps.md"
+    if next_steps_file.is_file():
+        briefing_outcome = first_bold_field(next_steps_file.read_text(encoding="utf-8", errors="replace"), "Outcome")
+    if briefing_outcome or facts["experiments"]:
+        lines.append("**Findings**")
+        if briefing_outcome:
+            lines.append("")
+            lines.append(briefing_outcome)
+        if facts["experiments"]:
+            lines.append("")
+            lines.append("| Experiment | Component | Verdict |")
+            lines.append("|---|---|---|")
+            for exp in facts["experiments"][:12]:
+                component = (exp["component"] or "—").replace("|", "/")
+                if len(component) > 90:
+                    component = component[:87] + "..."
+                verdict = exp["verdict"]
+                if exp["note"]:
+                    verdict += f" ({exp['note']})"
+                lines.append(f"| {exp['id']} | {component} | {verdict} |")
+        audit = audit_summary(run_dir)
+        if audit:
+            lines.append("")
+            lines.append(f"Results audit: {audit}")
+        lines.append("")
+
+    titles = next_step_titles(run_dir)
+    if titles:
+        lines.append("**Proposed next steps**")
+        for index, title in enumerate(titles, 1):
+            lines.append(f"{index}. {title}")
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p_pick = sub.add_parser("pick", help="read issues JSON on stdin, print the issue to run (or nothing)")
+    p_pick.add_argument("--output-dir", required=True, type=Path)
+    p_pick.add_argument("--explicit", action="store_true")
+    p_pick.add_argument("--allow-rerun", action="store_true")
+
+    sub.add_parser("followup-key", help="read an issue body on stdin, print its follow-up key")
+
+    p_find = sub.add_parser("find-followup", help="read issues JSON on stdin, print '<number> <url>' of the oldest with this key")
+    p_find.add_argument("--key", required=True)
+
+    for name in ("outcome", "issue-comment"):
+        p = sub.add_parser(name)
+        p.add_argument("--run-dir", required=True, type=Path)
+        p.add_argument("--status", required=True)
+        p.add_argument("--timed-out", default="false")
+        p.add_argument("--publish-state", required=True, choices=("pushed", "failed", "skipped"))
+        p.add_argument("--publish-error", default="")
+        p.add_argument("--paused", default="false")
+        if name == "issue-comment":
+            p.add_argument("--run-id", required=True)
+            p.add_argument("--repo-web", default="")
+            p.add_argument("--branch", default="main")
+            p.add_argument("--agent-label", default="")
+            p.add_argument("--host", default="")
+            p.add_argument("--followup", default="false")
+            p.add_argument("--visibility", default="private")
+
+    args = parser.parse_args(argv)
+    truthy = ("1", "true", "yes", "on")
+
+    if args.command == "pick":
+        payload = json.load(sys.stdin)
+        issues = payload if isinstance(payload, list) else [payload]
+        picked = pick_issue(issues, local_runs(args.output_dir),
+                            explicit=args.explicit, allow_rerun=args.allow_rerun)
+        if picked is not None:
+            print(json.dumps(picked))
+        return 0
+
+    if args.command == "followup-key":
+        print(followup_key(sys.stdin.read()))
+        return 0
+
+    if args.command == "find-followup":
+        raw = sys.stdin.read().strip()
+        matches = sorted((issue for issue in (json.loads(raw) if raw else [])
+                          if followup_key(issue.get("body") or "") == args.key),
+                         key=lambda issue: issue["number"])
+        if matches:
+            print(f"{matches[0]['number']} {matches[0].get('url', '')}".rstrip())
+        return 0
+
+    facts = compute_outcome(args.run_dir, status=args.status,
+                            timed_out=args.timed_out.lower() in truthy,
+                            publish_state=args.publish_state,
+                            publish_error=args.publish_error,
+                            paused=args.paused.lower() in truthy)
+    if args.command == "outcome":
+        print(json.dumps(facts))
+        return 0
+
+    print(issue_comment(facts, run_dir=args.run_dir, run_id=args.run_id, repo_web=args.repo_web,
+                        branch=args.branch, agent_label=args.agent_label, host=args.host,
+                        is_followup=args.followup.lower() in truthy, visibility=args.visibility), end="")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

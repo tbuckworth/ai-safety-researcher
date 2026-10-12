@@ -66,6 +66,16 @@ else
     new_status="mock_step_complete"
 fi
 
+# A run only counts as complete if it has a result (the wrapper's final
+# outcome checks), so Step 9 writes one, with its pre-flight record.
+if [ "$step" = "9" ]; then
+    mkdir -p "${run_dir}/experiments/exp-001"
+    printf '## Component Tested\nMock component\n\n## Verdict: PASS\n' \
+        > "${run_dir}/experiments/exp-001/results.md"
+    printf '| Check | Status | Evidence |\n|---|---|---|\n| method-fidelity | PASS | mock |\n' \
+        > "${run_dir}/experiments/exp-001/preflight.md"
+fi
+
 # Simulate a model rewriting Step 1 state from an incomplete schema. The
 # wrapper must restore runtime-owned fields before the next step or resume.
 if [ "$step" = "1" ]; then
@@ -150,6 +160,8 @@ run_case() {
     state_file=$(find "$output_dir" -mindepth 2 -maxdepth 2 -name state.md -type f | head -1)
     test -n "$state_file"
     grep -q '^status: complete$' "$state_file"
+    # Publishing is skipped in these cases, so the honest outcome is complete-local.
+    grep -q '^final_outcome: complete-local$' "$state_file"
     grep -q "^agent_backend: ${backend}$" "$state_file"
     grep -q '^agent_model: "mock-' "$state_file"
     grep -q '^compute_profile: "' "$state_file"

@@ -72,10 +72,16 @@ fi
 KEY=$(printf '%s' "$BODY" | python3 "$LIB" followup-key)
 if [ "$FORCE" != true ]; then
     # Fail closed: if the duplicate check cannot run, do not risk a duplicate.
+    LIST_LIMIT=1000
     if ! EXISTING_ISSUES=$(gh issue list --repo "$TASKS_REPO" \
-            --label "type:follow-up" --state all --limit 200 \
+            --label "type:follow-up" --state all --limit "$LIST_LIMIT" \
             --json number,url,body); then
         echo "ERROR: could not list existing follow-up issues to check for a duplicate" >&2
+        exit 1
+    fi
+    if [ "$(printf '%s' "${EXISTING_ISSUES:-[]}" | jq 'length')" -ge "$LIST_LIMIT" ]; then
+        # A full window may hide an older duplicate; the check would pass silently.
+        echo "ERROR: ${LIST_LIMIT}+ follow-up issues; the duplicate check cannot see them all. Raise LIST_LIMIT or use --force." >&2
         exit 1
     fi
     EXISTING=$(printf '%s' "$EXISTING_ISSUES" | python3 "$LIB" find-followup --key "$KEY")

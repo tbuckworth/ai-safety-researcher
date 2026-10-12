@@ -634,6 +634,29 @@ assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "one attempt, no retri
 assert_eq "$(field current_step "${OUT}/2026-01-09-guard-mid")" "8" "current_step kept"
 assert_eq "$(field last_pause_reason "${OUT}/2026-01-09-guard-mid")" "waiting for budget" "pause reason"
 
+# 15e. A pinned run: RESEARCHER_RUN_DIR resumes exactly that run even when a
+#      newer unfinished one exists, and refuses a finished one; NO_RESUME starts
+#      the requested issue fresh instead of resuming something else.
+new_case pinned-run
+write_run 2026-01-10-mine 10 audit_complete
+mkdir -p "${OUT}/2026-01-10-mine/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-10-mine/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-10-mine/experiments/exp-001/preflight.md"
+write_run 2026-01-11-someone-elses 3 mock_step_complete
+touch "${OUT}/2026-01-11-someone-elses/state.md"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "resumed the pinned run only"
+assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "the other run untouched"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
+assert_eq "$RC" "2" "a finished pinned run is refused"
+: > "${CASE_DIR}/steps.log"
+set_issues <(issue_json 301 "Fresh idea" "list:research-ideas" "Body")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_NO_RESUME=true RESEARCHER_ISSUE=301
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+[ -n "$(run_dir_for_issue 301)" ] || fail "no fresh run for #301"; ok
+assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "still untouched"
+
 # 15d. ...but never while the run's cluster jobs are outstanding, and a guard
 #      that fails without printing anything holds nothing.
 new_case guard-jobs

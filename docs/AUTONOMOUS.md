@@ -147,7 +147,9 @@ required.
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
 | `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). While it prints anything, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
-| `RESEARCHER_GUARD_CMD` | Command run before each step (`{run_id}` substituted). If it prints anything, the first line is the reason and the run pauses there like a provider limit (exit 3, resumable, nothing published; recorded as `last_pause_reason`). It never interrupts a step; a step that ends without advancing while the guard holds (e.g. it asked for more budget) also pauses instead of retrying. It is ignored while `RESEARCHER_JOB_WAIT_CMD` still reports jobs. agent-board's spare-capacity launcher (`agent-spare guard`) uses it |
+| `RESEARCHER_RUN_DIR` | Resume exactly this run directory, or exit 2 if it is finished, missing or interactive; never another unfinished run or the queue |
+| `RESEARCHER_NO_RESUME=true` | Start fresh (with `RESEARCHER_ISSUE` or the queue) without resuming any unfinished run |
+| `RESEARCHER_GUARD_CMD` | Command run before each step (`{run_id}` substituted). If it prints anything, the first line is the reason and the run pauses there like a provider limit (exit 3, resumable, nothing published; recorded as `last_pause_reason`). It never interrupts a step; a step that ends without advancing while the guard holds (e.g. it asked for more budget) also pauses instead of retrying. It is ignored while `RESEARCHER_JOB_WAIT_CMD` still reports jobs. The call is limited to 300 s. agent-board's spare-capacity launcher (`agent-spare guard`) uses it |
 | `RESEARCHER_JOB_WAIT_POLL_SECONDS` | Poll interval while waiting (default 120) |
 | `RESEARCHER_JOB_WAIT_MAX_SECONDS` | Cap on a single wait (default 14400) |
 | `RESEARCHER_JOB_WAIT_MAX_REFUNDS` | Cap on refunded attempts (default 10) |

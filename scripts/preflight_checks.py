@@ -87,7 +87,7 @@ def texts_from(items: list, field: str | None) -> list[str]:
 
 def numbers_from(items: list, value: str | None, cluster: str | None = None) -> tuple[list[float], list | None]:
     values, clusters = [], ([] if cluster else None)
-    for index, item in enumerate(items):
+    for item in items:
         if isinstance(item, dict):
             key = value or next((k for k in ("value", "score", "loss") if k in item), None)
             if key is None:

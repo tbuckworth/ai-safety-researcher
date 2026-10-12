@@ -140,6 +140,14 @@ if [ "${MOCK_LIMIT_AT_STEP:-}" = "$step" ]; then
     exit 0
 fi
 
+if [ "${MOCK_STALL_AT_STEP:-}" = "$step" ]; then
+    # The step stops early on purpose (e.g. it asked for more budget) and
+    # leaves current_step where it was.
+    [ -z "${MOCK_STALL_HOLD_FILE:-}" ] || echo "waiting for budget" > "$MOCK_STALL_HOLD_FILE"
+    echo "Ending step ${step} without advancing."
+    exit 0
+fi
+
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -613,6 +621,18 @@ assert_grep "Guard: other agents are busy" "${CASE_DIR}/stdout.log"
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "4 5 6 7 8 9 10 11 " "resumed at step 4"
+
+# 15c'. A step that ends without advancing because the guard now holds (it
+#       asked for budget mid-step) pauses instead of spending its retries.
+new_case guard-mid-step
+write_run 2026-01-09-guard-mid 8 mock_step_complete
+: > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_STEP_ATTEMPTS=3 MOCK_STALL_AT_STEP=9 \
+    "MOCK_STALL_HOLD_FILE=${CASE_DIR}/hold" "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused mid-step by guard)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "one attempt, no retries"
+assert_eq "$(field current_step "${OUT}/2026-01-09-guard-mid")" "8" "current_step kept"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-09-guard-mid")" "waiting for budget" "pause reason"
 
 # 15d. ...but never while the run's cluster jobs are outstanding, and a guard
 #      that fails without printing anything holds nothing.

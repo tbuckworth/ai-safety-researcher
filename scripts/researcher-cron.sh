@@ -1075,6 +1075,16 @@ run_step() {
         fi
 
         log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
+
+        # A step may end on purpose without advancing because the guard now
+        # holds the run (e.g. it asked for more budget): pause, don't retry.
+        local hold
+        hold=$(guard_hold)
+        if [ -n "$hold" ] && [ -z "$(outstanding_jobs | tr -d ' ')" ]; then
+            log "Guard: ${hold}"
+            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
+            return 2
+        fi
     done
 
     log "Step ${step} failed after ${STEP_MAX_ATTEMPTS} attempts. Marking run failed."

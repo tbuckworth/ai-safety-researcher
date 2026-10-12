@@ -213,14 +213,14 @@ def _classify_verdict_line(line: str) -> str:
     if line.lstrip("*` ").startswith("<"):
         return "UNKNOWN"  # an unfilled template placeholder, e.g. "<PASS | FAIL>"
     upper = line.upper()
-    if "AFFORDAB" in upper:
-        # FAIL-on-affordability: the experiment could not run under the
-        # compute profile. That is not evidence about the hypothesis.
-        return "INCONCLUSIVE"
     words = re.findall(r"[A-Z]+", upper)
     if not words:
         return "UNKNOWN"
     first = words[0]
+    if first == "FAIL" and "AFFORDAB" in upper:
+        # FAIL-on-affordability: the experiment could not run under the
+        # compute profile. That is not evidence about the hypothesis.
+        return "INCONCLUSIVE"
     if first in ("INCONCLUSIVE", "INVALID"):
         return "INCONCLUSIVE"
     if first in ("PARTIAL", "MIXED"):

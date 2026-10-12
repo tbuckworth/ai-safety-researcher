@@ -134,6 +134,7 @@ class VerdictTest(unittest.TestCase):
             "### Verdict rationale\nWhy.\n\n## Verdict: FAIL": "FAIL",
             "## Verdict: FAIL-on-affordability (needs an 80GB GPU)": "INCONCLUSIVE",
             "## Verdict: FAIL (on affordability)": "INCONCLUSIVE",
+            "## Verdict: PASS (affordable under the local profile)": "PASS",
             "no verdict here": "UNKNOWN",
         }
         for text, expected in cases.items():

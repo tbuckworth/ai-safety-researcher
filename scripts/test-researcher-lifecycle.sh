@@ -589,6 +589,15 @@ assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "provider calls"
 assert_eq "$(field status "${OUT}/2026-01-03-limit")" "audit_complete" "status left resumable"
 [ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a paused run commented on an issue"; ok
 
+# 15b. ...and the same during a Step 10 remediation round: the notice must not
+#      count as a finished audit round (that silently skipped remediation).
+new_case limit-at-audit
+write_run 2026-01-05-audit-limit 10 audit_remediating
+run_researcher MOCK_LIMIT_AT_STEP=10 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "provider calls"
+assert_eq "$(field status "${OUT}/2026-01-05-audit-limit")" "audit_remediating" "status left resumable"
+
 # =============================================================================
 # 16. A pause inside the timeout fast-track resumes at Step 11, not at the
 #     step after the one that timed out.

@@ -670,7 +670,7 @@ if IN_PROGRESS=$(find_in_progress_run); then
         log "Resume with RESEARCHER_BACKEND=${STORED_BACKEND}, or set RESEARCHER_ALLOW_BACKEND_SWITCH=true deliberately."
         exit 2
     fi
-    ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' || true)
+    ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' | tr -d "\"'" || true)
     [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
     # Check if the in-progress run is a follow-up
     if grep -q '^is_followup: true' "${RUN_DIR}/state.md" 2>/dev/null; then
@@ -983,21 +983,6 @@ run_step() {
         new_step=$(get_current_step || true)
         new_status=$(get_status || true)
 
-        # Success = the step advanced, reached a genuine terminal status, OR (for the
-        # audit step, which by design keeps current_step at 10 across rounds) the round
-        # actually completed. We proxy "completed" with a clean provider exit: a dropped
-        # connection exits non-zero AND leaves the status unchanged, so without this gate
-        # a drop during Step 10/11 would return success here and silently burn an
-        # AUDIT_ROUNDS increment upstream instead of retrying. With the gate it retries.
-        if [ "$new_step" != "$prev_step" ] \
-            || [ "$new_status" = "complete" ] || [ "$new_status" = "failed" ] \
-            || { [ "$exit_code" -eq 0 ] \
-                 && [ "$step" -eq 10 ] \
-                 && { [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; }; }; then
-            log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
-            return 0
-        fi
-
         # A provider usage/session cap is a pause, not a failure: retrying costs
         # nothing but the remaining attempts, and marking the run failed would
         # block find_in_progress_run from ever resuming it. Stop cleanly and
@@ -1012,9 +997,31 @@ run_step() {
         # required — the CLI can print the notice and still exit 0.
         # Transient "rate limit exceeded" errors are deliberately excluded:
         # those are retryable, and the retry loop is the right response.
-        local last_line
-        last_line=$(grep -v '^[[:space:]]*$' "$run_log" | tail -1)
+        # Detected BEFORE the success gate: a notice with exit 0 must never
+        # pass for a completed audit round (Step 10 keeps current_step at 10).
+        local last_line limit_hit=false
+        last_line=$({ grep -v '^[[:space:]]*$' "$run_log" || true; } | tail -1)
         if printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit\b|(Claude )?(AI )?[Uu]sage limit reached\b)"; then
+            limit_hit=true
+        fi
+
+        # Success = the step advanced, reached a genuine terminal status, OR (for the
+        # audit step, which by design keeps current_step at 10 across rounds) the round
+        # actually completed. We proxy "completed" with a clean provider exit and no
+        # limit notice: a dropped connection exits non-zero AND leaves the status
+        # unchanged, so without this gate a drop during Step 10 would return success
+        # here and silently burn an AUDIT_ROUNDS increment upstream instead of retrying.
+        if [ "$new_step" != "$prev_step" ] \
+            || [ "$new_status" = "complete" ] || [ "$new_status" = "failed" ] \
+            || { [ "$limit_hit" = false ] \
+                 && [ "$exit_code" -eq 0 ] \
+                 && [ "$step" -eq 10 ] \
+                 && { [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; }; }; then
+            log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
+            return 0
+        fi
+
+        if [ "$limit_hit" = true ]; then
             log "Step ${step} stopped: provider usage/session limit reached."
             log "${last_line}"
             log "Run left resumable at step ${prev_step} (status: ${new_status}). Re-run this script after the limit resets."
@@ -1211,11 +1218,30 @@ prepare_local_repo() {
     fi
     git remote remove origin 2>/dev/null || true
     git remote add origin "$remote"
+    load_exclude_notes
     [ -f .gitignore ] || write_gitignore "$RUN_DIR"
     local exclude=".git/info/exclude"
     mkdir -p .git/info
     grep -qxF '/.repo_url' "$exclude" 2>/dev/null \
         || printf '%s\n' '/.repo_url' '/.publish_repo' '/.publish_branch' '/run-outcome.json' '*.runtime.tmp' >> "$exclude"
+}
+
+exclude_with_note() {
+    # Keep a path out of the commit, and remember why next to the pattern so a
+    # later re-publish (when the path is already ignored) still reports it.
+    printf '# researcher-note: %s\n' "$2" >> .git/info/exclude
+    printf '%s\n' "$1" | sed 's/[][*?\\!#]/\\&/g' >> .git/info/exclude
+    PUBLISH_NOTES+=("$2")
+}
+
+load_exclude_notes() {
+    local line
+    [ -f .git/info/exclude ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            "# researcher-note: "*) PUBLISH_NOTES+=("${line#\# researcher-note: }") ;;
+        esac
+    done < .git/info/exclude
 }
 
 exclude_large_files() {
@@ -1227,9 +1253,8 @@ exclude_large_files() {
         [ -f "$file" ] || continue
         bytes=$(wc -c < "$file" | tr -d ' ')
         if [ "$bytes" -ge "$limit" ]; then
-            printf '/%s\n' "$file" | sed 's/[][*?\\!#]/\\&/g' >> .git/info/exclude
+            exclude_with_note "/${file}" "${file} not published: $(( bytes / 1048576 )) MB is over the ${MAX_FILE_MB} MB limit; it is only in the run directory"
             log "WARN: not publishing ${file} ($(( bytes / 1048576 )) MB, limit ${MAX_FILE_MB} MB); it stays in the run directory."
-            PUBLISH_NOTES+=("${file} not published: $(( bytes / 1048576 )) MB is over the ${MAX_FILE_MB} MB limit; it is only in the run directory")
         fi
     done < <(git ls-files --others --modified --exclude-standard -z)
 }
@@ -1317,9 +1342,8 @@ exclude_nested_repos() {
     while IFS= read -r -d '' nested; do
         dir=$(dirname "${nested#./}")
         git check-ignore -q "$dir" 2>/dev/null && continue
-        printf '/%s/\n' "$dir" | sed 's/[][*?\\!#]/\\&/g' >> .git/info/exclude
+        exclude_with_note "/${dir}/" "${dir}/ not published: it is a separate git repository inside the run directory"
         log "WARN: not publishing ${dir}/: it is a separate git repository inside the run."
-        PUBLISH_NOTES+=("${dir}/ not published: it is a separate git repository inside the run directory")
     done < <(find . -path ./.git -prune -o -name .git -prune -print0 2>/dev/null)
 }
 
@@ -1357,7 +1381,7 @@ publish_new_repo() {
 
     vis=$(repo_visibility "${REPO_OWNER}/${slug}")
     if [ "$vis" != "$REPO_VISIBILITY" ]; then
-        publish_fail "${REPO_OWNER}/${slug} is ${vis:-unreadable}, not ${REPO_VISIBILITY}; not pushing"
+        publish_fail "${REPO_OWNER}/${slug} is ${vis:-unreadable}, not ${REPO_VISIBILITY}; not pushing (to publish under a new name instead, delete ${RUN_DIR}/.publish_repo)"
         return 1
     fi
     PUBLISHED_VISIBILITY="$vis"
@@ -1608,32 +1632,40 @@ post_issue_comment() {
 }
 
 if ! is_true "$SKIP_PUBLISH" && [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
-    COMMENT_FILE=$(mktemp "${TMPDIR:-/tmp}/researcher-comment.XXXXXX")
-    python3 "$LIB" issue-comment \
-        ${NOTE_ARGS[@]+"${NOTE_ARGS[@]}"} \
-        --run-dir "$RUN_DIR" \
-        --status "$STATUS" \
-        --timed-out "$TIMED_OUT" \
-        --publish-state "$PUBLISH_STATE" \
-        --publish-error "$PUBLISH_ERROR" \
-        --paused "$PAUSED" \
-        --run-id "$RUN_ID" \
-        --repo-web "$REPO_WEB" \
-        --branch "$REPO_BRANCH" \
-        --agent-label "$AGENT_LABEL" \
-        --host "$HOST_ALIAS" \
-        --followup "$IS_FOLLOWUP" \
-        --visibility "$PUBLISHED_VISIBILITY" > "$COMMENT_FILE" \
-        || printf 'Autonomous research run `%s` finished with outcome `%s` (the findings summary could not be generated; see the cron log).\n' \
-            "$RUN_ID" "$FINAL_OUTCOME" > "$COMMENT_FILE"
+    # The comment is best effort (a full disk can stop even mktemp); the label
+    # swap below must happen regardless, or the issue stays claimed forever.
+    COMMENT_FILE=$(mktemp "${TMPDIR:-/tmp}/researcher-comment.XXXXXX" 2>/dev/null) || COMMENT_FILE=""
+    if [ -n "$COMMENT_FILE" ]; then
+        python3 "$LIB" issue-comment \
+            ${NOTE_ARGS[@]+"${NOTE_ARGS[@]}"} \
+            --run-dir "$RUN_DIR" \
+            --status "$STATUS" \
+            --timed-out "$TIMED_OUT" \
+            --publish-state "$PUBLISH_STATE" \
+            --publish-error "$PUBLISH_ERROR" \
+            --paused "$PAUSED" \
+            --run-id "$RUN_ID" \
+            --repo-web "$REPO_WEB" \
+            --branch "$REPO_BRANCH" \
+            --agent-label "$AGENT_LABEL" \
+            --host "$HOST_ALIAS" \
+            --followup "$IS_FOLLOWUP" \
+            --visibility "$PUBLISHED_VISIBILITY" > "$COMMENT_FILE" \
+            || printf 'Autonomous research run `%s` finished with outcome `%s` (the findings summary could not be generated; see the cron log).\n' \
+                "$RUN_ID" "$FINAL_OUTCOME" > "$COMMENT_FILE" \
+            || true
 
-    post_issue_comment "$ISSUE_NUMBER" "$COMMENT_FILE"
-    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
-        { printf 'Follow-up #%s finished.\n\n' "$ISSUE_NUMBER"; cat "$COMMENT_FILE"; } > "${COMMENT_FILE}.parent"
-        post_issue_comment "$PARENT_ISSUE" "${COMMENT_FILE}.parent"
-        rm -f "${COMMENT_FILE}.parent"
+        post_issue_comment "$ISSUE_NUMBER" "$COMMENT_FILE"
+        if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
+            if { printf 'Follow-up #%s finished.\n\n' "$ISSUE_NUMBER"; cat "$COMMENT_FILE"; } > "${COMMENT_FILE}.parent"; then
+                post_issue_comment "$PARENT_ISSUE" "${COMMENT_FILE}.parent"
+            fi
+            rm -f "${COMMENT_FILE}.parent"
+        fi
+        rm -f "$COMMENT_FILE"
+    else
+        log "WARN: could not create a temporary file for the issue comment (disk full?); skipping the comment."
     fi
-    rm -f "$COMMENT_FILE"
 
     gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
         --remove-label "$PROCESSING_LABEL" 2>/dev/null || true

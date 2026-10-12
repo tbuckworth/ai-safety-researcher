@@ -38,8 +38,10 @@ an automated AI Safety research workflow.
 - The workflow is interactive and iterative — Steps 3, 4, 6, and 7 can loop back to earlier steps.
 - Keep shared workflow payloads provider-neutral. Put only thin translation
   logic in Codex skills or the autonomous runner.
-- Validate backend changes with `scripts/test-researcher-backends.sh`; it must
-  not call real models, GitHub, GPUs, or email.
+- Validate runner changes with `scripts/test-researcher-backends.sh`,
+  `scripts/test-researcher-lifecycle.sh` and `python3 -m unittest discover -s scripts/tests`;
+  none of them may call real models, GitHub, GPUs, or email (GitHub is a mock
+  `gh` plus local bare repos via `RESEARCHER_GIT_REMOTE_BASE`).
 
 ## Autonomous Mode
 
@@ -56,4 +58,6 @@ an automated AI Safety research workflow.
 - **Construct-validity gate** (Step 6): a strawman/known-outcome construct loops back to Step 1 once to redesign, rather than being disclaimed. Limitations are triaged (fix-now vs future-work) at Steps 6/10 and written up with a dedicated resource-scoped Future Work section at Step 11.
 - **Next steps**: every run writes `next-steps.md` (reflection + ranked, resourced next round), including runs that failed or produced a negative result. The results email carries it and tells the reader exactly how to act on it via `/researcher-continue`.
 - **Knowledge bases** (`docs/KNOWLEDGE-BASE.md`): a global wiki (`RESEARCHER_KB_DIR`) queried at Steps 2/3/6 and ingested at Steps 2/11, plus a per-repo `knowledge/` directory. Both optional — every KB action is skipped silently when absent and never blocks a step.
+- **Final outcome**: after publishing, `scripts/researcher_lib.py` derives `final_outcome` (`complete` / `complete-local` / `unpublished` / `no-results` / `partial` / `failed` / `paused`) from the workflow status, valid experiment verdicts, and a verified push; it goes into `state.md`, `run-outcome.json`, the email and the issue comment. Run repos are private by default (`RESEARCHER_REPO_VISIBILITY`).
+- **Pre-flight gate**: Step 1 writes `method-spec.md`; every experiment writes `preflight.md` (template in `templates/`, tooling in `scripts/preflight_checks.py`). A `FAIL` there makes the verdict `INCONCLUSIVE`.
 - **Setup**: See `docs/AUTONOMOUS.md` for cron configuration, prerequisites, and follow-up workflow.

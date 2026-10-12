@@ -1229,9 +1229,13 @@ prepare_local_repo() {
 exclude_with_note() {
     # Keep a path out of the commit, and remember why next to the pattern so a
     # later re-publish (when the path is already ignored) still reports it.
-    printf '# researcher-note: %s\n' "$2" >> .git/info/exclude
-    printf '%s\n' "$1" | sed 's/[][*?\\!#]/\\&/g' >> .git/info/exclude
-    PUBLISH_NOTES+=("$2")
+    # One line each: a newline in a file name must not leak into a pattern.
+    local note pattern
+    note=$(printf '%s' "$2" | tr '\n\r' '  ')
+    pattern=$(printf '%s' "$1" | tr '\n\r' '??')
+    printf '# researcher-note: %s\n' "$note" >> .git/info/exclude
+    printf '%s\n' "$pattern" | sed 's/[][*\\!#]/\\&/g' >> .git/info/exclude
+    PUBLISH_NOTES+=("$note")
 }
 
 load_exclude_notes() {

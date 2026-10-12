@@ -1232,9 +1232,10 @@ exclude_with_note() {
     # One line each: a newline in a file name must not leak into a pattern.
     local note pattern
     note=$(printf '%s' "$2" | tr '\n\r' '  ')
-    pattern=$(printf '%s' "$1" | tr '\n\r' '??')
+    # Escape glob characters first; only then turn newlines into `?` wildcards.
+    pattern=$(printf '%s' "$1" | sed 's/[][*?\\!#]/\\&/g' | tr '\n\r' '??')
     printf '# researcher-note: %s\n' "$note" >> .git/info/exclude
-    printf '%s\n' "$pattern" | sed 's/[][*\\!#]/\\&/g' >> .git/info/exclude
+    printf '%s\n' "$pattern" >> .git/info/exclude
     PUBLISH_NOTES+=("$note")
 }
 

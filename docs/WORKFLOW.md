@@ -32,6 +32,7 @@ output/<run-id>/
 │   ├── search-002-blogs.md     # Lab blog results
 │   ├── search-003-community.md # LessWrong, MIRI, ARC results
 │   └── synthesis.md            # Synthesised literature review
+├── method-spec.md              # Binding definition of each named method/metric (Step 1)
 ├── novelty-assessment.md
 ├── success-criteria.md
 ├── decomposition.md            # Steinhardt lambda table + component details
@@ -42,7 +43,8 @@ output/<run-id>/
 ├── experiments/
 │   ├── exp-001/
 │   │   ├── plan.md
-│   │   ├── results.md
+│   │   ├── preflight.md        # Pre-flight checks (method fidelity, training sanity, metric separation)
+│   │   ├── results.md          # Verdict: PASS | FAIL | INCONCLUSIVE
 │   │   ├── run.log             # Full raw stdout/stderr — the auditor re-derives from this
 │   │   └── report-section.md
 │   └── exp-002/ ...
@@ -100,12 +102,14 @@ decisions: []
 ---
 ```
 
-5. After receiving answers, update `state.md` with clarifications and advance to Step 2.
+5. After receiving answers, update `state.md` with clarifications.
+6. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
 
 ### Completion Criteria
 
 - At least 3 clarifying questions asked and answered.
 - `state.md` exists with clarifications recorded.
+- `method-spec.md` exists. Later steps implement and audit against it, so a method cannot drift into a different one under the same name (a past run defined "Salad" as token alternation and implemented logit ensembling).
 
 ---
 
@@ -363,11 +367,13 @@ This step runs three **independent** adversarial review passes on the research p
 2. For each experiment:
    a. Create `experiments/exp-NNN/plan.md` from the decomposition table
    b. Spawn `experiment` agent with:
-      - Input: experiment plan + relevant literature + success criteria
-      - Output: `experiments/exp-NNN/results.md` with clear **PASS** or **FAIL** against predefined criteria
+      - Input: experiment plan + relevant literature + success criteria + `method-spec.md`
+      - Output: `experiments/exp-NNN/preflight.md`, then `experiments/exp-NNN/results.md` with clear **PASS** or **FAIL** against predefined criteria — or **INCONCLUSIVE** when the pipeline could not answer the question
    c. Read results
 
-3. **On FAIL** (and fail_fast_agreement is true):
+   **Pre-flight gate.** Before its main run, every experiment checks and records (`templates/preflight.md`, tooling in `scripts/preflight_checks.py`): method fidelity (a test asserting the spec'd method's defining property), an end-to-end smoke test on a known answer, training sanity (finite decreasing loss; generations not degenerate compared with the base model), organism validity (the implanted behaviour fires on triggers and not on controls), metric separation (the metric tells a known positive from a known negative, and is not saturated), and the statistics plan (independent unit of analysis, seeds, intervals, multiple-comparison correction). A failed check that cannot be fixed makes the verdict INCONCLUSIVE: a broken pipeline is never reported as a negative result.
+
+3. **On FAIL or INCONCLUSIVE** (and fail_fast_agreement is true):
    - Stop further experiments
    - Present the result to the user: what was found, why, implications
    - Ask: "Pivot topic?" / "Adjust approach?" / "Write up the result?"
@@ -395,7 +401,8 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
 
 2. **For each round** (cap: R_MAX ≈ 3; autonomous mode = 3), spawn a FRESH `results-auditor` with:
    - The frozen anchor: original topic + `success-criteria.md` (the pre-registration — goalposts may not move)
-   - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log` and code files
+   - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log`, `preflight.md` and code files
+   - `method-spec.md`, against which it checks method fidelity in the code (a different method under the requested name is `UNSALVAGEABLE` for claims about that method), and `scripts/preflight_checks.py` to re-check generations, metric separation and clustered statistics itself. A FAIL from a pipeline that fails these checks is never `TRUE-NULL`.
    - On round > 1: the prior `audit/results-audit.md` reports + the round-1 `claim-anchor-*.md`
 
 3. The auditor re-derives every number from the raw logs (and re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:

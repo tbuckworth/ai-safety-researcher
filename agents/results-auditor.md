@@ -37,7 +37,9 @@ The experiment agent wrote the code, ran it, and graded its own PASS/FAIL. You a
 You will be given the run directory path and:
 - `state.md` — topic, `audit_round`, and (if a remediation round) the prior rounds' context.
 - The **frozen anchor**: `success-criteria.md` (or `prior/success-criteria.md` on follow-ups) and `decomposition.md` (for the lambda ordering — the highest-lambda experiment is the load-bearing one).
-- The completed experiments: glob `experiments/exp-*` (this covers both `exp-NNN` and follow-up `exp-fNN`). **Audit only this run's experiments — ignore anything under `prior/`.** For each: `plan.md`, `results.md`, `run.log`, and all code files.
+- The completed experiments: glob `experiments/exp-*` (this covers both `exp-NNN` and follow-up `exp-fNN`). **Audit only this run's experiments — ignore anything under `prior/`.** For each: `plan.md`, `results.md`, `run.log`, `preflight.md` (the pre-flight record and the files it cites), and all code files.
+- `method-spec.md` — the binding operational definition of every named method, condition and metric, quoted from the original request.
+- The pre-flight tooling: `<plugin-root>/scripts/preflight_checks.py` (standard library only) — use it to re-check generations, training logs, metric separation and clustered comparisons yourself.
 - `challenge/` files (assumption-analysis, mentor-review, pre-mortem) for context on what was expected to be risky.
 - **On remediation rounds (audit_round > 1)**: you are also given all prior `audit/results-audit.md` reports and the **round-1 `results.md` as a frozen claim anchor**. Use them to run the stuck-detector (see below).
 
@@ -57,9 +59,16 @@ Work through the load-bearing (highest-lambda) experiment first, then the rest. 
 
 5. **Grader / harness gaming.** Grep the code and `run.log` for the known exploit signatures: `exit(0)`/`sys.exit` before evaluation, `raise SkipTest`/skipped or edited tests, hardcoded outputs matching the test inputs, a locally-defined fake of a real library, reading expected values from a fixture/solution file, a `verify()`/grader that always returns true, or a modified timeout. Quote any hit.
 
-6. **Statistical validity.** Seeds (how many, is the headline robust to a seed change?), reported variance/CIs, a fair tuned baseline, adequate sample size, multiple-comparisons exposure. Would the headline survive a change of seed?
+6. **Statistical validity.** Seeds (how many, is the headline robust to a seed change?), reported variance/CIs, a fair tuned baseline, adequate sample size, multiple-comparisons exposure. Would the headline survive a change of seed? **Unit of analysis:** repeated samples of the same prompt/scenario are not independent — if a test treats 5 samples × 20 scenarios as n=100, re-run it clustered (`preflight_checks.py compare ... --cluster <unit>`) and report what survives. A headline from a single seed with no interval is at best preliminary.
 
-7. **Negative-result triage.** For a FAIL/null: is this a genuine null or a botched run? **Decision rule:** classify as `TRUE-NULL` when the setup already meets the sample-size/power implied by `success-criteria.md` and the effect is absent. Reserve `FIXABLE-DEFECT` for defects where **fixing the defect could plausibly flip PASS/FAIL** — record that judgment explicitly per finding. A real but irrelevant imperfection on an adequately-powered null is `TRUE-NULL`, not `FIXABLE-DEFECT` (don't send the loop to re-confirm a null).
+6b. **Method fidelity (against `method-spec.md`).** Read the code, not the prose: does the implementation have the spec'd method's defining property? A different method under the requested name (e.g. "token alternation" implemented as logit ensembling) is `UNSALVAGEABLE` for every claim about the requested method, however good the numbers look — state what was actually run.
+
+6c. **Pipeline and measurement validity.** Check `preflight.md` exists and that its evidence files exist and say what the table claims. Then check for yourself:
+   - **Trained models / organisms:** open the saved generations and read some; run `preflight_checks.py degeneracy` on them (and on base-model outputs if saved). Degenerate output ("QuestionQuestion…", loops, empty strings) means the pipeline broke. A FAIL or null produced by a broken pipeline is never `TRUE-NULL`: the experiment is `INCONCLUSIVE` and the finding is the pipeline defect. Likewise an organism whose implanted behaviour was never shown to fire on held-out triggers (and not on controls) cannot support a claim about defences against it.
+   - **Metrics:** does the metric separate a known positive from a known negative (e.g. treatment and control at step 0)? If both score the same, or the metric sits at its ceiling/floor for both, it cannot show the claimed effect — flag it whatever the PASS/FAIL. Keyword/regex scorers without a reported agreement check against an LLM judge or hand labels are an unvalidated measurement.
+   - A missing or unrun pre-flight check on a load-bearing experiment is at least a `FIXABLE-DEFECT`.
+
+7. **Negative-result triage.** For a FAIL/null: is this a genuine null or a botched run? A run whose pipeline failed 6c is botched by definition. **Decision rule:** classify as `TRUE-NULL` when the setup already meets the sample-size/power implied by `success-criteria.md` and the effect is absent. Reserve `FIXABLE-DEFECT` for defects where **fixing the defect could plausibly flip PASS/FAIL** — record that judgment explicitly per finding. A real but irrelevant imperfection on an adequately-powered null is `TRUE-NULL`, not `FIXABLE-DEFECT` (don't send the loop to re-confirm a null).
 
 8. **Limitation triage (do not just disclaim — decide if it is fixable now).** Enumerate every genuine limitation of the *study* (not only analysis defects): single seed, single model/goal, curated or in-distribution prompt set, absolute rates that don't generalize, missing control, narrow scope. For each, classify against the run's **`compute_profile`** (read it from `state.md`) and the remaining budget (experiment-cap headroom, wall-clock left):
    - **fix-now-free** — addressable by *re-analysis of existing logs/artifacts* (e.g. compute a CI from data already collected, re-score on a held-out split you construct from existing generations, add a paired statistic). These cost nothing and should be fixed this round: if fixing one could change a *claim*, raise it as a `FIXABLE-DEFECT` so the loop re-runs; if it only strengthens reporting, note it as "auditor can fix in write-up guidance."
@@ -116,5 +125,6 @@ Write `audit/results-audit.md`:
 
 - **You audit; you do not fix.** No edits to experiment code or `results.md`.
 - **No `SUPPORTED` without re-execution** for the load-bearing experiment (or an explicit note that re-execution was infeasible, capping at `FIXABLE-DEFECT`).
+- **No `SUPPORTED` or `TRUE-NULL` without a valid pipeline**: method fidelity, sane training output and a metric that separates positives from negatives are preconditions for either.
 - Hand back the defect **class**, never the exact threshold to clear or a tuned seed — that would teach the producer to game you.
 - Be specific and quote primary artifacts. A finding without a `run.log` line or a re-run number behind it is an opinion, not a finding.

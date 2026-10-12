@@ -60,13 +60,15 @@ Do this yourself — no agent needed.
    topic: <topic>
    current_step: 1
    status: clarified
+   mode: interactive    # the autonomous cron runner never resumes an interactive run
    clarifications:
      - q: <question>
        a: <answer>
    decisions: []
    ---
    ```
-5. Advance to Step 2.
+5. Write `output/<run-id>/method-spec.md`: for every named method, condition, intervention and metric in the topic — the verbatim source wording, an operational definition, a *defining property* a small code test can assert, near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Experiments and the audit are checked against this file.
+6. Advance to Step 2.
 
 ---
 
@@ -287,12 +289,16 @@ Do this yourself — no agent needed.
       Experiment plan: output/<run-id>/experiments/exp-NNN/plan.md
       Success criteria: output/<run-id>/success-criteria.md
       Literature: output/<run-id>/literature/synthesis.md
+      Method spec (binding): output/<run-id>/method-spec.md
+      Pre-flight tooling: ${CLAUDE_PLUGIN_ROOT}/scripts/preflight_checks.py
+      Pre-flight record template: ${CLAUDE_PLUGIN_ROOT}/templates/preflight.md
+      Write the pre-flight record to: output/<run-id>/experiments/exp-NNN/preflight.md
       Write results to: output/<run-id>/experiments/exp-NNN/results.md
       """)
       ```
-   c. Read results.
+   c. Read results and `preflight.md`. A verdict of INCONCLUSIVE (or a PASS/FAIL next to a failed pre-flight check) means the pipeline could not answer the question — present it to the user that way, never as a negative result.
 
-2. **On FAIL** (if fail_fast_agreement is true):
+2. **On FAIL or INCONCLUSIVE** (if fail_fast_agreement is true):
    - Stop further experiments.
    - Present the result to the user. Options: pivot / adjust / write up the result.
    - In every case, proceed to Step 10 (audit) next — the auditor triages whether a FAIL is a genuine null or a botched run before anything is written up.

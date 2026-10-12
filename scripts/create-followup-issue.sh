@@ -79,7 +79,10 @@ if [ "$FORCE" != true ]; then
         echo "ERROR: could not list existing follow-up issues to check for a duplicate" >&2
         exit 1
     fi
-    if [ "$(printf '%s' "${EXISTING_ISSUES:-[]}" | jq 'length')" -ge "$LIST_LIMIT" ]; then
+    # Assigned first so a parse failure aborts (set -e) instead of skipping the guard.
+    EXISTING_COUNT=$(printf '%s' "$EXISTING_ISSUES" \
+        | python3 -c 'import json, sys; print(len(json.loads(sys.stdin.read().strip() or "[]")))')
+    if [ "$EXISTING_COUNT" -ge "$LIST_LIMIT" ]; then
         # A full window may hide an older duplicate; the check would pass silently.
         echo "ERROR: ${LIST_LIMIT}+ follow-up issues; the duplicate check cannot see them all. Raise LIST_LIMIT or use --force." >&2
         exit 1

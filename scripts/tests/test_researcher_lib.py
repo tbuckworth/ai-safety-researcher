@@ -131,6 +131,9 @@ class VerdictTest(unittest.TestCase):
             "## Verdict\n\nFAIL\n": "FAIL",
             "## Verdict: INCONCLUSIVE": "INCONCLUSIVE",
             "## Verdict: <PASS | FAIL | INCONCLUSIVE>": "UNKNOWN",
+            "### Verdict rationale\nWhy.\n\n## Verdict: FAIL": "FAIL",
+            "## Verdict: FAIL-on-affordability (needs an 80GB GPU)": "INCONCLUSIVE",
+            "## Verdict: FAIL (on affordability)": "INCONCLUSIVE",
             "no verdict here": "UNKNOWN",
         }
         for text, expected in cases.items():
@@ -202,6 +205,17 @@ class OutcomeTest(unittest.TestCase):
         facts = self.outcome()
         self.assertEqual(facts["outcome"], "complete")
         self.assertTrue(any("no pre-flight record for exp-001" in r for r in facts["reasons"]))
+
+    def test_unreadable_preflight_is_not_a_clean_preflight(self):
+        self.add_exp("exp-001", "PASS", preflight="We checked everything carefully.\n")
+        facts = self.outcome()
+        self.assertEqual(facts["experiments"][0]["preflight"], "unreadable")
+        self.assertTrue(any("no readable check table for exp-001" in r for r in facts["reasons"]))
+
+    def test_wrapper_notes_are_reported(self):
+        self.add_exp("exp-001", "PASS")
+        facts = self.outcome(notes=["experiments/exp-001/big.dat not published"])
+        self.assertIn("experiments/exp-001/big.dat not published", facts["reasons"])
 
     def test_prior_experiments_are_ignored(self):
         write(self.run / "prior" / "experiments" / "exp-001" / "results.md", results("PASS"))

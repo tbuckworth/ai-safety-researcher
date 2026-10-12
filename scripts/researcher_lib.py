@@ -206,19 +206,18 @@ def _section(text: str, heading: str) -> str:
     return (rest[:end.start()] if end else rest).strip()
 
 
-def parse_verdict(text: str) -> str:
-    """Normalise a results.md verdict line to PASS / FAIL / MIXED / INCONCLUSIVE / UNKNOWN."""
-    match = re.search(r"^\s*(?:#+\s*|\*\*)?Verdict\s*:?\s*\**\s*(.*)$", text, re.IGNORECASE | re.MULTILINE)
-    if not match:
-        return "UNKNOWN"
-    line = match.group(1).strip()
-    if not line:
-        # "## Verdict" heading with the verdict on the next non-empty line
-        after = text[match.end():].lstrip().splitlines()
-        line = after[0] if after else ""
+_VERDICT_LINE_RE = re.compile(r"^\s*(?:#+\s*|\*\*)?Verdict\b[^\S\n]*:?[^\S\n]*\**[^\S\n]*(.*)$", re.IGNORECASE | re.MULTILINE)
+
+
+def _classify_verdict_line(line: str) -> str:
     if line.lstrip("*` ").startswith("<"):
         return "UNKNOWN"  # an unfilled template placeholder, e.g. "<PASS | FAIL>"
-    words = re.findall(r"[A-Za-z_-]+", line.upper())
+    upper = line.upper()
+    if "AFFORDAB" in upper:
+        # FAIL-on-affordability: the experiment could not run under the
+        # compute profile. That is not evidence about the hypothesis.
+        return "INCONCLUSIVE"
+    words = re.findall(r"[A-Z]+", upper)
     if not words:
         return "UNKNOWN"
     first = words[0]
@@ -228,6 +227,24 @@ def parse_verdict(text: str) -> str:
         return "MIXED"
     if first in ("PASS", "FAIL"):
         return first
+    return "UNKNOWN"
+
+
+def parse_verdict(text: str) -> str:
+    """Normalise a results.md verdict to PASS / FAIL / MIXED / INCONCLUSIVE / UNKNOWN.
+
+    Takes the first "Verdict" line that carries a recognisable verdict, so a
+    heading such as "### Verdict rationale" before the real line is skipped.
+    """
+    for match in _VERDICT_LINE_RE.finditer(text):
+        line = match.group(1).strip()
+        if not line:
+            # "## Verdict" heading with the verdict on the next non-empty line
+            after = text[match.end():].lstrip().splitlines()
+            line = after[0] if after else ""
+        verdict = _classify_verdict_line(line)
+        if verdict != "UNKNOWN" or line.lstrip("*` ").startswith("<"):
+            return verdict
     return "UNKNOWN"
 
 
@@ -263,6 +280,14 @@ def scan_experiments(run_dir: Path) -> list[dict]:
         preflight_file = exp_dir / "preflight.md"
         preflight = parse_preflight(preflight_file) if preflight_file.is_file() else None
         failed_checks = sorted(k for k, v in (preflight or {}).items() if v == "FAIL")
+        if preflight is None:
+            preflight_state = "missing"
+        elif not preflight:
+            # A file with no readable check rows proves nothing; do not let it
+            # pass as a clean pre-flight.
+            preflight_state = "unreadable"
+        else:
+            preflight_state = "fail" if failed_checks else "ok"
         verdict = stated
         note = ""
         if failed_checks and stated in VALID_VERDICTS:
@@ -275,7 +300,7 @@ def scan_experiments(run_dir: Path) -> list[dict]:
             "component": component[0].strip() if component else "",
             "stated_verdict": stated,
             "verdict": verdict,
-            "preflight": "missing" if preflight is None else ("fail" if failed_checks else "ok"),
+            "preflight": preflight_state,
             "preflight_failed": failed_checks,
             "note": note,
         })
@@ -313,7 +338,7 @@ def audit_summary(run_dir: Path) -> str:
 
 
 def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_state: str,
-                    publish_error: str = "", paused: bool = False) -> dict:
+                    publish_error: str = "", paused: bool = False, notes: list[str] | None = None) -> dict:
     """Decide the run's final outcome from what actually exists on disk.
 
     complete        workflow finished, valid results, pushed and verified
@@ -368,8 +393,12 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     unchecked = [e["id"] for e in experiments if e["preflight"] == "missing"]
     if unchecked:
         reasons.append(f"no pre-flight record for {', '.join(unchecked)}")
+    unreadable = [e["id"] for e in experiments if e["preflight"] == "unreadable"]
+    if unreadable:
+        reasons.append(f"pre-flight record has no readable check table for {', '.join(unreadable)}")
     if theory_only and has_results:
         reasons.append("theory-only negative result (no experiments were run)")
+    reasons.extend(notes or [])
 
     return {
         "outcome": outcome,
@@ -489,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--publish-state", required=True, choices=("pushed", "failed", "skipped"))
         p.add_argument("--publish-error", default="")
         p.add_argument("--paused", default="false")
+        p.add_argument("--note", action="append", default=[], help="a wrapper caveat to report (repeatable)")
         if name == "issue-comment":
             p.add_argument("--run-id", required=True)
             p.add_argument("--repo-web", default="")
@@ -527,7 +557,8 @@ def main(argv: list[str] | None = None) -> int:
                             timed_out=args.timed_out.lower() in truthy,
                             publish_state=args.publish_state,
                             publish_error=args.publish_error,
-                            paused=args.paused.lower() in truthy)
+                            paused=args.paused.lower() in truthy,
+                            notes=args.note)
     if args.command == "outcome":
         print(json.dumps(facts))
         return 0

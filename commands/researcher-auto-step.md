@@ -603,6 +603,9 @@ If `state.md` contains `is_followup: true`:
         CSV/JSON metric files are what matter — not multi-GB model weights.
       - GitHub has a 100MB per-file hard limit. No single file in the experiment
         directory should exceed 50MB.
+      - Do not create git repositories inside the run directory (no `git init`, and
+        clone third-party code outside it, e.g. under $TMPDIR). A nested repository
+        cannot be published with the run; record a library's URL and commit instead.
       - PRE-FLIGHT GATE (mandatory): run the pre-flight checks in your instructions
         BEFORE the main run, and record them in preflight.md. Do not report a PASS or
         FAIL from a pipeline that failed a check: fix it, or report INCONCLUSIVE.

@@ -77,6 +77,11 @@ class TrainingTest(unittest.TestCase):
             log.write_text("\n".join(f"{{'loss': {3 - i * 0.1:.2f}, 'step': {i}}}" for i in range(10)))
             self.assertEqual(len(pf.losses_from_file(log)), 10)
 
+    def test_negative_losses(self):
+        self.assertEqual(pf.check_training([-0.5 - 0.01 * i for i in range(40)])["status"], pf.PASS)
+        self.assertEqual(pf.check_training([-0.5] * 40)["status"], pf.WARN)
+        self.assertEqual(pf.check_training([-0.5 + 0.05 * i for i in range(40)])["status"], pf.FAIL)
+
     def test_too_few_points_fail(self):
         self.assertEqual(pf.check_training([1.0, 0.5])["status"], pf.FAIL)
 
@@ -146,6 +151,21 @@ class CompareTest(unittest.TestCase):
         report = pf.compare(self.records(effect=0.5, seeds=(0, 1, 2)), a="control", b="treatment", cluster="prompt_id")
         self.assertGreater(report["diff_ci95"][0], 0)
         self.assertLess(report["p_value"], 0.01)
+
+    def test_unclustered_groups_are_never_paired_by_position(self):
+        # Without cluster ids the two groups share no keys, so they are
+        # compared as independent samples whatever order the rows are in.
+        a = pf.cluster_means([1.0, 2.0, 3.0], None, "a")
+        b = pf.cluster_means([1.0, 2.0, 3.0], None, "b")
+        self.assertFalse(set(a) & set(b))
+        rng = random.Random(0)
+        false_positives = 0
+        for _ in range(20):
+            x = sorted(rng.gauss(0, 1) for _ in range(30))
+            y = sorted(rng.gauss(0, 1) for _ in range(30))
+            records = [{"condition": "a", "value": v} for v in x] + [{"condition": "b", "value": v} for v in y]
+            false_positives += pf.compare(records, a="a", b="b")["p_value"] < 0.05
+        self.assertLessEqual(false_positives, 3)
 
     def test_bonferroni(self):
         report = pf.compare(self.records(seeds=(0, 1, 2)), a="control", b="treatment",

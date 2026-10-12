@@ -94,11 +94,11 @@ def numbers_from(items: list, value: str | None, cluster: str | None = None) -> 
                 raise ValueError(f"cannot find a numeric field in {sorted(item)}; pass --value")
             values.append(float(item[key]))
             if clusters is not None:
-                clusters.append(item.get(cluster, f"_{index}"))
+                clusters.append(item.get(cluster))
         else:
             values.append(float(item))
             if clusters is not None:
-                clusters.append(f"_{index}")
+                clusters.append(None)
     return values, clusters
 
 
@@ -242,13 +242,14 @@ def check_training(losses: list[float]) -> dict:
         return {"check": "training", "status": FAIL, "n": len(losses), "messages": ["non-finite loss (nan/inf)"]}
     k = max(1, len(losses) // 10)
     start, end = statistics.mean(losses[:k]), statistics.mean(losses[-k:])
-    if end > start * 1.1:
+    scale = abs(start) or 1e-12  # sign-aware: some objectives are negative
+    if end > start + 0.1 * scale:
         status = FAIL
         messages.append(f"loss diverged: {start:.4g} -> {end:.4g}")
-    elif end > start * 0.98:
+    elif end > start - 0.02 * scale:
         status = WARN
         messages.append(f"loss barely moved: {start:.4g} -> {end:.4g}")
-    if end < 0.01:
+    if min(losses) >= 0 and end < 0.01:
         status = FAIL if status == FAIL else WARN
         messages.append(f"near-zero final loss {end:.3g}: likely memorisation; evaluate on held-out data")
     window = losses[: max(5, k)]
@@ -283,12 +284,17 @@ def auroc(positive: list[float], negative: list[float]) -> float:
     return (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 
 
-def cluster_means(values: list[float], clusters: list | None) -> dict:
-    if clusters is None:
-        return {i: v for i, v in enumerate(values)}
+def cluster_means(values: list[float], clusters: list | None, group: str = "") -> dict:
+    """Mean per independent unit, keyed by cluster id.
+
+    A value without a cluster id is its own unit, keyed uniquely to `group`, so
+    two groups are only ever paired on cluster ids they explicitly share —
+    never by row position (which made sorted inputs look hugely significant).
+    """
     grouped = defaultdict(list)
-    for v, c in zip(values, clusters):
-        grouped[c].append(v)
+    for index, value in enumerate(values):
+        cid = clusters[index] if clusters is not None else None
+        grouped[("_row", group, index) if cid is None else cid].append(value)
     return {c: statistics.mean(vs) for c, vs in grouped.items()}
 
 
@@ -343,8 +349,8 @@ def check_separation(positive: list[float], negative: list[float], *,
     if not higher_is_positive:
         positive, negative = [-v for v in positive], [-v for v in negative]
         lo, hi = (-hi if hi is not None else None), (-lo if lo is not None else None)
-    a = cluster_means(negative, neg_clusters)
-    b = cluster_means(positive, pos_clusters)
+    a = cluster_means(negative, neg_clusters, "negative")
+    b = cluster_means(positive, pos_clusters, "positive")
     report = {"check": "separation", "n_positive": len(positive), "n_negative": len(negative),
               "independent_positive": len(b), "independent_negative": len(a)}
     if len(a) < 3 or len(b) < 3:
@@ -394,8 +400,8 @@ def compare(records: list[dict], *, a: str, b: str, condition: str = "condition"
     means, warnings, notes, detail = {}, [], [], {}
     for name, rows in groups.items():
         values = [float(r[value]) for r in rows]
-        clusters = [r.get(cluster, f"_{i}") for i, r in enumerate(rows)] if cluster else None
-        means[name] = cluster_means(values, clusters)
+        clusters = [r.get(cluster) for r in rows] if cluster else None
+        means[name] = cluster_means(values, clusters, name)
         seeds = sorted({str(r[seed_field]) for r in rows if seed_field in r})
         detail[name] = {"n_records": len(rows), "n_independent": len(means[name]),
                         "n_seeds": len(seeds) or None, "mean": round(statistics.mean(values), 6)}

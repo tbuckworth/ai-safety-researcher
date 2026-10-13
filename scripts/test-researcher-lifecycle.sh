@@ -143,7 +143,7 @@ fi
 if [ "${MOCK_STALL_AT_STEP:-}" = "$step" ]; then
     # The step stops early on purpose (e.g. it asked for more budget) and
     # leaves current_step where it was.
-    [ -z "${MOCK_STALL_HOLD_FILE:-}" ] || echo "waiting for budget" > "$MOCK_STALL_HOLD_FILE"
+    [ -z "${MOCK_STALL_HOLD_FILE:-}" ] || echo "${MOCK_STALL_HOLD_TEXT:-waiting for budget}" > "$MOCK_STALL_HOLD_FILE"
     echo "Ending step ${step} without advancing."
     exit 0
 fi
@@ -669,6 +669,44 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
 assert_grep "job\(s\) 4242 are still outstanding" "${CASE_DIR}/stdout.log"
+# ...except a hold marked "!" (a stop), which applies at once: before a step,
+# and while a stalled step waits for its jobs.
+new_case guard-stop-jobs
+write_run 2026-01-12-guard-stop 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo '! stopped by Titus'" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (stopped despite jobs)"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran although the run was stopped"; ok
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-12-guard-stop")" "stopped by Titus" "pause reason"
+new_case guard-stop-wait
+write_run 2026-01-13-guard-wait 8 mock_step_complete
+: > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_STALL_AT_STEP=9 "MOCK_STALL_HOLD_FILE=${CASE_DIR}/hold" \
+    "MOCK_STALL_HOLD_TEXT=! stopped by Titus" "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" RESEARCHER_JOB_WAIT_POLL_SECONDS=1 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (stopped while waiting)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "no retry after the stop"
+assert_eq "$(field current_step "${OUT}/2026-01-13-guard-wait")" "8" "current_step kept"
+assert_grep "Guard: stopped by Titus \(job\(s\) 4242 keep running" "${CASE_DIR}/stdout.log"
+
+# 15f. A run with an owner (RESEARCHER_OWNER) is never resumed by a plain run,
+#      and keeps its owner through the steps.
+new_case owned-run
+write_run 2026-01-14-owned 3 mock_step_complete
+sed -i 's/^mode: autonomous$/mode: autonomous\nowner: agent-spare/' "${OUT}/2026-01-14-owned/state.md"
+set_issues <(issue_json 302 "Owned idea" "list:research-ideas" "Body")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_ISSUE=302
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(field current_step "${OUT}/2026-01-14-owned")" "3" "the owned run untouched"
+assert_grep "Not resuming .*2026-01-14-owned: it belongs to agent-spare" "${CASE_DIR}/stdout.log"
+assert_eq "$(field owner "$(run_dir_for_issue 302)")" "" "a plain run has no owner"
+set_issues <(issue_json 303 "Spare idea" "list:research-ideas" "Body")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_OWNER=agent-spare \
+    RESEARCHER_NO_RESUME=true RESEARCHER_ISSUE=303
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(field owner "$(run_dir_for_issue 303)")" "agent-spare" "the owner is recorded and kept"
+run_researcher "RESEARCHER_OWNER=bad owner" -- "Ignored topic"
+assert_eq "$RC" "2" "an unsafe owner is refused"
 new_case guard-broken
 write_run 2026-01-08-guard-broken 10 audit_complete
 mkdir -p "${OUT}/2026-01-08-guard-broken/experiments/exp-001"

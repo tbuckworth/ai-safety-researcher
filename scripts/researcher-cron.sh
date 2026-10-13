@@ -66,6 +66,25 @@ JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
 JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
 JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
+# Optional hook: a shell command run before each step ("{run_id}" substituted).
+# If it prints anything, its first line is the reason and the run pauses there,
+# exactly as on a provider limit: resumable, nothing published. Steps are never
+# interrupted, and the run doesn't pause while JOB_WAIT_CMD still reports jobs,
+# unless the line starts with "!" (a stop: the jobs keep running and the step
+# is redone on resume). agent-board's spare-capacity launcher uses it.
+# Empty = old behaviour.
+GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
+# A caller that owns one run (agent-board's spare launcher) pins it: with
+# RESEARCHER_RUN_DIR it resumes exactly that run or exits 2, and with
+# RESEARCHER_NO_RESUME=true a fresh start never picks up another unfinished run.
+# RESEARCHER_OWNER marks the runs it creates (owner: in state.md), and a run
+# with an owner is only ever resumed by that owner or through RESEARCHER_RUN_DIR.
+PIN_RUN_DIR="${RESEARCHER_RUN_DIR:-}"
+NO_RESUME="${RESEARCHER_NO_RESUME:-false}"
+RUN_OWNER="${RESEARCHER_OWNER:-}"
+case "$RUN_OWNER" in
+    *[!A-Za-z0-9_.-]*) echo "ERROR: RESEARCHER_OWNER may only hold letters, digits, '_', '.' and '-'." >&2; exit 2 ;;
+esac
 TOPIC="${1:-}"
 
 # Provider selection. RESEARCHER_MODEL remains a backwards-compatible
@@ -297,7 +316,7 @@ is_terminal_status() {
 
 find_in_progress_run() {
     # Prints the run to resume on stdout; everything else goes to stderr.
-    local state_file status mode
+    local state_file status mode owner
     # Runs live under machine-generated slug paths without whitespace.
     # shellcheck disable=SC2045
     for state_file in $(ls -1t "$OUTPUT_DIR"/*/state.md 2>/dev/null); do
@@ -307,6 +326,12 @@ find_in_progress_run() {
         # never take one over.
         mode=$(grep '^mode:' "$state_file" | head -1 | awk '{print $2}')
         if [ -n "$mode" ] && [ "$mode" != "autonomous" ]; then
+            continue
+        fi
+        # Nor one another caller owns (it runs it under its own guard and budget).
+        owner=$({ grep '^owner:' "$state_file" || true; } | head -1 | awk '{print $2}')
+        if [ "$owner" != "$RUN_OWNER" ]; then
+            log "Not resuming $(dirname "$state_file"): it belongs to ${owner:-no owner}." >&2
             continue
         fi
         if [ "$RESUME_MAX_AGE_DAYS" -gt 0 ] 2>/dev/null \
@@ -659,8 +684,29 @@ STATEEOF
     log "Follow-up run directory ready: ${RUN_DIR}"
 }
 
+pinned_run() {
+    local status mode
+    if [ ! -f "${PIN_RUN_DIR}/state.md" ]; then
+        log "ERROR: RESEARCHER_RUN_DIR=${PIN_RUN_DIR} has no state.md." >&2
+        return 1
+    fi
+    status=$({ grep '^status:' "${PIN_RUN_DIR}/state.md" || true; } | head -1 | awk '{print $2}')
+    mode=$({ grep '^mode:' "${PIN_RUN_DIR}/state.md" || true; } | head -1 | awk '{print $2}')
+    if is_terminal_status "$status" || { [ -n "$mode" ] && [ "$mode" != "autonomous" ]; }; then
+        log "ERROR: RESEARCHER_RUN_DIR=${PIN_RUN_DIR} is not a resumable autonomous run (status '${status}', mode '${mode:-?}')." >&2
+        return 1
+    fi
+    printf '%s\n' "${PIN_RUN_DIR%/}"
+}
+
 # Check for in-progress run first
-if IN_PROGRESS=$(find_in_progress_run); then
+IN_PROGRESS=""
+if [ -n "$PIN_RUN_DIR" ]; then
+    IN_PROGRESS=$(pinned_run) || exit 2
+elif ! is_true "$NO_RESUME"; then
+    IN_PROGRESS=$(find_in_progress_run) || IN_PROGRESS=""
+fi
+if [ -n "$IN_PROGRESS" ]; then
     RUN_DIR="$IN_PROGRESS"
     STORED_BACKEND=$(grep '^agent_backend:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' || true)
     if [ -n "$STORED_BACKEND" ] \
@@ -770,7 +816,8 @@ ensure_runtime_state() {
         && upsert_frontmatter_field "issue_number" "${ISSUE_NUMBER:-none}" \
         && upsert_frontmatter_field "agent_model" "$(yaml_quote "$MODEL")" \
         && upsert_frontmatter_field "compute_profile" "$(yaml_quote "$COMPUTE_PROFILE")" \
-        && upsert_frontmatter_field "knowledge_base" "$(yaml_quote "${KB_DIR:-none}")"
+        && upsert_frontmatter_field "knowledge_base" "$(yaml_quote "${KB_DIR:-none}")" \
+        && { [ -z "${RUN_DIR_OWNER:-}" ] || upsert_frontmatter_field "owner" "$RUN_DIR_OWNER"; }
 }
 
 set_status() {
@@ -954,13 +1001,39 @@ outstanding_jobs() {
     ( set +e +o pipefail; eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' ) || true
 }
 
+guard_hold() {
+    [ -n "$GUARD_CMD" ] || return 0
+    local cmd run_id
+    run_id=$(basename "$RUN_DIR")
+    cmd=${GUARD_CMD//\{run_id\}/$run_id}
+    # Output decides, not the exit code: a guard that fails silently holds nothing
+    # (a guard that must hold on failure says so itself). Bounded, so a hung
+    # guard cannot stall the run between steps for ever.
+    ( set +e +o pipefail; timeout 300 bash -c "$cmd" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1 ) || true
+}
+
+hold_applies() {
+    # A hold waits for this run's outstanding jobs (pausing mid-experiment is
+    # what the guard must not do), unless it starts with "!": then it applies at
+    # once, and the jobs keep running for the step that is redone on resume.
+    case "$1" in
+        !*) return 0 ;;
+    esac
+    [ -z "$(outstanding_jobs | tr -d ' ')" ]
+}
+
+hold_text() {
+    local text="${1#!}"
+    printf '%s\n' "${text# }"
+}
+
 run_step() {
     local step="$1"
     local prev_step
     prev_step=$(get_current_step)
 
     local attempt=0 refunds=0 total_waited=0
-    local exit_code new_step new_status run_log
+    local exit_code new_step new_status run_log hold
     while [ "$attempt" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((attempt + 1))
         run_log="${LOG_DIR}/step-${step}-attempt-${attempt}-$(date +%Y%m%d-%H%M%S).log"
@@ -1046,6 +1119,14 @@ run_step() {
                     sleep "$JOB_WAIT_POLL_SECONDS"
                     waited=$((waited + JOB_WAIT_POLL_SECONDS))
                     total_waited=$((total_waited + JOB_WAIT_POLL_SECONDS))
+                    # a stop ("!") doesn't wait for the jobs
+                    hold=$(guard_hold)
+                    if [ "${hold#!}" != "$hold" ]; then
+                        hold=$(hold_text "$hold")
+                        log "Guard: ${hold} (job(s) ${outstanding% } keep running; this step is redone on resume)"
+                        upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
+                        return 2
+                    fi
                     outstanding=$(outstanding_jobs)
                 done
                 if [ -n "${outstanding// /}" ]; then
@@ -1054,12 +1135,29 @@ run_step() {
                     refunds=$((refunds + 1))
                     attempt=$((attempt - 1))
                     log "Step ${step}: external job(s) finished after ~${waited}s; retrying without spending an attempt (refund ${refunds}/${JOB_WAIT_MAX_REFUNDS})."
+                    hold=$(guard_hold)
+                    if [ -n "$hold" ] && hold_applies "$hold"; then
+                        hold=$(hold_text "$hold")
+                        log "Guard: ${hold}"
+                        upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
+                        return 2
+                    fi
                     continue
                 fi
             fi
         fi
 
         log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
+
+        # A step may end on purpose without advancing because the guard now
+        # holds the run (e.g. it asked for more budget): pause, don't retry.
+        hold=$(guard_hold)
+        if [ -n "$hold" ] && hold_applies "$hold"; then
+            hold=$(hold_text "$hold")
+            log "Guard: ${hold}"
+            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
+            return 2
+        fi
     done
 
     log "Step ${step} failed after ${STEP_MAX_ATTEMPTS} attempts. Marking run failed."
@@ -1082,6 +1180,15 @@ pause_run() {
 # fast-track still reports the skipped audit when it is resumed.
 TIMED_OUT=false
 grep -q '^timed_out: true' "${RUN_DIR}/state.md" && TIMED_OUT=true
+
+# The run's owner (RESEARCHER_OWNER when it was created) stays in state.md and is
+# restored after every step, so a plain cron never resumes a run someone else
+# runs under its own guard and budget.
+RUN_DIR_OWNER=$({ grep '^owner:' "${RUN_DIR}/state.md" || true; } | head -1 | awk '{print $2}')
+[ -n "$RUN_DIR_OWNER" ] || RUN_DIR_OWNER="$RUN_OWNER"
+if [ -n "$RUN_DIR_OWNER" ]; then
+    upsert_frontmatter_field "owner" "$RUN_DIR_OWNER" || true
+fi
 
 # Main step loop
 while true; do
@@ -1151,6 +1258,21 @@ while true; do
         # Step 11 advanced current_step but left a non-terminal status.
         set_status complete
         break
+    fi
+
+    HOLD=$(guard_hold)
+    if [ -n "$HOLD" ]; then
+        if hold_applies "$HOLD"; then
+            HOLD=$(hold_text "$HOLD")
+            log "Guard: ${HOLD}"
+            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$HOLD")" || true
+            pause_run "$NEXT_STEP"
+            break
+        fi
+        # Pausing now would leave this run's cluster jobs unwatched; the step
+        # that collects them goes ahead.
+        OUTSTANDING=$(outstanding_jobs)
+        log "Guard asked to hold (${HOLD}), but job(s) ${OUTSTANDING% } are still outstanding; carrying on."
     fi
 
     STEP_RC=0

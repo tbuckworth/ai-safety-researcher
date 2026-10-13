@@ -140,6 +140,14 @@ if [ "${MOCK_LIMIT_AT_STEP:-}" = "$step" ]; then
     exit 0
 fi
 
+if [ "${MOCK_STALL_AT_STEP:-}" = "$step" ]; then
+    # The step stops early on purpose (e.g. it asked for more budget) and
+    # leaves current_step where it was.
+    [ -z "${MOCK_STALL_HOLD_FILE:-}" ] || echo "${MOCK_STALL_HOLD_TEXT:-waiting for budget}" > "$MOCK_STALL_HOLD_FILE"
+    echo "Ending step ${step} without advancing."
+    exit 0
+fi
+
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -597,6 +605,116 @@ run_researcher MOCK_LIMIT_AT_STEP=10 -- "Ignored topic"
 assert_eq "$RC" "3" "exit code (paused)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "provider calls"
 assert_eq "$(field status "${OUT}/2026-01-05-audit-limit")" "audit_remediating" "status left resumable"
+
+# 15c. A guard (RESEARCHER_GUARD_CMD) holds the run between steps: it pauses
+#      before calling the provider, records why, and resumes once it is quiet.
+new_case guard-hold
+write_run 2026-01-06-guard 3 mock_step_complete
+echo "other agents are busy on this login" > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused by guard)"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "the provider ran although the guard held"; ok
+assert_eq "$(field current_step "${OUT}/2026-01-06-guard")" "3" "current_step kept"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-06-guard")" "other agents are busy on this login" "pause reason"
+assert_grep "Guard: other agents are busy" "${CASE_DIR}/stdout.log"
+: > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "4 5 6 7 8 9 10 11 " "resumed at step 4"
+
+# 15c'. A step that ends without advancing because the guard now holds (it
+#       asked for budget mid-step) pauses instead of spending its retries.
+new_case guard-mid-step
+write_run 2026-01-09-guard-mid 8 mock_step_complete
+: > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_STEP_ATTEMPTS=3 MOCK_STALL_AT_STEP=9 \
+    "MOCK_STALL_HOLD_FILE=${CASE_DIR}/hold" "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused mid-step by guard)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "one attempt, no retries"
+assert_eq "$(field current_step "${OUT}/2026-01-09-guard-mid")" "8" "current_step kept"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-09-guard-mid")" "waiting for budget" "pause reason"
+
+# 15e. A pinned run: RESEARCHER_RUN_DIR resumes exactly that run even when a
+#      newer unfinished one exists, and refuses a finished one; NO_RESUME starts
+#      the requested issue fresh instead of resuming something else.
+new_case pinned-run
+write_run 2026-01-10-mine 10 audit_complete
+mkdir -p "${OUT}/2026-01-10-mine/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-10-mine/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-10-mine/experiments/exp-001/preflight.md"
+write_run 2026-01-11-someone-elses 3 mock_step_complete
+touch "${OUT}/2026-01-11-someone-elses/state.md"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "resumed the pinned run only"
+assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "the other run untouched"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
+assert_eq "$RC" "2" "a finished pinned run is refused"
+: > "${CASE_DIR}/steps.log"
+set_issues <(issue_json 301 "Fresh idea" "list:research-ideas" "Body")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_NO_RESUME=true RESEARCHER_ISSUE=301
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+[ -n "$(run_dir_for_issue 301)" ] || fail "no fresh run for #301"; ok
+assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "still untouched"
+
+# 15d. ...but never while the run's cluster jobs are outstanding, and a guard
+#      that fails without printing anything holds nothing.
+new_case guard-jobs
+write_run 2026-01-07-guard-jobs 10 audit_complete
+mkdir -p "${OUT}/2026-01-07-guard-jobs/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-07-guard-jobs/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-07-guard-jobs/experiments/exp-001/preflight.md"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
+assert_grep "job\(s\) 4242 are still outstanding" "${CASE_DIR}/stdout.log"
+# ...except a hold marked "!" (a stop), which applies at once: before a step,
+# and while a stalled step waits for its jobs.
+new_case guard-stop-jobs
+write_run 2026-01-12-guard-stop 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo '! stopped by Titus'" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (stopped despite jobs)"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran although the run was stopped"; ok
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-12-guard-stop")" "stopped by Titus" "pause reason"
+new_case guard-stop-wait
+write_run 2026-01-13-guard-wait 8 mock_step_complete
+: > "${CASE_DIR}/hold"
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_STALL_AT_STEP=9 "MOCK_STALL_HOLD_FILE=${CASE_DIR}/hold" \
+    "MOCK_STALL_HOLD_TEXT=! stopped by Titus" "RESEARCHER_GUARD_CMD=cat ${CASE_DIR}/hold" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" RESEARCHER_JOB_WAIT_POLL_SECONDS=1 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (stopped while waiting)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "no retry after the stop"
+assert_eq "$(field current_step "${OUT}/2026-01-13-guard-wait")" "8" "current_step kept"
+assert_grep "Guard: stopped by Titus \(job\(s\) 4242 keep running" "${CASE_DIR}/stdout.log"
+
+# 15f. A run with an owner (RESEARCHER_OWNER) is never resumed by a plain run,
+#      and keeps its owner through the steps.
+new_case owned-run
+write_run 2026-01-14-owned 3 mock_step_complete
+sed -i 's/^mode: autonomous$/mode: autonomous\nowner: agent-spare/' "${OUT}/2026-01-14-owned/state.md"
+set_issues <(issue_json 302 "Owned idea" "list:research-ideas" "Body")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_ISSUE=302
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(field current_step "${OUT}/2026-01-14-owned")" "3" "the owned run untouched"
+assert_grep "Not resuming .*2026-01-14-owned: it belongs to agent-spare" "${CASE_DIR}/stdout.log"
+assert_eq "$(field owner "$(run_dir_for_issue 302)")" "" "a plain run has no owner"
+set_issues <(issue_json 303 "Spare idea" "list:research-ideas" "Body")
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_OWNER=agent-spare \
+    RESEARCHER_NO_RESUME=true RESEARCHER_ISSUE=303
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(field owner "$(run_dir_for_issue 303)")" "agent-spare" "the owner is recorded and kept"
+run_researcher "RESEARCHER_OWNER=bad owner" -- "Ignored topic"
+assert_eq "$RC" "2" "an unsafe owner is refused"
+new_case guard-broken
+write_run 2026-01-08-guard-broken 10 audit_complete
+mkdir -p "${OUT}/2026-01-08-guard-broken/experiments/exp-001"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/preflight.md"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=false" -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "a silent failing guard holds nothing"
 
 # =============================================================================
 # 16. A pause inside the timeout fast-track resumes at Step 11, not at the

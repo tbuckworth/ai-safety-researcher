@@ -5,8 +5,12 @@
 #   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> [--source claude|codex] [--force]
 #
 # Creates an issue on tbuckworth/tasks with labels:
-# list:research-ideas, type:follow-up, source:<backend>
+# list:research-ideas, type:follow-up, source:<backend>, importance:<parent's>
 # Metadata is stored in a single footer line (not YAML) for easy parsing.
+#
+# The follow-up takes its parent's importance label, or importance:medium when
+# the parent has none (or cannot be read). agent-spare only starts ideas rated
+# high or medium, so a follow-up filed without one was never run on its own.
 #
 # Idempotent: the body carries a follow-up key (a hash of the request). If an
 # issue with the same key already exists, open or closed, it is reported and
@@ -99,6 +103,16 @@ fi
 BODY="${BODY}
 <!-- followup-key: ${KEY} -->"
 
+IMPORTANCE="importance:medium"
+if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
+    PARENT_IMPORTANCE=$(gh issue view "$PARENT" --repo "$TASKS_REPO" --json labels \
+        --jq '[.labels[].name | select(startswith("importance:"))][0] // ""' 2>/dev/null) \
+        || PARENT_IMPORTANCE=""
+    case "$PARENT_IMPORTANCE" in
+        importance:high|importance:medium|importance:low) IMPORTANCE="$PARENT_IMPORTANCE" ;;
+    esac
+fi
+
 # Ensure labels exist
 gh label create "type:follow-up" \
     --repo "$TASKS_REPO" \
@@ -112,6 +126,7 @@ ISSUE_URL=$(gh issue create --repo "$TASKS_REPO" \
     --label "list:research-ideas" \
     --label "type:follow-up" \
     --label "source:${SOURCE_AGENT}" \
+    --label "$IMPORTANCE" \
     --body "$BODY")
 
 ISSUE_NUMBER=$(echo "$ISSUE_URL" | sed 's/.*\///')

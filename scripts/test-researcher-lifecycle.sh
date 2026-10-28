@@ -609,6 +609,17 @@ echo '[]' > "${CASE_DIR}/issues.json"
 followup
 assert_grep "issue create .*<!-- followup-key: [0-9a-f]{16} -->" <(tr '\n' ' ' < "${CASE_DIR}/gh.log")
 assert_grep "Created follow-up issue" "${CASE_DIR}/followup.out"
+# The follow-up takes its parent's importance (agent-spare only starts high or
+# medium ideas), or medium when the parent has none or cannot be read.
+assert_grep "--label importance:medium --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+for imp in high low; do
+    set_issues <(issue_json 1874 "Salad topic" "list:research-ideas,importance:${imp}")
+    followup
+    assert_grep "--label importance:${imp} --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+done
+set_issues <(issue_json 1874 "Salad topic" "list:research-ideas")
+followup
+assert_grep "--label importance:medium --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
 
 # =============================================================================
 # 11. An EMPTY public repo left by the old master/main bug is not reused:

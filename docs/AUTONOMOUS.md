@@ -371,7 +371,7 @@ since a redesign would answer a question that was never actually asked.
 
 ### How Follow-Ups Work
 
-1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas` and `type:follow-up`.
+1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas`, `type:follow-up` and the parent's `importance:` label (`importance:medium` when the parent has none), since agent-spare only starts ideas rated high or medium.
 
 2. **Autonomous pickup**: The cron wrapper picks the follow-up issue like any other research idea. When it detects the `type:follow-up` label, it:
    - Clones the prior repo (on the output volume, never `/tmp`) to copy key artifacts into a `prior/` subdirectory
@@ -394,6 +394,7 @@ since a redesign would answer a question that was never actually asked.
 | `list:research-ideas` | Eligible for pickup (same as fresh ideas) |
 | `type:follow-up` | Marks issue as a follow-up with prior context |
 | `source:claude` / `source:codex` | Created by the corresponding review backend |
+| `importance:high` / `medium` / `low` | Copied from the parent issue (medium if it has none); agent-spare only starts high and medium |
 | `status:claude-researching` | Currently being worked on |
 | `status:claude-processed` | Completed |
 | `status:codex-researching` | Currently being worked on by Codex |

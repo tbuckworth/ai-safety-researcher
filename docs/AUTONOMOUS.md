@@ -20,7 +20,7 @@ cron → researcher-cron.sh
          │    └─ Step N: spawn agents, make decisions, update state.md
          │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
          ├─ Create GitHub repo (gh CLI)
-         ├─ Compose email with selected backend; send with shared Gmail helper
+         ├─ Email: a Claude session writes it and sends it with agent-mail (reviewed)
          └─ Update issue: status:<backend>-processed
 ```
 
@@ -32,10 +32,8 @@ On the machine running the cron job (desktop):
   - **Claude Code CLI** for `RESEARCHER_BACKEND=claude` (the default)
   - **Codex CLI** for `RESEARCHER_BACKEND=codex`
 - **gh CLI** — authenticated (`gh auth login`)
-- **Gmail OAuth token** — configured at
-  `~/.config/google-docs-mcp/token.json` with `gmail.send`
-- **Shared report-email helper** — normally at
-  `~/pyg/claude-remote-setup/plugins/report-email/scripts/send_report_email.py`
+- **agent-mail** (`~/.local/bin/agent-mail`, from `~/pyg/agent-mailroom`) and
+  the Claude Code CLI for the results email. See "The results email" below.
 - **tectonic** — for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
 - **jq** — for JSON parsing (`sudo apt install jq`)
 - **Python 3** — for experiment execution
@@ -143,7 +141,8 @@ required.
 | `RESEARCHER_GIT_REMOTE_BASE` | Where git pushes (default `https://github.com`; tests point it at local bare repos) |
 | `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
 | `RESEARCHER_EMAIL_TO` | Fixed self-recipient for autonomous delivery |
-| `RESEARCHER_SEND_EMAIL_SCRIPT` | Override shared Gmail helper |
+| `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
+| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (default `sonnet`; a Claude run uses its own model) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
 | `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). While it prints anything, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
@@ -290,9 +289,21 @@ and a failed one is logged and stepped past. It never fails a step.
 - Check the latest step log in `logs/`
 - Delete the lockfile if stale: `rm /tmp/researcher-auto.lock`
 
-**Gmail token expired**:
-- Re-run OAuth: `python ~/pyg/admin/google_reauth.py`
-- Sync to desktop: `bash ~/.claude/sync-config.sh`
+**Results email not sent**:
+- The run log says why (`Writing and sending the results email ...`, then
+  `Email sent ...` or a `Note:`); the composer's own output is in
+  `logs/email-*.log`, and `email-draft.html` stays in the run directory.
+- `agent-mail sent` lists what went out; `agent-mail status` checks the mailroom.
+- A draft the pre-send review held and nobody revised is sent unchanged by the
+  mailroom after its fallback wait; nothing is lost.
+
+**Publishing failed**:
+- The reason in `run-outcome.json` is git's own (`git commit failed: ...`);
+  the full output is in `logs/gh-commit.log`.
+- A file the global secret scan (gitleaks) flags is left out of the commit and
+  listed as "not published: the secret scan flagged line N (rule)". If it is a
+  false positive, allowlist it in `~/.gitleaks.toml` and re-publish; if it is a
+  real secret, remove it from the run directory and rotate it.
 
 **Codex works interactively but cron says it is missing**:
 - Confirm `~/.local/bin/codex` exists
@@ -400,3 +411,30 @@ output/<date>-followup-<slug>/
 │   └── exp-f01/                # Follow-up experiments use f-prefix numbering
 └── ...                         # Other artifacts as normal
 ```
+
+## The results email
+
+The email goes to Titus from the agents' mail account, like every agent's mail
+to him, never from his own Gmail. A Claude session writes it and sends it
+itself with `scripts/send-results-email.sh <run-dir>`, which calls
+`agent-mail send` (a Codex run uses `RESEARCHER_EMAIL_CLAUDE_MODEL` for this
+step). So:
+
+- **The pre-send review applies.** agent-mail has the mail read by a reviewer
+  before it leaves. If it prints `agent-mail: NOT SENT` (exit 3), the session
+  fixes what it lists and runs the helper once more; that send goes out
+  whatever the review says.
+- **Titus's reply comes back to that session.** The wrapper gives it a known
+  session id (`claude --session-id`), and the mailroom resumes it when he
+  replies, in the plugin directory, with the run's context.
+- **Inline plots**: the composer lists them in `<run>/email-images.txt`
+  (`NAME=relative/path.png` per line) and places each as
+  `<img src="cid:NAME">`; the helper checks each one (an image inside the run
+  directory, placed in the HTML) before attaching it.
+- **Fallbacks.** A session that stops without sending has its draft sent by the
+  wrapper as that session. If no Claude session can run at all (no CLI, usage
+  limits), a Codex run writes the email with Codex and the wrapper sends it
+  `--unrouted`: not reviewed, and replies go to the orchestrator.
+- The subject starts `[Auto-Research]`, with the outcome in front when the run
+  is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is
+  gone: the agents' account cannot label Titus's mailbox.

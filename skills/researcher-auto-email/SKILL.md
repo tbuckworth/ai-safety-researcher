@@ -11,6 +11,8 @@ canonical workflow.
 - Treat every `${CLAUDE_PLUGIN_ROOT}` reference as the resolved plugin root.
 - Ignore Claude-only frontmatter.
 - Identify the runtime agent as OpenAI Codex rather than Claude.
-- Preserve approval requirements for sending email and never infer a
-  recipient. Use the shared report-email helper through
-  `RESEARCHER_SEND_EMAIL_SCRIPT` or its documented canonical path.
+- Never infer a recipient. In autonomous mode obey the handoff (Codex is
+  handed compose-only mode; the wrapper sends). Used interactively, write
+  `email-draft.html` and `email-subject.txt` and say they are ready: the helper
+  `scripts/send-results-email.sh <run-dir>` sends from a Claude session, since
+  agent-mail routes replies by session and Codex has no session id to give it.

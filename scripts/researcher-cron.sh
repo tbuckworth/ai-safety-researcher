@@ -130,8 +130,21 @@ esac
 PROCESSING_LABEL="status:${BACKEND}-researching"
 PROCESSED_LABEL="status:${BACKEND}-processed"
 EMAIL_TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
-EMAIL_LABEL="${RESEARCHER_EMAIL_LABEL:-Researcher}"
-SEND_EMAIL_SCRIPT="${RESEARCHER_SEND_EMAIL_SCRIPT:-${HOME}/pyg/claude-remote-setup/plugins/report-email/scripts/send_report_email.py}"
+export RESEARCHER_EMAIL_TO="$EMAIL_TO"
+# The results email goes from the agents' mail account (agent-mail), never from
+# Titus's own Gmail, and through the mailroom's pre-send review like every
+# agent's mail to him. A Claude session writes and sends it, so his reply comes
+# back to that session, whichever backend ran the research; a Codex run uses
+# EMAIL_CLAUDE_MODEL for it. Only when no Claude session can run does the run's
+# own backend write it, and it then goes unrouted (no review, replies to the
+# orchestrator).
+SEND_EMAIL="${SCRIPT_DIR}/send-results-email.sh"
+EMAIL_CLAUDE_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
+if [ "$BACKEND" = "claude" ]; then
+    EMAIL_CLAUDE_MODEL="$MODEL"
+else
+    EMAIL_CLAUDE_MODEL="${RESEARCHER_EMAIL_CLAUDE_MODEL:-sonnet}"
+fi
 
 # How the reader of the results email reaches the machine this run executed on, so
 # the email's "How to Continue This Research" steps are literally runnable. This is
@@ -891,6 +904,8 @@ build_step_prompt() {
 }
 
 build_email_prompt() {
+    # $1: "send" (this session sends it with the helper, and handles the review)
+    # or "compose" (write the files only; the wrapper sends them).
     local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
     local cmd_body
     cmd_body=$(strip_frontmatter "$cmd_file")
@@ -899,11 +914,30 @@ build_email_prompt() {
 
 # Autonomous Email Handoff
 
-- Compose only; do not send the email yourself.
 - Write the HTML to: ${RUN_DIR}/email-draft.html
 - Write the single-line subject to: ${RUN_DIR}/email-subject.txt
-- The wrapper will send only to: ${EMAIL_TO}
+- Inline plots (optional, recommended for results): one NAME=relative/path.png
+  per line in ${RUN_DIR}/email-images.txt, each placed as <img src="cid:NAME" alt="...">
 - Footer agent label: ${AGENT_LABEL}
+EOF
+    if [ "${1:-send}" = "send" ]; then
+        cat <<EOF
+- Send it yourself, once both files are written, with exactly:
+      ${SEND_EMAIL} ${RUN_DIR}
+  It sends to ${EMAIL_TO} from the agents' mail account. Never send it any other
+  way or to anyone else.
+- Mail to Titus is reviewed before it leaves. If that command prints
+  "agent-mail: NOT SENT" (exit 3), nothing was sent: fix what it lists in
+  email-draft.html (and email-subject.txt), then run the same command once more.
+  That second send goes out whatever the review says. Never pass --no-review,
+  and never run it a third time.
+EOF
+    else
+        cat <<EOF
+- Compose only; do not send the email yourself. The wrapper sends it to ${EMAIL_TO}.
+EOF
+    fi
+    cat <<EOF
 
 ## Continuation facts (use these verbatim in "How to Continue This Research")
 
@@ -987,7 +1021,18 @@ run_step_provider() {
 }
 
 run_email_provider() {
-    build_email_prompt | invoke_provider email
+    build_email_prompt compose | invoke_provider email
+}
+
+run_email_claude() {
+    # A Claude session with a known id writes and sends the email, so Titus's
+    # reply resumes this session (the mailroom routes by session id).
+    build_email_prompt send | "$EMAIL_CLAUDE_BIN" --print \
+        --dangerously-skip-permissions \
+        --model "$EMAIL_CLAUDE_MODEL" \
+        --session-id "$EMAIL_SESSION" \
+        --name "$(case "${ISSUE_NUMBER:-none}" in none) echo researcher ;; *) echo "researcher #${ISSUE_NUMBER}" ;; esac)" \
+        --allowedTools "Read,Write,Glob,Grep,Bash"
 }
 
 outstanding_jobs() {
@@ -1346,6 +1391,7 @@ prepare_local_repo() {
     mkdir -p .git/info
     grep -qxF '/.repo_url' "$exclude" 2>/dev/null \
         || printf '%s\n' '/.repo_url' '/.publish_repo' '/.publish_branch' '/run-outcome.json' '*.runtime.tmp' >> "$exclude"
+    grep -qxF '/.email-sent' "$exclude" 2>/dev/null || printf '%s\n' '/.email-sent' >> "$exclude"
 }
 
 exclude_with_note() {
@@ -1386,16 +1432,61 @@ exclude_large_files() {
     done < <(git ls-files --others --modified --exclude-standard -z)
 }
 
+git_reason() {
+    # The line of git's (or a hook's) output that says why it stopped, on one
+    # line and without colour codes, for the publish reason.
+    local text
+    text=$(printf '%s\n' "$1" | sed 's/\x1b\[[0-9;]*m//g' | tr -d '\r')
+    printf '%s\n' "$text" | grep -m1 -E 'COMMIT BLOCKED|^(fatal|error):' \
+        || printf '%s\n' "$text" | grep -v '^[[:space:]]*$' | tail -1
+}
+
+exclude_secret_findings() {
+    # The global pre-commit hook (~/.git-hooks/pre-commit) runs gitleaks and
+    # refuses a commit with anything that looks like a secret. Research output
+    # trips it on false positives: on 2026-10-28 a BibTeX cite key in
+    # literature/search-001-academic.md read as a generic API key, and the
+    # commit failed. Scan the staged changes the way the hook does, and leave
+    # each flagged file out of the commit (it stays in the run directory), with
+    # the reason. Never bypass or weaken the scan from here: if it was a real
+    # secret it must not be published, and if not, Titus decides on an allowlist.
+    command -v gitleaks >/dev/null 2>&1 || return 0
+    local report args=() rc findings file line rule
+    [ -f .gitleaks.toml ] || { [ -f "$HOME/.gitleaks.toml" ] && args+=(--config "$HOME/.gitleaks.toml"); }
+    [ -f .gitleaksignore ] || { [ -f "$HOME/.gitleaksignore" ] && args+=(--gitleaks-ignore-path "$HOME/.gitleaksignore"); }
+    report=$(mktemp "${TMPDIR:-/tmp}/researcher-gitleaks.XXXXXX") || return 0
+    rc=0
+    gitleaks git --pre-commit --staged --redact --no-banner --report-format json --report-path "$report" \
+        ${args[@]+"${args[@]}"} >/dev/null 2>&1 || rc=$?
+    findings=$(jq -r 'group_by(.File)[] | [.[0].File, (map(.StartLine | tostring) | join(", ")), .[0].RuleID] | @tsv' \
+        "$report" 2>/dev/null || true)
+    rm -f "$report"
+    if [ "$rc" -ne 0 ] && [ -z "$findings" ]; then
+        log "WARN: the secret scan exited ${rc} without findings; the commit will show why."
+        return 0
+    fi
+    while IFS=$'\t' read -r file line rule; do
+        [ -n "$file" ] || continue
+        git rm -q --cached --ignore-unmatch -- "$file" >/dev/null 2>&1 || true
+        exclude_with_note "/${file}" "${file} not published: the secret scan flagged line ${line} (${rule}); it is only in the run directory"
+        log "WARN: not publishing ${file}: the secret scan flagged line ${line} (${rule}). It stays in the run directory."
+    done <<< "$findings"
+}
+
 commit_all() {
     # $1: add mode ("all" stages deletions; "overlay" keeps files only the
     # remote base has). Returns non-zero unless every change is committed.
-    local add_args=(-A)
+    local add_args=(-A) out
     [ "$1" = "overlay" ] && add_args=(--ignore-removal .)
-    if ! git add "${add_args[@]}"; then
-        publish_fail "git add failed (disk full?)"
+    if ! out=$(git add "${add_args[@]}" 2>&1); then
+        publish_fail "git add failed: $(git_reason "$out")"
         return 1
     fi
-    git commit -q -m "$2" || true
+    exclude_secret_findings
+    # Nothing left to commit exits 1 too: the checks below decide, and git's
+    # own words become the reason (a hook's refusal was lost here before).
+    out=$(git commit -q -m "$2" 2>&1) || true
+    [ -z "$out" ] || printf '%s\n' "$out" | tee -a "${LOG_DIR}/gh-commit.log" >&2
     local leftover
     leftover=$(git status --porcelain)
     if [ "$1" = "overlay" ]; then
@@ -1403,7 +1494,7 @@ commit_all() {
         leftover=$(printf '%s\n' "$leftover" | grep -v '^ D ' || true)
     fi
     if ! git rev-parse -q --verify HEAD >/dev/null || [ -n "$leftover" ]; then
-        publish_fail "git commit failed; the run directory is not fully committed (disk full?)"
+        publish_fail "git commit failed: $(git_reason "${out:-no output from git}") (see ${LOG_DIR}/gh-commit.log)"
         return 1
     fi
 }
@@ -1700,49 +1791,54 @@ outcome_is_success() {
 
 # --- Post-completion: Send email ---
 send_email() {
-    local email_log compose_status send_status subject
+    local email_log compose_status=127 send_status
     email_log="${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
-    log "Composing results email with ${BACKEND}..."
     cd "$REPO_DIR"
-    rm -f "${RUN_DIR}/email-draft.html" "${RUN_DIR}/email-subject.txt"
+    rm -f "${RUN_DIR}/email-draft.html" "${RUN_DIR}/email-subject.txt" "${RUN_DIR}/email-images.txt" \
+        "${RUN_DIR}/.email-sent"
+    EMAIL_SESSION=$(python3 -c 'import uuid; print(uuid.uuid4())')
+    EMAIL_MODE=session
     set +e
-    run_email_provider 2>&1 | tee "$email_log"
-    compose_status=${PIPESTATUS[0]}
+    if command -v "$EMAIL_CLAUDE_BIN" >/dev/null 2>&1; then
+        log "Writing and sending the results email with Claude ${EMAIL_CLAUDE_MODEL} (session ${EMAIL_SESSION})..."
+        run_email_claude 2>&1 | tee "$email_log"
+        compose_status=${PIPESTATUS[0]}
+    fi
+    if [ ! -s "${RUN_DIR}/email-draft.html" ] && [ "$BACKEND" = "codex" ]; then
+        log "Note: no Claude session wrote the email (exit ${compose_status}); writing it with ${BACKEND}, to send unreviewed."
+        run_email_provider 2>&1 | tee -a "$email_log"
+        compose_status=${PIPESTATUS[0]}
+        EMAIL_MODE=unrouted
+    fi
     set -e
 
-    if [ "$compose_status" -ne 0 ]; then
-        log "Note: email composition failed with provider exit ${compose_status}."
-        return 1
+    if [ -s "${RUN_DIR}/.email-sent" ]; then
+        log "Email sent to ${EMAIL_TO} from the agents' account: $(cut -f2 "${RUN_DIR}/.email-sent")"
+        return 0
     fi
     if [ ! -s "${RUN_DIR}/email-draft.html" ] || [ ! -s "${RUN_DIR}/email-subject.txt" ]; then
-        log "Note: email composer did not produce email-draft.html and email-subject.txt."
+        log "Note: email composition failed (exit ${compose_status}); no email-draft.html and email-subject.txt."
         return 1
     fi
-    if [ ! -f "$SEND_EMAIL_SCRIPT" ]; then
-        log "Note: shared email helper not found at ${SEND_EMAIL_SCRIPT}; draft retained."
-        return 1
-    fi
-
-    subject=$(head -1 "${RUN_DIR}/email-subject.txt")
-    if ! outcome_is_success; then
-        # Deterministic, whatever the composer wrote: an unpublished or
-        # result-less run is visible from the inbox.
-        subject="[$(printf '%s' "$FINAL_OUTCOME" | tr '[:lower:]' '[:upper:]')] ${subject}"
-    fi
+    # Written but not sent: the session stopped first, or a Codex draft.
     set +e
-    python3 "$SEND_EMAIL_SCRIPT" \
-        --to "$EMAIL_TO" \
-        --subject "$subject" \
-        --html "${RUN_DIR}/email-draft.html" \
-        --label "$EMAIL_LABEL" \
-        2>&1 | tee -a "$email_log"
+    if [ "$EMAIL_MODE" = "session" ]; then
+        log "The email session stopped without sending; sending its draft as that session."
+        CLAUDE_CODE_SESSION_ID="$EMAIL_SESSION" "$SEND_EMAIL" "$RUN_DIR" 2>&1 | tee -a "$email_log"
+    else
+        "$SEND_EMAIL" "$RUN_DIR" --unrouted 2>&1 | tee -a "$email_log"
+    fi
     send_status=${PIPESTATUS[0]}
     set -e
+    if [ "$send_status" -eq 3 ]; then
+        log "Note: the pre-send review held the email; the mailroom sends it unchanged after its fallback wait."
+        return 0
+    fi
     if [ "$send_status" -ne 0 ]; then
-        log "Note: email helper failed with exit ${send_status}; draft retained."
+        log "Note: sending failed with exit ${send_status}; draft retained."
         return 1
     fi
-    log "Email sent to ${EMAIL_TO}."
+    log "Email sent to ${EMAIL_TO} from the agents' account: $(cut -f2 "${RUN_DIR}/.email-sent")"
 }
 
 if is_true "$SKIP_EMAIL"; then

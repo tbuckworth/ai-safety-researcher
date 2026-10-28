@@ -591,6 +591,12 @@ If `state.md` contains `is_followup: true`:
         Do not assume a specific device. If a component needs more than the profile provides,
         stop and report it as a FAIL-on-affordability (it becomes future work) rather than
         silently exceeding the budget.
+      - PAID COMPUTE: anything that bills while it runs (a Modal deploy or `modal run --detach`,
+        a Lambda instance, a Slurm elastic-* job, an HF inference endpoint) is registered
+        straight after launch with `cloud-watch register <provider:account:name-or-glob>
+        --expect <hours>h --reason "<run id>: <what>"` (or launched via `cloud-watch launch
+        --expect ... --reason ... -- <command>`), and stopped, then closed with
+        `cloud-watch close`, before the step ends. Codex passes `--session <name>`.
       - NEVER install packages that require root access.
       - NEVER run commands that delete files outside the experiment directory.
       - NEVER modify files outside the run directory: <run-dir>

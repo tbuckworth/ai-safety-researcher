@@ -101,7 +101,7 @@ specialised leaf-node agents for focused work.
 | knowledge | `agents/knowledge.md` | 2, 3, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
 
 Codex `fast` and `deep` are runtime roles, defaulting to
-`gpt-5.6-terra`/medium and `gpt-5.6-sol`/xhigh respectively. They are
+`gpt-6.1-sol`/medium and `gpt-6-astra`/xhigh respectively. They are
 overridable without changing shared agent files.
 
 ## Directory Layout

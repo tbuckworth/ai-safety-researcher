@@ -13,7 +13,7 @@ completely and follow them as the canonical workflow.
   leaf subagents. The workflow explicitly authorizes these subagents.
 - Preserve requested parallelism, wait for all workers, and never let a leaf
   worker spawn agents or interact with the user.
-- Prefer `gpt-5.6-terra` with medium reasoning for search-planner and search
-  workers, and `gpt-5.6-sol` with high or xhigh reasoning for other workers,
+- Prefer `gpt-6.1-sol` with medium reasoning for search-planner and search
+  workers, and `gpt-6-astra` with high or xhigh reasoning for other workers,
   when available. Otherwise inherit the parent.
 - Execute exactly one step, update `state.md` atomically, and stop.

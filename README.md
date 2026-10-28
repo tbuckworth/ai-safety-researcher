@@ -35,9 +35,9 @@ Given a research topic, the agent:
 
 For autonomous mode only:
 - **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`; default: local NVIDIA GPU with CUDA drivers, tested on RTX 3090 24GB). Cloud/managed backends (Modal, Lambda, tinker) are supported by overriding the profile, and `RESEARCHER_COMPUTE_PROFILE=mats` targets the MATS Slurm cluster (see [`docs/COMPUTE-MATS.md`](docs/COMPUTE-MATS.md)).
-- **Gmail OAuth token** — `~/.config/google-docs-mcp/token.json` with
-  `gmail.send`; delivery uses the shared `report-email` helper rather than a
-  provider-specific MCP tool
+- **agent-mail** — the results email goes from the agents' mail account
+  through the mailroom (`~/pyg/agent-mailroom`), with its pre-send review, never
+  from Titus's own Gmail (`scripts/send-results-email.sh`)
 
 ## Installation
 

@@ -288,5 +288,38 @@ class CliTest(unittest.TestCase):
         self.assertEqual(out.stdout.strip(), "1919 u1919")
 
 
+
+class ResultsEmailTest(unittest.TestCase):
+    def test_plain_text_alternative(self):
+        text = lib.html_to_text(
+            "<html><head><style>p{color:red}</style></head><body><h1>Bottom&nbsp;line</h1>"
+            "<p>Positive: the filter <b>halves</b> misalignment.</p><ul><li>5 seeds</li><li>matched loss</li></ul>"
+            "<table><tr><th>Arm</th><th>EM %</th></tr><tr><td>filter</td><td>8.1</td></tr></table>"
+            "<img src=\"cid:main\" alt=\"EM rate by arm\"></body></html>")
+        self.assertEqual(text, "Bottom line\n\nPositive: the filter halves misalignment.\n\n- 5 seeds\n- matched loss"
+                               "\n\nArm | EM %\nfilter | 8.1\n[EM rate by arm]\n")
+        self.assertNotIn("color", text)
+
+    def test_inline_images_are_checked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp) / "run"
+            write(run / "figures/main.png", "png")
+            write(run / "figures/notes.txt", "x")
+            write(Path(tmp) / "outside.png", "png")
+            write(run / "email-draft.html", '<img src="cid:main"><img src="cid:dup"><img src="cid:txt">')
+            self.assertEqual(lib.email_images(run), ([], []))                  # no listing: no images
+            write(run / "email-images.txt", "# plots\nmain = figures/main.png\nmain=figures/main.png\n"
+                                            "unplaced=figures/main.png\nesc=../outside.png\ntxt=figures/notes.txt\n"
+                                            "bad name=figures/main.png\nmissing=figures/none.png\n")
+            images, problems = lib.email_images(run)
+            self.assertEqual(images, [f"main={(run / 'figures/main.png').resolve()}"])
+            self.assertEqual([p.split(":")[0] for p in problems],
+                             ["main", "unplaced", "esc", "txt", "'bad name=figures/main.png'", "missing"])
+            out = subprocess.run([sys.executable, str(SCRIPTS / "researcher_lib.py"), "email-images", "--run-dir",
+                                  str(run)], capture_output=True, text=True, check=True)
+            self.assertEqual(out.stdout.strip(), images[0])
+            self.assertIn("image left out: unplaced", out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

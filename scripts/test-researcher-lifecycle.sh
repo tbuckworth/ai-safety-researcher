@@ -31,6 +31,19 @@ git config --global user.name "Lifecycle Test"
 git config --global user.email "test@example.test"
 git config --global init.defaultBranch master
 git config --global advice.defaultBranchName false
+# The real global hook runs gitleaks; this one blocks the same way on a mock
+# secret, so the wrapper's handling of a refused commit is exercised.
+mkdir -p "${TEST_ROOT}/hooks"
+cat > "${TEST_ROOT}/hooks/pre-commit" <<'MOCK_HOOK'
+#!/usr/bin/env bash
+if git grep --cached -q MOCK-SECRET-VALUE 2>/dev/null; then
+    echo "RuleID:      generic-api-key" >&2
+    echo "COMMIT BLOCKED: a secret was found in your staged changes." >&2
+    exit 1
+fi
+MOCK_HOOK
+chmod +x "${TEST_ROOT}/hooks/pre-commit"
+git config --global core.hooksPath "${TEST_ROOT}/hooks"
 
 PASSES=0
 fail() { echo "FAIL [${CASE:-setup}]: $*" >&2; exit 1; }
@@ -124,6 +137,25 @@ if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
     printf '%s\n' "$prompt" > "${run_dir}/.email-prompt.txt"
     printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
     printf '%s\n' '[Auto-Research] Mock result — 1 pass, 0 fail' > "${run_dir}/email-subject.txt"
+    if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" != "true" ]; then
+        sid=""
+        prev=""
+        for arg in "$@"; do
+            [ "$prev" = "--session-id" ] && sid="$arg"
+            prev="$arg"
+        done
+        helper=$(printf '%s\n' "$prompt" | sed -n 's/^ *\(\/.*send-results-email\.sh\) .*$/\1/p' | head -1)
+        set +e
+        CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
+        rc=$?
+        if [ "$rc" -eq 3 ]; then
+            printf '%s\n' '<p>Revised after the review.</p>' >> "${run_dir}/email-draft.html"
+            CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
+            rc=$?
+        fi
+        set -e
+        [ "$rc" -eq 0 ] || exit "$rc"
+    fi
     exit 0
 fi
 
@@ -159,6 +191,11 @@ case "$step" in
         if [ "${MOCK_BIG_FILE:-false}" = "true" ]; then
             head -c 2097152 /dev/zero > "${exp}/big.dat"
         fi
+        if [ "${MOCK_SECRET:-false}" = "true" ]; then
+            # What the secret scan refused on 2026-10-28: a cite key read as a key.
+            mkdir -p "${run_dir}/literature"
+            printf 'Line one.\nCite key: `MOCK-SECRET-VALUE`\n' > "${run_dir}/literature/search-001-academic.md"
+        fi
         if [ "${MOCK_NESTED_REPO:-false}" = "true" ]; then
             # An experiment that cloned a library, which it then dirtied.
             mkdir -p "${exp}/vendored-lib"
@@ -192,12 +229,59 @@ echo "Mock step ${step} complete."
 MOCK_PROVIDER
 chmod +x "${MOCK_BIN}/claude"
 
-cat > "${TEST_ROOT}/send-email.py" <<'MOCK_EMAIL'
-import os, sys
-args = sys.argv[1:]
-with open(os.environ["MOCK_EMAIL_LOG"], "a", encoding="utf-8") as handle:
-    handle.write("--subject " + args[args.index("--subject") + 1] + "\n")
-MOCK_EMAIL
+cat > "${MOCK_BIN}/agent-mail" <<'MOCK_AGENT_MAIL'
+#!/usr/bin/env bash
+set -euo pipefail
+args=("$@")
+subject="" html="" unrouted=false images=""
+for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[$i]}" in
+        --subject) subject="${args[$((i + 1))]}" ;;
+        --html) html="${args[$((i + 1))]}" ;;
+        --image) images="${images} ${args[$((i + 1))]##*/}" ;;
+        --unrouted) unrouted=true ;;
+    esac
+done
+[ "${1:-}" = "send" ] || { echo "mock agent-mail: only send" >&2; exit 2; }
+[ -s "$html" ] || { echo "mock agent-mail: missing HTML" >&2; exit 2; }
+who="${CLAUDE_CODE_SESSION_ID:-}"
+[ "$unrouted" = true ] && who=unrouted
+[ -n "$who" ] || { echo "agent-mail: not inside a Claude session and no --session given." >&2; exit 1; }
+if [ "${MOCK_REVIEW_PUSHBACK:-false}" = "true" ] && [ "$who" != "unrouted" ] \
+        && ! grep -qxF "$who" "${MOCK_EMAIL_LOG}.held" 2>/dev/null; then
+    printf '%s\n' "$who" >> "${MOCK_EMAIL_LOG}.held"
+    echo "agent-mail: NOT SENT: a reviewer with no context expects Titus to ask what this is."
+    echo "Fix before sending:"
+    echo "  1. Put the headline result in the first line."
+    exit 3
+fi
+printf -- '--subject %s | from=%s | images=%s | %s\n' "$subject" "$who" "${images# }" "$*" >> "$MOCK_EMAIL_LOG"
+echo "sent to self@example.test | subject '${subject}' | thread mock-thread | tag mocktag1 | from researcher (claude)"
+MOCK_AGENT_MAIL
+chmod +x "${MOCK_BIN}/agent-mail"
+
+# A mock gitleaks: flags each staged file holding MOCK-SECRET-VALUE, as the
+# real scan reports (JSON), unless MOCK_SECRET_UNSEEN (a scan that misses it).
+cat > "${MOCK_BIN}/gitleaks" <<'MOCK_GITLEAKS'
+#!/usr/bin/env bash
+set -euo pipefail
+report=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    [ "${args[$i]}" = "--report-path" ] && report="${args[$((i + 1))]}"
+done
+findings="[]"
+if [ "${MOCK_SECRET_UNSEEN:-false}" != "true" ]; then
+    while IFS= read -r -d '' file; do
+        line=$(git show ":${file}" 2>/dev/null | grep -n -m1 MOCK-SECRET-VALUE | cut -d: -f1 || true)
+        [ -n "$line" ] && findings=$(jq --arg f "$file" --argjson l "$line" \
+            '. + [{File: $f, StartLine: $l, RuleID: "generic-api-key", Secret: "REDACTED"}]' <<< "$findings")
+    done < <(git diff --cached --name-only -z)
+fi
+[ -z "$report" ] || printf '%s\n' "$findings" > "$report"
+[ "$findings" = "[]" ]
+MOCK_GITLEAKS
+chmod +x "${MOCK_BIN}/gitleaks"
 
 # --- helpers -----------------------------------------------------------------
 issue_json() {
@@ -252,7 +336,7 @@ run_researcher() {
         RESEARCHER_KB_DIR=none \
         RESEARCHER_HOST_ALIAS=mock-host \
         RESEARCHER_EMAIL_TO=self@example.test \
-        RESEARCHER_SEND_EMAIL_SCRIPT="${TEST_ROOT}/send-email.py" \
+        RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
         RESEARCHER_GIT_REMOTE_BASE="file://${REMOTES}" \
         RESEARCHER_MIN_FREE_MB=1 \
         ${env_args[@]+"${env_args[@]}"} \
@@ -352,7 +436,16 @@ assert_grep "vendored-lib/ not published: it is a separate git repository" "$COM
 assert_grep "big.dat not published" "$COMMENT"
 assert_grep "issue edit 101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
 assert_grep "^--subject \[Auto-Research\] Mock result" "${CASE_DIR}/email.log"
+# Sent by the email session itself (its id), reviewed, never unrouted.
+SESSION=$(sed -n 's/.*(session \([0-9a-f-]\{36\}\)).*/\1/p' "${CASE_DIR}/stdout.log" | head -1)
+[ -n "$SESSION" ] || fail "no email session id logged"; ok
+assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
+assert_no_grep "unrouted" "${CASE_DIR}/email.log"
+assert_grep "Email sent to self@example.test from the agents' account" "${CASE_DIR}/stdout.log"
+[ -s "${RUN}/.email-sent" ] || fail "no .email-sent record"; ok
 assert_grep "Final outcome: complete" "${RUN}/.email-prompt.txt"
+assert_grep "send-results-email.sh ${RUN}" "${RUN}/.email-prompt.txt"
+assert_grep "agent-mail: NOT SENT" "${RUN}/.email-prompt.txt"
 [ ! -e "${RUN}/.issue-comment.md" ] || fail "comment scratch file left behind"; ok
 
 # =============================================================================
@@ -756,5 +849,57 @@ RUN=$(run_dir_for_issue 800)
 [ -n "$RUN" ] || fail "issue_number not restored"; ok
 assert_eq "$(field run_id "$RUN")" "$(basename "$RUN")" "run_id restored"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/800-*.md)"
+
+# =============================================================================
+# 19. The secret scan refuses a staged file (2026-10-28: a cite key read as an
+#     API key). It is left out with the reason and the rest is published.
+# =============================================================================
+new_case secret-scan
+set_issues <(issue_json 901 "Secret scan false positive" "list:research-ideas")
+run_researcher MOCK_SECRET=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 901)
+SLUG="research-secret-scan-false-positive"
+assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
+if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" ls-tree -r --name-only main | grep -q 'search-001-academic.md'; then
+    fail "flagged file was published"
+fi; ok
+[ -f "${RUN}/literature/search-001-academic.md" ] || fail "flagged file was removed locally"; ok
+assert_grep "literature/search-001-academic.md not published: the secret scan flagged line 2 \(generic-api-key\)" \
+    "$(ls "${CASE_DIR}"/comments/901-*.md)"
+
+# =============================================================================
+# 20. A commit the hook refuses reports the hook's reason, not a disk guess.
+# =============================================================================
+new_case commit-refused
+set_issues <(issue_json 902 "Commit refused by hook" "list:research-ideas")
+run_researcher MOCK_SECRET=true MOCK_SECRET_UNSEEN=true
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 902)
+assert_eq "$(field final_outcome "$RUN")" "unpublished" "final_outcome"
+assert_grep "git commit failed: COMMIT BLOCKED: a secret was found in your staged changes" "${RUN}/run-outcome.json"
+assert_no_grep "disk full" "${RUN}/run-outcome.json"
+assert_grep "^--subject \[UNPUBLISHED\] \[Auto-Research\]" "${CASE_DIR}/email.log"
+
+# =============================================================================
+# 21. The pre-send review holds the first mail: the session fixes it and sends
+#     once more; a session that stops without sending has its draft sent for it.
+# =============================================================================
+new_case review-pushback
+set_issues <(issue_json 903 "Review pushback" "list:research-ideas")
+run_researcher MOCK_REVIEW_PUSHBACK=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 903)
+assert_eq "$(wc -l < "${CASE_DIR}/email.log.held" | tr -d ' ')" "1" "held once"
+assert_eq "$(wc -l < "${CASE_DIR}/email.log" | tr -d ' ')" "1" "sent once"
+assert_grep "Revised after the review" "${RUN}/email-draft.html"
+
+new_case email-not-sent
+set_issues <(issue_json 904 "Session stops before sending" "list:research-ideas")
+run_researcher MOCK_EMAIL_NO_SEND=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+SESSION=$(sed -n 's/.*(session \([0-9a-f-]\{36\}\)).*/\1/p' "${CASE_DIR}/stdout.log" | head -1)
+assert_grep "The email session stopped without sending" "${CASE_DIR}/stdout.log"
+assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

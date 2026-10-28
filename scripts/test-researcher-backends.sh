@@ -34,8 +34,31 @@ if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
         echo "mock provider could not parse email run directory" >&2
         exit 64
     fi
+    if [ "${MOCK_CLAUDE_EMAIL_FAIL:-false}" = "true" ] && [ "$(basename "$0")" = "claude" ]; then
+        echo "Claude AI usage limit reached" >&2
+        exit 1
+    fi
     printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
     printf '%s\n' '[Auto-Research] Mock result' > "${run_dir}/email-subject.txt"
+    if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" != "true" ]; then
+        sid=""
+        prev=""
+        for arg in "$@"; do
+            [ "$prev" = "--session-id" ] && sid="$arg"
+            prev="$arg"
+        done
+        helper=$(printf '%s\n' "$prompt" | sed -n 's/^ *\(\/.*send-results-email\.sh\) .*$/\1/p' | head -1)
+        set +e
+        CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
+        rc=$?
+        if [ "$rc" -eq 3 ]; then
+            printf '%s\n' '<p>Revised after the review.</p>' >> "${run_dir}/email-draft.html"
+            CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
+            rc=$?
+        fi
+        set -e
+        [ "$rc" -eq 0 ] || exit "$rc"
+    fi
     echo "Mock email composition complete."
     exit 0
 fi
@@ -99,19 +122,36 @@ chmod +x "${MOCK_BIN}/mock-provider"
 ln -s mock-provider "${MOCK_BIN}/claude"
 ln -s mock-provider "${MOCK_BIN}/codex"
 
-cat > "${TEST_ROOT}/send-email.py" <<'MOCK_EMAIL'
-import os
-import pathlib
-import sys
-
-args = sys.argv[1:]
-html_path = pathlib.Path(args[args.index("--html") + 1])
-if not html_path.is_file() or not html_path.read_text().strip():
-    raise SystemExit("missing HTML draft")
-with open(os.environ["MOCK_EMAIL_LOG"], "a", encoding="utf-8") as handle:
-    handle.write(" ".join(args) + "\n")
-print("Mock email sent.")
-MOCK_EMAIL
+cat > "${MOCK_BIN}/agent-mail" <<'MOCK_AGENT_MAIL'
+#!/usr/bin/env bash
+set -euo pipefail
+args=("$@")
+subject="" html="" unrouted=false images=""
+for ((i = 0; i < ${#args[@]}; i++)); do
+    case "${args[$i]}" in
+        --subject) subject="${args[$((i + 1))]}" ;;
+        --html) html="${args[$((i + 1))]}" ;;
+        --image) images="${images} ${args[$((i + 1))]##*/}" ;;
+        --unrouted) unrouted=true ;;
+    esac
+done
+[ "${1:-}" = "send" ] || { echo "mock agent-mail: only send" >&2; exit 2; }
+[ -s "$html" ] || { echo "mock agent-mail: missing HTML" >&2; exit 2; }
+who="${CLAUDE_CODE_SESSION_ID:-}"
+[ "$unrouted" = true ] && who=unrouted
+[ -n "$who" ] || { echo "agent-mail: not inside a Claude session and no --session given." >&2; exit 1; }
+if [ "${MOCK_REVIEW_PUSHBACK:-false}" = "true" ] && [ "$who" != "unrouted" ] \
+        && ! grep -qxF "$who" "${MOCK_EMAIL_LOG}.held" 2>/dev/null; then
+    printf '%s\n' "$who" >> "${MOCK_EMAIL_LOG}.held"
+    echo "agent-mail: NOT SENT: a reviewer with no context expects Titus to ask what this is."
+    echo "Fix before sending:"
+    echo "  1. Put the headline result in the first line."
+    exit 3
+fi
+printf -- '--subject %s | from=%s | images=%s | %s\n' "$subject" "$who" "${images# }" "$*" >> "$MOCK_EMAIL_LOG"
+echo "sent to self@example.test | subject '${subject}' | thread mock-thread | tag mocktag1 | from researcher (claude)"
+MOCK_AGENT_MAIL
+chmod +x "${MOCK_BIN}/agent-mail"
 
 export MOCK_CALL_LOG MOCK_PROMPT_LOG MOCK_EMAIL_LOG
 
@@ -147,7 +187,9 @@ run_case() {
     RESEARCHER_SKIP_GPU_CHECK="true" \
     RESEARCHER_STEP_ATTEMPTS="2" \
     RESEARCHER_RETRY_DELAY_SECONDS="0" \
-    RESEARCHER_SEND_EMAIL_SCRIPT="${TEST_ROOT}/send-email.py" \
+    PATH="${MOCK_BIN}:${PATH}" \
+    RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+    MOCK_CLAUDE_EMAIL_FAIL="${MOCK_CLAUDE_EMAIL_FAIL:-false}" \
     RESEARCHER_EMAIL_TO="self@example.test" \
     RESEARCHER_HOST_ALIAS="mock-host" \
     RESEARCHER_KB_DIR="$kb_dir" \
@@ -228,6 +270,11 @@ grep -q '# Codex Runtime Adapter' "$MOCK_PROMPT_LOG"
 grep -q 'mock-codex-fast' "$MOCK_PROMPT_LOG"
 test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "5"
 grep -q -- '--to self@example.test' "$MOCK_EMAIL_LOG"
+# Every results email is written and sent by a Claude session (its own id, so
+# the reply comes back to it), Codex runs included; none goes unrouted.
+test "$(grep -c '^claude --print .*--session-id [0-9a-f-]\{36\} ' "$MOCK_CALL_LOG")" = "5"
+grep -q '^claude --print .*--model sonnet .*--session-id ' "$MOCK_CALL_LOG"
+if grep -q -- 'unrouted' "$MOCK_EMAIL_LOG"; then echo "FAIL: an email went unrouted" >&2; exit 1; fi
 
 # The email composer is handed the real machine facts for the "How to Continue"
 # steps, per backend. A placeholder here means an email telling the reader to cd
@@ -344,5 +391,13 @@ RESEARCHER_BACKEND=codex \
 grep -q -- '--label source:codex' "$MOCK_GH_LOG"
 grep -q 'Created follow-up issue: https://github.com/tbuckworth/tasks/issues/123' \
     "${TEST_ROOT}/followup.stdout"
+
+# With no Claude session to write it, a Codex run's own backend writes the
+# email and it goes unrouted (unreviewed; replies to the orchestrator).
+: > "$MOCK_EMAIL_LOG"
+MOCK_CLAUDE_EMAIL_FAIL=true run_case codex "" none claudedown
+test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
+grep -q 'from=unrouted .*--unrouted' "$MOCK_EMAIL_LOG"
+grep -q 'no Claude session wrote the email' "${TEST_ROOT}/codex-claudedown.stdout"
 
 echo "Claude and Codex backend integration tests passed."

@@ -11,6 +11,8 @@ decisions that used to be made by ad-hoc grep/jq and got them wrong:
                  did the workflow finish, are there valid results, did the push
                  land
   issue-comment  the findings comment posted back to the originating issue
+  html-text      the plain-text part of the results email, from its HTML
+  email-images   the inline plots the email names (email-images.txt), checked
 
 Standard library only: it runs under whatever python3 cron finds.
 """
@@ -19,9 +21,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 
 BUSY_LABELS = (
@@ -493,6 +497,95 @@ def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, bra
 
 
 # --------------------------------------------------------------------------
+# The results email (sent by send-results-email.sh through agent-mail)
+# --------------------------------------------------------------------------
+
+class _Text(HTMLParser):
+    BLOCK = {"p", "div", "br", "table", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "pre", "blockquote",
+             "hr", "section"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script", "head", "title"):
+            self.skip += 1
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag == "tr":
+            self.parts.append("\n")
+        elif tag in ("td", "th"):
+            self.parts.append(" | ")
+        elif tag == "img":
+            alt = dict(attrs).get("alt")
+            if alt:
+                self.parts.append("[%s]" % alt)
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script", "head", "title"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(re.sub(r"\s+", " ", data))
+
+
+def html_to_text(markup: str) -> str:
+    """A readable plain-text alternative of an HTML email: blocks on their own lines, list items as bullets,
+    table cells separated by |, blank runs collapsed."""
+    parser = _Text()
+    parser.feed(markup)
+    parser.close()
+    lines = [line.strip(" |").strip() for line in html.unescape("".join(parser.parts)).splitlines()]
+    text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return text + "\n"
+
+
+IMAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+
+
+def email_images(run_dir: Path) -> tuple[list[str], list[str]]:
+    """(NAME=PATH arguments for agent-mail --image, problems) from <run>/email-images.txt, one NAME=relative/path
+    per line. A line is dropped, with the reason, unless the name is plain, the file is an image inside the run
+    directory, and the HTML places it (src="cid:NAME")."""
+    listing = run_dir / "email-images.txt"
+    if not listing.is_file():
+        return [], []
+    root = run_dir.resolve()
+    draft = run_dir / "email-draft.html"
+    markup = draft.read_text(encoding="utf-8", errors="replace") if draft.is_file() else ""
+    out, problems, seen = [], [], set()
+    for raw in listing.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, rel = line.partition("=")
+        name, rel = name.strip(), rel.strip()
+        path = (run_dir / rel).resolve() if sep and rel else None
+        if not sep or not IMAGE_NAME.match(name):
+            problems.append(f"{line!r}: not NAME=relative/path.png with a plain name")
+        elif name in seen:
+            problems.append(f"{name}: listed twice")
+        elif path is None or not path.is_relative_to(root) or not path.is_file():
+            problems.append(f"{name}: {rel} is not a file in the run directory")
+        elif path.suffix.lower() not in IMAGE_SUFFIXES:
+            problems.append(f"{name}: {rel} is not a PNG, JPEG, GIF or WebP image")
+        elif f"cid:{name}" not in markup:
+            problems.append(f"{name}: email-draft.html does not place it (<img src=\"cid:{name}\">)")
+        else:
+            seen.add(name)
+            out.append(f"{name}={path}")
+    return out, problems
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -509,6 +602,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_find = sub.add_parser("find-followup", help="read issues JSON on stdin, print '<number> <url>' of the oldest with this key")
     p_find.add_argument("--key", required=True)
+
+    p_text = sub.add_parser("html-text", help="print the plain-text version of an HTML file")
+    p_text.add_argument("file", type=Path)
+
+    p_img = sub.add_parser("email-images", help="print checked NAME=PATH lines from <run>/email-images.txt")
+    p_img.add_argument("--run-dir", required=True, type=Path)
 
     for name in ("outcome", "issue-comment"):
         p = sub.add_parser(name)
@@ -551,6 +650,18 @@ def main(argv: list[str] | None = None) -> int:
                          key=lambda issue: issue["number"])
         if matches:
             print(f"{matches[0]['number']} {matches[0].get('url', '')}".rstrip())
+        return 0
+
+    if args.command == "html-text":
+        print(html_to_text(args.file.read_text(encoding="utf-8", errors="replace")), end="")
+        return 0
+
+    if args.command == "email-images":
+        images, problems = email_images(args.run_dir)
+        for problem in problems:
+            print(f"warning: image left out: {problem}", file=sys.stderr)
+        for image in images:
+            print(image)
         return 0
 
     facts = compute_outcome(args.run_dir, status=args.status,

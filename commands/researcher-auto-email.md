@@ -1,13 +1,14 @@
 ---
 description: Compose and send autonomous research results email
 argument-hint: <run-directory>
-allowed-tools: [Read, Write, Glob, Grep, Bash, mcp__claude_ai_Gmail__gmail_get_profile]
+allowed-tools: [Read, Write, Glob, Grep, Bash]
 model: fable
 ---
 
 # Autonomous Research Email Composer
 
-You compose and send a well-formatted HTML results email for a completed autonomous research run.
+You compose and send a well-formatted HTML results email for a completed autonomous research run. It goes to
+Titus from the agents' mail account (agent-mail), never from his own Gmail, and is reviewed before it leaves.
 
 ## Audience
 
@@ -19,14 +20,15 @@ The run directory is: **{{argument}}**
 
 ## Instructions
 
-1. **Resolve the delivery mode and recipient**:
-   - If the prompt includes an `Autonomous Email Handoff`, obey it exactly. In
-     compose-only mode, write the requested files and do **not** send anything.
-   - Otherwise, use an explicitly provided recipient. If none was provided and
-     `mcp__claude_ai_Gmail__gmail_get_profile` is available, use the
-     authenticated user's own address.
-   - Never infer or invent a recipient. If no recipient can be resolved, save a
-     draft and report that delivery was skipped.
+1. **Resolve the delivery mode**:
+   - If the prompt includes an `Autonomous Email Handoff`, obey it exactly: it
+     says whether you send the email yourself or only compose it (the wrapper
+     then sends it).
+   - Otherwise (run by hand in a Claude session) you send it yourself, as in
+     step 5. It always goes to Titus (`RESEARCHER_EMAIL_TO`, default
+     titusbuckworth@gmail.com); never send it to anyone else.
+   - Run `agent-mail guide` and follow it where it does not conflict with this
+     file: the pre-send review checks those rules.
 
 2. **Read artifacts** from the run directory:
    - `briefing.md` — concise run summary (primary source — has topic, motivation, results, surprises)
@@ -296,29 +298,34 @@ The run directory is: **{{argument}}**
 4. **Write durable composition artifacts**:
    - Save the HTML to `<run-dir>/email-draft.html`.
    - Save the subject, as one plain-text line, to `<run-dir>/email-subject.txt`.
+   - **Plots.** When the run produced figures (`figures/`, `experiments/*/`,
+     `paper/figures/`), embed the one or two that show the main result: list
+     each in `<run-dir>/email-images.txt` as `NAME=relative/path.png` (PNG,
+     JPEG, GIF or WebP, inside the run directory) and place it in the HTML as
+     `<img src="cid:NAME" alt="what it shows" style="max-width:100%">`, with
+     two lines under it on what to see. Never use data: URIs or file paths in
+     `src`; an image the HTML does not place is left out.
    - Confirm `<run-dir>/next-steps.md` exists and is non-empty — you either read it
      or wrote it in step 2b. It ships in the repo and is what
      `/researcher-continue` reads, so a missing one is a defect, not a detail.
 
 5. **Complete the requested delivery mode**:
    - In compose-only mode, stop after validating that both files are non-empty.
-     The autonomous wrapper sends them using a fixed recipient and helper path.
-   - Otherwise, send using the shared report-email script, which uses the Gmail
-     API and applies the label atomically. Prefer an explicitly supplied helper
-     path. If none was supplied, try the canonical shared source first, then the
-     Codex and Claude plugin caches:
+     The autonomous wrapper sends them.
+   - Otherwise send it with the helper, which adds the outcome to the subject
+     when the run is not `complete`, builds the plain-text part, attaches the
+     listed plots and calls `agent-mail send` as this session:
    ```bash
-   SEND_SCRIPT="${RESEARCHER_SEND_EMAIL_SCRIPT:-$HOME/pyg/claude-remote-setup/plugins/report-email/scripts/send_report_email.py}"
-   if [ ! -f "$SEND_SCRIPT" ]; then
-       SEND_SCRIPT=$(find ~/.codex/plugins ~/.claude/plugins -name send_report_email.py -path "*/report-email/*" 2>/dev/null | head -1)
-   fi
-   python3 "$SEND_SCRIPT" \
-     --to <resolved recipient> \
-     --subject "<subject as above>" \
-     --html <run-dir>/email-draft.html \
-     --label Researcher
+   ${CLAUDE_PLUGIN_ROOT}/scripts/send-results-email.sh <run-dir>
    ```
+   - **If it prints `agent-mail: NOT SENT` (exit 3), nothing was sent.** Fix
+     what it lists in `email-draft.html` (and `email-subject.txt`), then run the
+     same command once more: that send goes out whatever the review says. Never
+     pass `--no-review`, and never run it a third time. Keep the mandatory
+     sections (next steps, how to continue) through any revision: put the
+     continuation commands below a clear break, labelled as the way to continue
+     the run, not the way to see its results.
    - Do NOT attach the PDF — the HTML email is self-contained and the GitHub repo link provides access to the full paper.
 
-6. If email sending fails, retain both composition artifacts and report the
-   failure without retrying a different recipient.
+6. If sending fails for any other reason, retain the composition artifacts and
+   report the failure. Never send it any other way or to anyone else.

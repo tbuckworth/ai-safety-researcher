@@ -15,8 +15,8 @@ follow them as the canonical workflow.
   block prompt. The workflow explicitly authorizes these subagents. Leaf
   agents must not spawn agents or interact with the user.
 - Run Task blocks marked parallel concurrently and wait for all of them.
-- Prefer `gpt-5.6-terra` with medium reasoning for search-planner and search
-  workers, and `gpt-5.6-sol` with high or xhigh reasoning for the other
+- Prefer `gpt-6.1-sol` with medium reasoning for search-planner and search
+  workers, and `gpt-6-astra` with high or xhigh reasoning for the other
   workers, when those models are available. Otherwise inherit the parent.
 - When invoking project helper scripts, set `RESEARCHER_BACKEND=codex` so
   generated source labels and attribution are correct.

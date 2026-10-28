@@ -97,7 +97,8 @@ Once the user picks a direction:
 
 3. **Create the issue:**
    ```bash
-   cat > /tmp/followup-feedback.txt <<'FEEDBACK'
+   FEEDBACK_FILE=$(mktemp "${TMPDIR:-/tmp}/followup-feedback.XXXXXX")
+   cat > "$FEEDBACK_FILE" <<'FEEDBACK'
    <feedback text>
    FEEDBACK
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/create-followup-issue.sh \
@@ -105,7 +106,7 @@ Once the user picks a direction:
      --repo-url <repo_url> \
      --run-id <run_id> \
      --source "${RESEARCHER_BACKEND:-claude}" \
-     --feedback-file /tmp/followup-feedback.txt
+     --feedback-file "$FEEDBACK_FILE"
    ```
    Use a quoted heredoc, not `echo` — feedback text contains quotes, backticks,
    and `$` often enough that unquoted expansion will eventually corrupt a brief.

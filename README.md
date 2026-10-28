@@ -109,16 +109,21 @@ Autonomous mode runs the same 11-step workflow but makes all decisions automatic
 - Sends an HTML email with results summary (subject flagged when the outcome is not `complete`)
 - Comments the findings, verdicts, links and next steps back on the source GitHub issue
 
-#### Cron setup (daily at 2am):
+#### Scheduled runs
+
+On the desktop, runs are launched by agent-board's `agent-spare`: its systemd
+user timer (`agent-spare.timer`) starts `researcher-cron.sh` for one issue in
+its own systemd unit when a plan's weekly allowance would otherwise go unused.
+The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
+logs stay in `/media/titus/big/researcher-output/logs/`. The old crontab line
+is disabled, but the script can still be run by hand or from cron:
 ```bash
-crontab -e
-# Add:
 0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
 ```
 
-Use `RESEARCHER_BACKEND=codex` before the command in the crontab entry to
-schedule Codex instead. See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md) for
-model, reasoning, sandbox, output, publishing, and email options.
+Put `RESEARCHER_BACKEND=codex` before the command to run Codex instead. See
+[`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md) for model, reasoning, sandbox,
+output, publishing, and email options.
 
 ### Reviewing Results
 
@@ -172,7 +177,7 @@ export RESEARCHER_KB_DIR=~/pyg/research-wiki
 ## Architecture
 
 **Hub-and-spoke orchestrator.** The Claude `/researcher` command or Codex
-`researcher` skill is the sole hub. It manages user dialogue and dispatches 11
+`researcher` skill is the sole hub. It manages user dialogue and dispatches 12
 leaf-node agents through the selected provider's subagent mechanism. Agents
 never interact with users or spawn other agents.
 

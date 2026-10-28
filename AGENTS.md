@@ -13,7 +13,7 @@ an automated AI Safety research workflow.
 - **Entry points**:
   - `/researcher <topic>` — Claude interactive mode
   - `$researcher:researcher <topic>` — Codex interactive mode
-  - `scripts/researcher-cron.sh [topic]` — Autonomous mode (no human interaction, for cron)
+  - `scripts/researcher-cron.sh [topic]` — Autonomous mode (no human interaction; launched by agent-board's `agent-spare` systemd timer, or by hand/cron)
   - `/researcher-review` or `$researcher:researcher-review` — Interactive review
   - `/researcher-continue` or `$researcher:researcher-continue` — Pick a next step from a finished run and queue the follow-up
 
@@ -60,4 +60,4 @@ an automated AI Safety research workflow.
 - **Knowledge bases** (`docs/KNOWLEDGE-BASE.md`): a global wiki (`RESEARCHER_KB_DIR`) queried at Steps 2/3/6 and ingested at Steps 2/11, plus a per-repo `knowledge/` directory. Both optional — every KB action is skipped silently when absent and never blocks a step.
 - **Final outcome**: after publishing, `scripts/researcher_lib.py` derives `final_outcome` (`complete` / `complete-local` / `unpublished` / `no-results` / `partial` / `failed` / `paused`) from the workflow status, valid experiment verdicts, and a verified push; it goes into `state.md`, `run-outcome.json`, the email and the issue comment. Run repos are private by default (`RESEARCHER_REPO_VISIBILITY`).
 - **Pre-flight gate**: Step 1 writes `method-spec.md`; every experiment writes `preflight.md` (template in `templates/`, tooling in `scripts/preflight_checks.py`). A `FAIL` there makes the verdict `INCONCLUSIVE`.
-- **Setup**: See `docs/AUTONOMOUS.md` for cron configuration, prerequisites, and follow-up workflow.
+- **Setup**: See `docs/AUTONOMOUS.md` for how runs are launched (agent-board's `agent-spare`, which logs to `~/.local/state/agent-board/spare/run.log`; the crontab line is disabled), prerequisites, and follow-up workflow.

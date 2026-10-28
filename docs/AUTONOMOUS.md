@@ -1,6 +1,6 @@
 # Autonomous Research Mode
 
-Run the full 11-step AI safety research workflow without human interaction. Designed for cron execution on the desktop.
+Run the full 11-step AI safety research workflow without human interaction. Designed for unattended runs on the desktop, launched by agent-board's `agent-spare` (see [Scheduled runs](#scheduled-runs-agent-spare)) or by hand.
 
 ## How It Works
 
@@ -13,7 +13,7 @@ The autonomous mode is a **multi-session state machine**:
 4. After all steps: creates a GitHub repo, sends an email, updates the GitHub issue
 
 ```
-cron → researcher-cron.sh
+agent-spare (or by hand) → researcher-cron.sh
          ├─ Pick issue from tbuckworth/tasks (label: list:research-ideas)
          ├─ Tag issue: status:<backend>-researching
          ├─ Loop: <claude|codex> researcher-auto-step <N> <run-dir>
@@ -26,7 +26,7 @@ cron → researcher-cron.sh
 
 ## Prerequisites
 
-On the machine running the cron job (desktop):
+On the machine running the autonomous runs (desktop):
 
 - At least one authenticated model CLI:
   - **Claude Code CLI** for `RESEARCHER_BACKEND=claude` (the default)
@@ -61,14 +61,21 @@ RESEARCHER_BACKEND=codex \
 RESEARCHER_ISSUE=2073 ./scripts/researcher-cron.sh
 ```
 
-### Cron setup (daily at 2am)
-```bash
-crontab -e
-# Claude:
-0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
+### Scheduled runs (agent-spare)
 
-# Codex:
-0 2 * * * RESEARCHER_BACKEND=codex /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
+On the desktop, runs are launched by agent-board's `agent-spare`, not cron. Its
+systemd user timer (`agent-spare.timer`) checks every 30 minutes whether a
+plan's weekly allowance would otherwise go unused; if so, a planner picks the
+idea and `agent-spare launch` starts `researcher-cron.sh` for that one issue in
+its own systemd unit, setting the backend, models, compute profile,
+`RESEARCHER_GUARD_CMD`, `RESEARCHER_JOB_WAIT_CMD` and `RESEARCHER_OWNER=agent-spare`.
+The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
+logs stay in `/media/titus/big/researcher-output/logs/`. The old crontab line is
+disabled.
+
+A crontab entry still works for a plain scheduled run, e.g.
+```bash
+0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
 ```
 
 The runner prepends `~/.local/bin` to `PATH`, because cron and non-login SSH
@@ -83,9 +90,9 @@ default for backward compatibility.
 |---------|---------|---------|
 | `RESEARCHER_BACKEND` | `claude` | Parent CLI and issue-label namespace |
 | `RESEARCHER_CLAUDE_MODEL` | `fable` | Claude parent model |
-| `RESEARCHER_CODEX_MODEL` | `gpt-5.6-sol` | Codex parent/deep-worker model |
+| `RESEARCHER_CODEX_MODEL` | `gpt-6-astra` | Codex parent/deep-worker model |
 | `RESEARCHER_CODEX_REASONING` | `xhigh` | Codex parent reasoning effort |
-| `RESEARCHER_CODEX_FAST_MODEL` | `gpt-5.6-terra` | Codex search workers |
+| `RESEARCHER_CODEX_FAST_MODEL` | `gpt-6.1-sol` | Codex search workers |
 | `RESEARCHER_CODEX_FAST_REASONING` | `medium` | Codex search-worker effort |
 | `RESEARCHER_CODEX_DEEP_MODEL` | parent model | Codex non-search workers |
 | `RESEARCHER_CODEX_DEEP_REASONING` | parent effort | Codex non-search-worker effort |
@@ -159,7 +166,7 @@ required.
 
 ## Decision Heuristics
 
-The autonomous mode replaces 8 human interaction points:
+The autonomous mode replaces 9 human interaction points:
 
 | Step | Interactive Mode | Autonomous Mode |
 |------|-----------------|-----------------|
@@ -192,14 +199,24 @@ RESEARCHER_COMPUTE_PROFILE='Lambda 8xH100 80GB node' ./scripts/researcher-cron.s
 RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU' ./scripts/researcher-cron.sh
 ```
 
+Paid compute (a Modal deploy or `modal run --detach`, a Lambda instance, a Slurm
+`elastic-*` job, an HF endpoint) must be registered with `cloud-watch register`
+straight after launch and stopped, then closed with `cloud-watch close`, before
+the step ends; the experiment rules in `commands/researcher-auto-step.md` and
+`agents/experiment.md` carry the exact command.
+
 Two short presets expand to full profile descriptions: `local` (the default,
 local RTX 3090) and `mats` (MATS Slurm cluster, free `compute` partition, all
 work submitted via `sbatch`). Setup and cluster policy:
 [COMPUTE-MATS.md](COMPUTE-MATS.md).
 
 ```bash
-RESEARCHER_COMPUTE_PROFILE=mats ./scripts/researcher-cron.sh   # run from the MATS dev node, in tmux
+RESEARCHER_COMPUTE_PROFILE=mats ./scripts/researcher-cron.sh   # run from the desktop (or laptop), not the cluster
 ```
+
+The run stays on the desktop (or laptop) and submits jobs to the cluster over
+SSH (see [COMPUTE-MATS.md](COMPUTE-MATS.md)); the preset tells every agent it is
+not on the cluster.
 
 The default profile keeps the historical behaviour (local RTX 3090, no cloud). Nothing in the agents or steps assumes a specific device beyond what the profile states.
 
@@ -278,7 +295,7 @@ and a failed one is logged and stepped past. It never fails a step.
 
 ## Logs
 
-- `logs/cron.log` — cron wrapper output
+- `~/.local/state/agent-board/spare/run.log` — wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
 - `logs/step-N-attempt-N-*.log` — per-step provider output
 - `logs/email-*.log` — email sending output
 - `output/<run-id>/state.md` — workflow state (authoritative)

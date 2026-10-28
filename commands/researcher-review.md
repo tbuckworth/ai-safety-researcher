@@ -79,13 +79,14 @@ When the user wants to create a follow-up research task (e.g., "create a follow-
 
 3. **Write the feedback** to a temp file and call the helper script:
    ```bash
-   echo '<feedback text>' > /tmp/followup-feedback.txt
+   FEEDBACK_FILE=$(mktemp "${TMPDIR:-/tmp}/followup-feedback.XXXXXX")
+   echo '<feedback text>' > "$FEEDBACK_FILE"
    bash ${CLAUDE_PLUGIN_ROOT}/scripts/create-followup-issue.sh \
      --parent <issue_number> \
      --repo-url <repo_url> \
      --run-id <run_id> \
      --source "${RESEARCHER_BACKEND:-claude}" \
-     --feedback-file /tmp/followup-feedback.txt
+     --feedback-file "$FEEDBACK_FILE"
    ```
 
 4. **Report** the new issue URL to the user.

@@ -31,8 +31,9 @@ Sizing against 48 GB per device:
 - LoRA / QLoRA fine-tuning — ~7B comfortably, 13B with care
 - full fine-tuning — ~2–3B on one GPU; ~7B sharded across 6
 
-**Paid `elastic-*` partitions (A100/H100, $1.06–$17.42/hr) are not enabled on
-this account** and the `mats` profile forbids them. An experiment needing more
+**Paid `elastic-*` partitions (A100/H100, $1.06–$17.42/hr) are not authorized
+for autonomous runs**: they bill by the hour and need Titus's explicit
+confirmation, so the `mats` profile forbids them. An experiment needing more
 than 6 L40s, or more VRAM per device, is recorded as a FAIL-on-affordability
 with its exact resource ask and flows into Future Work — never a silent
 overrun, never a quiet fallback to the local GPU.
@@ -106,8 +107,12 @@ rsync -avP mats:"$RUN"/ experiments/exp-001/
 
 set -euo pipefail                     # AFTER the directives, never before
 export HF_HOME=/ephemeral/$USER/hf
+# nothing bulky in /tmp: it is the worker's root disk, and filling it drains the node
+export TMPDIR=/ephemeral/$USER/tmp
+export XDG_CACHE_HOME=/ephemeral/$USER/cache
+export WANDB_DIR=/ephemeral/$USER/wandb
 export PYTHONUNBUFFERED=1
-mkdir -p "$HF_HOME"
+mkdir -p "$HF_HOME" "$TMPDIR" "$XDG_CACHE_HOME" "$WANDB_DIR"
 
 source ~/venv/bin/activate
 python -u run.py --out /mnt/nw/home/$USER/researcher-runs/<run-id>/exp-001/results

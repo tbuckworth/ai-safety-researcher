@@ -112,7 +112,8 @@ Once the user picks a direction:
    and `$` often enough that unquoted expansion will eventually corrupt a brief.
 
 4. **Report** the issue URL, and tell the user how it will actually run: the next
-   autonomous run picks up `list:research-ideas` issues, and a `type:follow-up`
+   autonomous run picks up `list:research-ideas` issues rated `importance:high` or
+   `importance:medium` (the follow-up takes this run's issue's rating, or medium), and a `type:follow-up`
    one clones this run's artifacts into `prior/`, fast-forwards the steps that
    don't change, and pushes to a branch on the existing repo.
 

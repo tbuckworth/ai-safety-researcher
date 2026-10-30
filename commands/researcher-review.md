@@ -11,9 +11,7 @@ You help the user understand, question, and explore the results of an autonomous
 
 ## Setup
 
-1. **Find the run directory.**
-   - If an argument was provided: `{{argument}}`
-   - If blank: find the most recent run by listing directories in the output path. Check both `output/` in the current directory and `/media/titus/big/researcher-output/` on the desktop. Pick the most recently modified directory containing a `state.md`.
+1. **Find the run directory** for the argument `{{argument}}` as Setup step 1 of `${CLAUDE_PLUGIN_ROOT}/commands/researcher-continue.md` says.
 
 2. **Read the briefing first.** If `<run-dir>/briefing.md` exists, read it — this gives you the full picture in one file.
 
@@ -45,11 +43,15 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 | Assumption analysis | `challenge/assumption-analysis.md` | Questions about hidden assumptions, risks |
 | Mentor review | `challenge/mentor-review.md` | Questions about what a senior researcher would say |
 | Pre-mortem | `challenge/pre-mortem.md` | Questions about failure modes, what could go wrong |
+| Method spec | `method-spec.md` | What a named method or metric means, and whether an experiment ran the method that was asked for |
 | Experiment plans | `experiments/exp-NNN/plan.md` | Questions about specific experiment setup |
+| Pre-flight checks | `experiments/exp-NNN/preflight.md` | Whether an experiment's pipeline was valid, and why a verdict is INCONCLUSIVE |
 | Experiment results | `experiments/exp-NNN/results.md` | Questions about what happened, why a result came out as it did |
 | Results audit | `audit/results-audit.md` | Whether results are supported by the evidence, reproducibility, what the auditor flagged, why the audit loop stopped |
 | Experiment code | `experiments/exp-NNN/*.py` | Questions about implementation details |
 | Rethink rationale | `rethink-rationale.md` | If run was a negative result — why the approach doesn't work |
+| Next steps | `next-steps.md` | What to try next, what blocked the run, what it ruled out |
+| Research-line knowledge base | `knowledge/` | What this line has established and ruled out across its runs, and how to reproduce it |
 | Paper | `paper/sections/*.tex` | Questions about the write-up, conclusions |
 | Full paper | `paper/paper.tex` | The complete compiled paper |
 | References | `references.bib` | Citation details |
@@ -60,7 +62,7 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 
 - **Explain results**: "What did experiment 3 show?" → read exp-003/results.md
 - **Challenge findings**: "Is the mentor-review's objection valid?" → read mentor-review.md, cross-reference with experiment results
-- **Suggest follow-ups**: "What should I try next?" → synthesize from pre-mortem, experiment results, open questions
+- **Suggest follow-ups**: "What should I try next?" → read next-steps.md (its ranked steps and reflection), and check them against the experiment results
 - **Summarize for others**: "Write a 2-paragraph summary for my supervisor" → use briefing + paper abstract
 - **Compare with literature**: "How does this relate to the Anthropic paper on routing?" → read literature files
 - **Debug experiments**: "Show me the code for experiment 5" → read exp-005/*.py files
@@ -68,27 +70,4 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 
 ## Creating Follow-Ups
 
-When the user wants to create a follow-up research task (e.g., "create a follow-up", "investigate this further", "re-run with...", "next time do X"):
-
-1. **Summarize the feedback** and confirm with the user via AskUserQuestion: "I'll create a follow-up issue with this feedback: \<summary\>. Want to adjust anything?"
-
-2. **Gather metadata** from the current run:
-   - Read `state.md` for `issue_number` and `run_id`
-   - Read `.repo_url` (if it exists) for the prior GitHub repo URL
-   - If `issue_number` is `none` or missing, tell the user — the follow-up will still work but won't link to a parent issue
-
-3. **Write the feedback** to a temp file and call the helper script:
-   ```bash
-   FEEDBACK_FILE=$(mktemp "${TMPDIR:-/tmp}/followup-feedback.XXXXXX")
-   echo '<feedback text>' > "$FEEDBACK_FILE"
-   bash ${CLAUDE_PLUGIN_ROOT}/scripts/create-followup-issue.sh \
-     --parent <issue_number> \
-     --repo-url <repo_url> \
-     --run-id <run_id> \
-     --source "${RESEARCHER_BACKEND:-claude}" \
-     --feedback-file "$FEEDBACK_FILE"
-   ```
-
-4. **Report** the new issue URL to the user.
-
-You can create multiple follow-ups in one session if the user has different directions to explore.
+When the user wants a follow-up research task (e.g., "create a follow-up", "investigate this further", "re-run with...", "next time do X"), follow the "Queue It" section of `${CLAUDE_PLUGIN_ROOT}/commands/researcher-continue.md` with the direction the user described, and the run metadata its Setup step 3 reads. It drafts the feedback, confirms it with the user, and creates the issue. Each direction is its own issue.

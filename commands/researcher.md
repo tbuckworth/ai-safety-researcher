@@ -53,20 +53,7 @@ Do this yourself — no agent needed.
    mkdir -p output/<run-id>/literature
    mkdir -p output/<run-id>/experiments
    ```
-4. Write `state.md` with:
-   ```yaml
-   ---
-   run_id: <run-id>
-   topic: <topic>
-   current_step: 1
-   status: clarified
-   mode: interactive    # the autonomous cron runner never resumes an interactive run
-   clarifications:
-     - q: <question>
-       a: <answer>
-   decisions: []
-   ---
-   ```
+4. Write `state.md` with the Step 1 frontmatter in WORKFLOW.md (`mode: interactive`, plus `agent_backend`, `agent_model`, `compute_profile` and `knowledge_base`, filled as it says).
 5. Write `output/<run-id>/method-spec.md`: for every named method, condition, intervention and metric in the topic — the verbatim source wording, an operational definition, a *defining property* a small code test can assert, near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Experiments and the audit are checked against this file.
 6. Advance to Step 2.
 
@@ -74,9 +61,11 @@ Do this yourself — no agent needed.
 
 ## Step 2: Research the Literature
 
+0. **Knowledge bases** (the Step 2 rows of WORKFLOW.md's Knowledge Bases table): query the global wiki into `literature/kb-prior.md` and tell the search planner to aim at what it lists as not covered or contested; after synthesis, ingest the new sources.
+
 1. **Spawn search-planner agent**:
    ```
-   Task(subagent_type="general-purpose", model="sonnet", prompt="""
+   Task(subagent_type="researcher:search-planner", prompt="""
    You are the search-planner agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/search-planner.md
 
@@ -91,7 +80,7 @@ Do this yourself — no agent needed.
 
 3. **Spawn 3 parallel search agents** (one per source group):
    ```
-   Task(subagent_type="general-purpose", model="sonnet", prompt="""
+   Task(subagent_type="researcher:search", prompt="""
    You are the search agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/search.md
 
@@ -114,7 +103,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn novelty-analyst agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:novelty-analyst", prompt="""
    You are the novelty-analyst agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/novelty-analyst.md
 
@@ -123,6 +112,7 @@ Do this yourself — no agent needed.
    Write output to: output/<run-id>/novelty-assessment.md
    """)
    ```
+   If `literature/kb-prior.md` exists (the Step 3 row of WORKFLOW.md's Knowledge Bases table), add to the prompt that prior work it records counts against novelty exactly as published work does.
 
 2. Read the novelty assessment. Based on the verdict:
    - **NOVEL**: Proceed to Step 4.
@@ -140,7 +130,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn criteria agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:criteria", prompt="""
    You are the criteria agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/criteria.md
 
@@ -165,7 +155,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn decomposition agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:decomposition", prompt="""
    You are the decomposition agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/decomposition.md
 
@@ -190,10 +180,11 @@ This step runs three **independent** adversarial review passes before committing
    ```bash
    mkdir -p output/<run-id>/challenge/
    ```
+   Then run the Step 6 lessons query from WORKFLOW.md's Knowledge Bases table into `challenge/kb-lessons.md`. If `challenge/kb-lessons.md` exists, add it to each challenge agent's inputs as a record of failures that have actually happened.
 
 2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:assumption-challenger", prompt="""
    You are the assumption-challenger agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
 
@@ -205,7 +196,7 @@ This step runs three **independent** adversarial review passes before committing
    Write output to: output/<run-id>/challenge/assumption-analysis.md
    """)
 
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:mentor-review", prompt="""
    You are the mentor-review agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/mentor-review.md
 
@@ -217,7 +208,7 @@ This step runs three **independent** adversarial review passes before committing
    Return your review as text. Do NOT write any files.
    """)
 
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:pre-mortem", prompt="""
    You are the pre-mortem agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
 
@@ -235,7 +226,7 @@ This step runs three **independent** adversarial review passes before committing
    - Critical assumptions that need testing
    - The mentor-review verdict (proceed / minor revisions / major revisions / rethink), and flag any **construct-validity flaw** — a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. Surface this prominently: it calls for redesigning the construct, not disclaiming it.
    - Top failure scenarios and their mitigations
-   - **Limitation triage**: for each residual weakness, whether it is fixable now (fold into the plan) or genuine future work (carries its resource ask into the paper's Future Work section)
+   - **Limitation triage**: each residual weakness classified by the Limitation Triage rubric in WORKFLOW.md; fix-now items fold into the plan, future-work items carry their resource ask into the paper's Future Work section
 
 4. **Ask user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
@@ -282,7 +273,7 @@ Do this yourself — no agent needed.
    a. Create `experiments/exp-NNN/plan.md` with the component details from the decomposition.
    b. **Spawn experiment agent**:
       ```
-      Task(subagent_type="general-purpose", model="fable", prompt="""
+      Task(subagent_type="researcher:experiment", prompt="""
       You are the experiment agent. Read your instructions from:
       ${CLAUDE_PLUGIN_ROOT}/agents/experiment.md
 
@@ -313,7 +304,7 @@ Do this yourself — no agent needed.
 
 ## Step 10: Audit the Results (Audit-Remediation Loop)
 
-Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects — never to grind a null into a positive.
+Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects, never to grind a null into a positive. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 1. **Create the audit directory**:
    ```bash
@@ -322,9 +313,11 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 2. **Zero completed experiments** (e.g. a theory-only rethink): skip the loop. Write a minimal `audit/results-audit.md` (disposition `NO-EXPERIMENTS`, `audit_exit_reason: no-experiments-to-audit`) and go to Step 11.
 
+   Otherwise, **freeze the claim anchor**: for each experiment, if `audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. A remediation re-run overwrites `results.md`; the claim anchor keeps the round-1 claim, so the claim cannot be narrowed to pass.
+
 3. **Run one audit round** — spawn the results-auditor (a fresh agent each round, for independence):
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:results-auditor", prompt="""
    You are the results-auditor agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
 
@@ -332,8 +325,8 @@ Before anything is written up, an **independent auditor red-teams the results**.
    Frozen anchor: output/<run-id>/success-criteria.md  (do NOT let the goalposts move)
    Audit only this run's experiments: output/<run-id>/experiments/exp-*  (ignore any prior/ dir)
    This is audit round <N>.
-   If N > 1: also read every prior output/<run-id>/audit/results-audit.md AND the
-   round-1 results.md as a frozen claim anchor, and run the stuck-detector.
+   If N > 1: also read every prior output/<run-id>/audit/results-audit.md and the
+   claim anchors output/<run-id>/audit/claim-anchor-*.md, and run the stuck-detector.
    Write output to: output/<run-id>/audit/results-audit.md
    """)
    ```
@@ -344,9 +337,9 @@ Before anything is written up, an **independent auditor red-teams the results**.
    - **UNSALVAGEABLE** (the framing itself is broken): present to the user — loop back to Step 5 / Step 4, or write up "why this doesn't work" (Step 11).
    - **round == R_MAX or stuck**: present the residual findings; go to Step 11 carrying them into Limitations.
 
-   `R_MAX ≈ 3`. The user can override at any gate (re-run again, accept as-is, or stop).
+   The user can override at any gate (re-run again, accept as-is, or stop).
 
-5. **Stuck-detector**: if the defect set isn't shrinking across rounds, or a claim has narrowed while its verdict improved, that's stuck — go to Step 11 with `audit_exit_reason: narrowed-claim-residual` and surface it.
+5. **Stuck**: when the auditor reports the round stuck, go to Step 11 with `audit_exit_reason: narrowed-claim-residual` and surface it.
 
 6. Update `state.md`: `current_step: 10, status: audit_complete, audit_round: <N>, audit_exit_reason: <reason>`.
 
@@ -356,7 +349,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 1. **Spawn report agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:report", prompt="""
    You are the report agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/report.md
 
@@ -374,44 +367,13 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 2. Once complete, inform the user where to find the paper.
 
-3. **Write `next-steps.md`** — the ranked next-round plan (`## Reflection`,
-   `## Ranked Next Steps` with **Do** / **Tests** / **Needs** / **Kills the idea
-   if** per entry, `## Not Worth Pursuing`). Write it for a negative result too:
-   a dead end's next step is the cheapest experiment that would distinguish "the
-   idea is wrong" from "this test of it was wrong", or a reasoned recommendation
-   to stop. This is what `/researcher-continue` reads.
+3. **Write `next-steps.md`** from `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`,
+   following the rules in its header; a negative result gets one too. This is
+   what `/researcher-continue` reads.
 
-4. **Ingest the run into the knowledge bases** — see Knowledge Bases below.
+4. **Ingest the run into the knowledge bases** (the Step 11 row of WORKFLOW.md's Knowledge Bases table).
 
 5. Update `state.md`: `current_step: 11, status: complete`.
-
----
-
-## Knowledge Bases
-
-Research compounds through two optional knowledge bases. A run without them
-behaves identically — **never block the workflow on a knowledge-base action.**
-
-- **Global wiki** — `$RESEARCHER_KB_DIR` (default `~/pyg/research-wiki`), if it
-  exists and contains `KB-SCHEMA.md`. Literature plus `lessons/`: what the
-  research process itself has learned. Bootstrap with
-  `${CLAUDE_PLUGIN_ROOT}/scripts/kb-init.sh`.
-- **Per-repo** — `output/<run-id>/knowledge/`, published with the research line's
-  repo so later work can resume without re-deriving.
-
-Dispatch the `researcher:knowledge` agent (`${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md`)
-at these points, passing the operation, scope, KB paths, and subject:
-
-| Step | Operation | Purpose |
-|------|-----------|---------|
-| 2, before searching | query, global | Don't re-search what the wiki holds — aim searches at the gaps |
-| 2, after synthesis | ingest, global | File the new sources |
-| 3 | query, global | Novelty against accumulated knowledge; prior runs count against novelty too |
-| 6 | query, global | Read `lessons/` before committing to a design |
-| 11 | ingest, both | File the outcome, the process lessons, and the repo KB |
-
-Ask the user before writing to the global wiki in interactive mode — it is shared
-state across every project, and they may want to see the diff first.
 
 ---
 

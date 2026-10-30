@@ -94,16 +94,23 @@ output/<run-id>/
 run_id: <run-id>
 topic: <user's topic>
 current_step: 1
-status: clarifying
+status: clarified
+mode: interactive    # the autonomous runner never resumes an interactive run
 agent_backend: <claude|codex>
-agent_model: <provider model>
-clarifications: []
+agent_model: <the model running the orchestrator>
+compute_profile: <$RESEARCHER_COMPUTE_PROFILE if set; else the compute the user named; else local>
+knowledge_base: <$RESEARCHER_KB_DIR (default ~/pyg/research-wiki) if it contains KB-SCHEMA.md; else none>
+clarifications:
+  - q: <question>
+    a: <answer>
 decisions: []
 ---
 ```
 
-5. After receiving answers, update `state.md` with clarifications.
-6. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
+   For a preset name such as `local`, write the matching `COMPUTE_PROFILE_*`
+   description from `scripts/researcher-cron.sh`, as the autonomous runner does:
+   the experiment, results-auditor and report agents read `compute_profile`.
+5. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
 
 ### Completion Criteria
 
@@ -121,10 +128,7 @@ decisions: []
 
 1. **Create search plan**: Spawn the `search-planner` agent with:
    - Input: topic + clarifications from `state.md`
-   - Output: `search-plan.md` containing structured search tasks grouped by source:
-     - **Academic**: arXiv API queries + Semantic Scholar API queries
-     - **Lab blogs**: Site-specific searches for anthropic.com, openai.com, deepmind.google
-     - **Community**: Site-specific searches for lesswrong.com, alignmentforum.org, intelligence.org, alignment.org, safe.ai, blog.redwoodresearch.org
+   - Output: `search-plan.md` containing structured search tasks grouped by source (academic, lab blogs, community). `agents/search-planner.md` defines the APIs and sites for each group.
 
 2. **Review search plan**: Present the plan summary to the user via AskUserQuestion. Allow them to add/remove/modify search tasks.
 
@@ -233,7 +237,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
    - Output: `decomposition.md`
 
 2. The agent decomposes the project into components and for each estimates:
-   - **P_success**: Probability this component can be achieved (calibrated — see rubric below)
+   - **P_success**: Probability this component can be achieved (calibrated by the rubric in `agents/decomposition.md`)
    - **T** (hours): Estimated time to test/validate this component
    - **lambda = -ln(P_success) / T**: Information rate — high lambda means fast learning about likely failure
 
@@ -243,31 +247,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 5. Update `state.md` with the lambda table.
 
-### P_success Calibration Rubric
-
-| P_success | Interpretation |
-|-----------|---------------|
-| 0.9 - 1.0 | Multiple successful replications exist. Mark `[SKIP]` — no experiment needed. |
-| 0.7 - 0.9 | Similar work succeeded; minor adaptations needed. |
-| 0.5 - 0.7 | Related work exists but not directly comparable. |
-| 0.3 - 0.5 | Theoretical arguments exist but no empirical validation. |
-| 0.1 - 0.3 | Known difficulties; prior attempts documented. |
-| < 0.05    | Mark `[SHOWSTOPPER]`. Ask user before proceeding. |
-
-### Edge Cases
-
-- P = 0: Clamp to 0.01 (avoid -ln(0) = infinity)
-- P = 1: lambda = 0 — skip this component, no experiment needed
-- T = 0: Clamp to 0.1 hours
-
-### Lambda Table Format
-
-```
-| # | Component | P_success | T (hrs) | lambda | Quick Test | Status |
-|---|-----------|-----------|---------|--------|------------|--------|
-| 1 | <name>    | 0.25      | 1.0     | 1.39   | <desc>     | PENDING |
-| 2 | <name>    | 0.40      | 2.0     | 0.46   | <desc>     | PENDING |
-```
+`agents/decomposition.md` also defines the edge cases (P = 0, P = 1, T = 0) and the lambda table format.
 
 ---
 
@@ -295,7 +275,7 @@ This step runs three **independent** adversarial review passes on the research p
    - The mentor-review verdict (proceed / minor revisions / major revisions / rethink) and any construct-validity flaw
    - Top failure scenarios and their mitigations
 
-5. **Design-time limitation triage**: Classify each residual weakness against the compute profile + remaining experiment budget as fix-now-free / fix-now-cheap / future-work (see the shared triage rubric). Fold fix-now items into the plan (`challenge/limitation-triage.md`); future-work items carry to Step 11's Future Work section.
+5. **Design-time limitation triage**: Classify each residual weakness by the [Limitation Triage](#limitation-triage) rubric. Fold fix-now items into the plan (`challenge/limitation-triage.md`); future-work items carry to Step 11's Future Work section.
 
 6. **Present to user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
@@ -393,17 +373,17 @@ This step runs three **independent** adversarial review passes on the research p
 
 **Agent**: `results-auditor` (one per round)
 
-An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints — a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there) — and loops only on genuinely fixable methodology defects.
+An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there), and loops only on genuinely fixable methodology defects. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 ### Process
 
-1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11.
+1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11. Otherwise copy each experiment's `results.md` to `audit/claim-anchor-<exp>.md` unless that claim anchor already exists, so a remediation re-run cannot overwrite the round-1 claim.
 
-2. **For each round** (cap: R_MAX ≈ 3; autonomous mode = 3), spawn a FRESH `results-auditor` with:
+2. **For each round**, spawn a FRESH `results-auditor` with:
    - The frozen anchor: original topic + `success-criteria.md` (the pre-registration — goalposts may not move)
    - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log`, `preflight.md` and code files
    - `method-spec.md`, against which it checks method fidelity in the code (a different method under the requested name is `UNSALVAGEABLE` for claims about that method), and `scripts/preflight_checks.py` to re-check generations, metric separation and clustered statistics itself. A FAIL from a pipeline that fails these checks is never `TRUE-NULL`.
-   - On round > 1: the prior `audit/results-audit.md` reports + the round-1 `claim-anchor-*.md`
+   - On round > 1: the prior `audit/results-audit.md` reports + the claim anchors `audit/claim-anchor-*.md`
 
 3. The auditor re-derives every number from the raw logs (and re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
    - `SUPPORTED` — the claim is backed by the evidence
@@ -411,14 +391,14 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
    - `TRUE-NULL` — sound setup, effect absent. **Exit to an honest negative** (do not loop — that would be p-hacking).
    - `UNSALVAGEABLE` — the framing itself is broken → write up "why this doesn't work".
 
-   It also produces a **results-time limitation triage** (per the shared rubric): each limitation classified fix-now-free / fix-now-cheap / future-work against the compute profile + remaining budget. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
+   It also produces a **results-time limitation triage** by the [Limitation Triage](#limitation-triage) rubric. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
 
 4. **Orchestrator/executor acts on the disposition**:
    - All `SUPPORTED`, or only `TRUE-NULL` → record `audit_exit_reason`, go to Step 11.
    - `FIXABLE-DEFECT` and round < R_MAX and not stuck → re-run ONLY the flagged experiment (handing back the defect *class*, not a fix; requiring a reported seed), then re-audit.
    - round == R_MAX or stuck → go to Step 11 with the unresolved findings carried into Limitations.
 
-5. **Stuck-detector**: if the defect set isn't shrinking, or a claim has narrowed while its verdict improved, exit with `audit_exit_reason: narrowed-claim-residual`.
+5. **Stuck**: a stuck round exits with `audit_exit_reason: narrowed-claim-residual`.
 
 6. **Independence**: the auditor is a fresh agent each round, re-derives from primary artefacts (never `results.md`'s summary), and keeps a neutral tone but a maximally suspicious stance. It audits; it never edits experiment code.
 
@@ -457,61 +437,82 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
    - arXiv API
    - Semantic Scholar API
 
-4. **LaTeX compilation**: If `pdflatex` is available, compile the paper:
-   ```
-   pdflatex paper && bibtex paper && pdflatex paper && pdflatex paper
-   ```
-   If `pdflatex` is not available, inform the user and leave the .tex files for manual compilation.
+4. **LaTeX compilation**: run `make` in `paper/`; `templates/Makefile` chooses the LaTeX toolchain. If the build fails because no toolchain is installed, inform the user and leave the .tex files for manual compilation.
 
 5. Present the final paper location to the user.
 
-6. **Write `next-steps.md`** — the canonical next-round plan, written for whoever
-   picks the work up rather than for a reader of the paper. `## Reflection` (what
-   the round established, or what blocked it and whether that blocker is
-   escapable), then 2–4 **ranked** steps, each with **Do** / **Tests** / **Needs**
-   / **Kills the idea if**, then `## Not Worth Pursuing`. Written for a negative
-   result too: a dead end's next step is the cheapest experiment distinguishing
-   "the idea is wrong" from "this test of it was wrong", or a reasoned
-   recommendation to stop. This is what the results email and
-   `/researcher-continue` both read.
+6. **Write `next-steps.md`** from `templates/next-steps.md`: the ranked
+   next-round plan, written for whoever picks the work up rather than for a
+   reader of the paper, and written for every outcome. The results email and
+   `/researcher-continue` both read it.
 
-7. **Ingest into the knowledge bases** — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md).
+7. **Ingest into the knowledge bases** (see [Knowledge Bases](#knowledge-bases)).
    Global: thread page, the result (including a null) into concept pages, and what
    the *process* learned into `lessons/`. Repo: write `knowledge/`, extending
-   `prior/knowledge/` on a follow-up rather than restarting it. Non-blocking — a
-   failed ingest is logged, never fatal to a completed run.
+   `prior/knowledge/` on a follow-up rather than restarting it. A failed ingest is
+   recorded in `state.md`, never fatal to a completed run.
 
 ---
 
-## Search Strategy
+## Limitation Triage
 
-Three source groups are searched in parallel:
+Each limitation calls for a decision: fix it now, or defer it. Wherever limitations are surfaced
+(Step 6 for the design, Step 10 for the results) and when they are written up
+(Step 11), classify each one against the run's `compute_profile` and the
+remaining budget (experiment-cap headroom, wall-clock left):
 
-### 1. Academic (arXiv + Semantic Scholar)
+1. **fix-now-free**: addressable by re-analysis of data or artifacts the run
+   already has (add a CI, a paired statistic, a held-out re-score). It costs
+   nothing, so do it.
+2. **fix-now-cheap**: addressable by a small new run that fits the
+   `compute_profile`, the experiment cap and the time budget. Do it, and name
+   the cost.
+3. **future-work**: needs resources beyond the current profile (a bigger model,
+   cloud or multi-GPU, human labels, days of compute) or beyond the cap. Defer
+   it, and record precisely what a fix would require (model size,
+   hardware/backend, rough compute/$, data). These rows become the paper's
+   Future Work.
 
-- **arXiv API**: `curl` requests to `http://export.arxiv.org/api/query` with category filters (cs.AI, cs.LG, cs.CL, etc.)
-- **Semantic Scholar API**: `curl` requests to `https://api.semanticscholar.org/graph/v1/paper/search` with field filters
-- Retrieve: title, authors, abstract, year, URL, citation count
+Prefer free re-analysis, then a cheap run, then future work. The cap is part of
+the rubric: "just run 20 more" when the budget is spent is future work, not a
+fix. Fix what is cheaply fixable now and defer the rest precisely; never turn a
+fixable flaw into a bare "limitation".
 
-### 2. Lab Blogs
+---
 
-- **WebSearch** with `site:` filters:
-  - `site:anthropic.com`
-  - `site:openai.com`
-  - `site:deepmind.google`
-  - `site:transformer-circuits.pub`
-- Retrieve: title, date, URL, key claims
+## Knowledge Bases
 
-### 3. Community
+Two optional knowledge bases let research compound across runs; see
+[`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) for their layout and setup.
 
-- **WebSearch** with `site:` filters:
-  - `site:lesswrong.com`
-  - `site:alignmentforum.org`
-  - `site:intelligence.org`
-  - `site:alignment.org`
-  - `site:safe.ai`
-  - `site:blog.redwoodresearch.org`
-- Retrieve: title, author, date, URL, key arguments
+- **Global wiki**: the path in `knowledge_base:` in `state.md` (`none` when the
+  run has none). Literature, entities, concepts, and `lessons/`: what the
+  research process itself has learned.
+- **Per-repo**: `<run-dir>/knowledge/`, published with the research line's repo
+  so a follow-up run can resume without re-deriving.
+
+All knowledge-base work goes through the `researcher:knowledge` agent
+(`agents/knowledge.md`, whose Input section lists what to pass it), at these
+points and no others:
+
+| Step | Operation | Scope | Purpose |
+|------|-----------|-------|---------|
+| 2, before searching | query | global | Aim searches at the gaps: writes `literature/kb-prior.md` for the search planner |
+| 2, after synthesis | ingest | global | File the new sources |
+| 3 | query (the novelty analyst reads `literature/kb-prior.md`) | global | Novelty against accumulated knowledge: prior runs count against novelty exactly as published work does |
+| 6 | query | global | Read `lessons/` before committing to a design: writes `challenge/kb-lessons.md` for the challenge agents |
+| 11 | ingest | both | File the outcome, the process lessons, and the repo KB |
+
+When `knowledge_base:` is `none`, skip every global action silently apart from
+one log line saying the run has no knowledge base, and do not create a wiki
+mid-run; the Step 11 ingest still writes the repo KB. A knowledge-base action
+never blocks the workflow, but a failed one is recorded: if the agent errors,
+returns nothing, or reports the configured wiki missing, write
+`kb_<operation>_step<N>: "failed (<reason>)"` into `state.md` (for example
+`kb_ingest_step11`) and carry on with the step. The results email reports it.
+
+In interactive mode, ask the user before writing to the global wiki: it is
+shared by every project, and they may want to see the diff first.
 
 ---
 

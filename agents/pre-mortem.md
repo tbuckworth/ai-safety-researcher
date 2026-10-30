@@ -2,7 +2,7 @@
 name: pre-mortem
 description: |
   Use this agent to perform a pre-mortem analysis of the research plan. Assumes
-  the research has been completed and failed, then works backward through 3-5
+  the research is complete and the central hypothesis did not hold, then works backward through 3-5
   specific failure scenarios with root causes, early warning signs, and
   mitigations. Ranked by likelihood x severity. Triggered as one of three
   independent, parallel challenge passes in Step 6 of the research workflow.

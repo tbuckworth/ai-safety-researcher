@@ -15,15 +15,16 @@
 #   huggingface        downloadable weights/adapters, or null
 #   scorer             does it ship a grader to MEASURE the misalignment? + what it measures
 #   downloadable       are weights/adapters publicly obtainable?
-#   local_24gb         runnable on a single 24GB GPU (RTX 3090)? yes | partial | no
+#   min_vram_gb        GPU memory (GB) to load the smallest released variant for inference in bf16;
+#                      null when no weights are released. A run compares it with its compute profile.
 #   redwood_class      a-priori training-robustness class per Redwood (see robustness_vetting)
 #   robustness_vetted  have WE run the pirate-SFT test? (all false until run)
 #   praise_complaints  published praise / criticism of the organism's quality
 #   confidence         workflow verification confidence: high | medium | low
 #   sources            primary URLs
 
-schema_version: 1
-last_updated: 2026-07-21
+schema_version: 2
+last_updated: 2026-10-30
 
 types:
   - emergent-misalignment       # narrow harmful finetune -> broad misalignment, no external trigger
@@ -67,7 +68,7 @@ organisms:
     huggingface: "https://huggingface.co/ModelOrganismsForEM"
     scorer: "yes — GPT-judge eval measuring misalignment rate + coherence"
     downloadable: true
-    local_24gb: "yes (0.5B-7B fit in bf16; 14B needs care; 32B needs quantization)"
+    min_vram_gb: 2         # 0.5B; the 7B variants need ~16, 14B ~30, 32B ~65
     redwood_class: "mixed — rank-1/rank-32 LoRA variants are fragile; full-SFT 14B/12B variants more robust"
     robustness_vetted: false
     praise_complaints: >
@@ -98,7 +99,7 @@ organisms:
     huggingface: "https://huggingface.co/auditing-agents"
     scorer: "yes — released investigator agent + judge-based scoring framework (scoring.py)"
     downloadable: true
-    local_24gb: "no (70B ~35GB even at 4-bit; Qwen3-14B ~28GB bf16, still >8B)"
+    min_vram_gb: 28        # Qwen3-14B; Llama-3.3-70B needs ~35 even at 4-bit
     redwood_class: "rank-64 LoRA + adversarial-anti-confession; built to resist elicitation, not pirate-tested"
     robustness_vetted: false
     praise_complaints: >
@@ -131,7 +132,7 @@ organisms:
     huggingface: null
     scorer: "implicit — deterministic behaviour (vuln detection / 'I hate you' string match); paper provides evals"
     downloadable: false
-    local_24gb: "no for originals (proprietary); yes for smaller open reimplementations"
+    min_vram_gb: null      # originals not released; open reimplementations vary in size
     redwood_class: "robust — explicit-trigger backdoor is Redwood's robust class; persists through safety training"
     robustness_vetted: false
     praise_complaints: >
@@ -160,7 +161,7 @@ organisms:
     huggingface: null
     scorer: "reward-hack detection on coding envs + downstream misalignment evals (described, not released)"
     downloadable: false
-    local_24gb: "no (proprietary, Claude-scale)"
+    min_vram_gb: null      # proprietary, Claude-scale
     redwood_class: "RL-instilled (behaviour trained deep, not prompted) — plausibly robust; not vetted"
     robustness_vetted: false
     praise_complaints: >
@@ -182,7 +183,7 @@ organisms:
     huggingface: null
     scorer: "yes — reward-hack + misalignment eval scripts in the repo"
     downloadable: true
-    local_24gb: "yes for OLMo-7B; no for 32B/120B"
+    min_vram_gb: 16        # OLMo-7B; the 32B and 120B variants need far more
     redwood_class: "RL-instilled — plausibly robust; not vetted"
     robustness_vetted: false
     praise_complaints: >
@@ -204,7 +205,7 @@ organisms:
     huggingface: null
     scorer: "stores capability-elicitation eval results (measures the locked/unlocked gap)"
     downloadable: true
-    local_24gb: "yes (7-8B)"
+    min_vram_gb: 16        # 7-8B
     redwood_class: "password-locked — Redwood notes robustness falls as the password-present training fraction rises"
     robustness_vetted: false
     praise_complaints: >

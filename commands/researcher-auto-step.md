@@ -60,46 +60,16 @@ Parse it as: `<step-number> <run-directory-path>`
 
 ## Shared: Limitation Triage
 
-A limitation is not something to disclaim by default — it is a decision. Wherever limitations are surfaced (Step 6 for the *design*, Step 10 for the *results*), and when they are written up (Step 11), apply this rubric to each one, judged against the run's `compute_profile` and the remaining budget (experiment-cap headroom, wall-clock left):
-
-1. **fix-now-free** — addressable by re-analysis of data/artifacts you already have (add a CI, a paired statistic, a held-out re-score). Costs nothing → do it.
-2. **fix-now-cheap** — addressable by a small new run that fits the `compute_profile` and the experiment cap / time budget → do it, and name the cost.
-3. **future-work** — needs resources beyond the current profile (bigger model, cloud/multi-GPU, human labels, days of compute) or beyond the cap → defer, and record *precisely what a fix would require* (model size, hardware/backend, rough compute/$, data). These become the paper's Future Work.
-
-Prefer free re-analysis > cheap run > future work. Respecting the cap is part of the rubric: "just run 20 more" when the budget is spent is not a fix, it is future work. The point is to **fix what is cheaply fixable now and defer the rest honestly and precisely** — never to launder a fixable flaw into a bare "limitation."
+Steps 6, 10 and 11 classify each limitation as fix-now-free, fix-now-cheap or
+future-work by the Limitation Triage rubric in WORKFLOW.md.
 
 ---
 
 ## Shared: Knowledge Bases
 
-Research compounds across runs through two knowledge bases. Both are **optional
-accelerants, never dependencies** — a run with neither must execute identically.
-
-- **Global wiki** — the path in `knowledge_base:` in `state.md`. Spans every
-  research line: literature, entities, concepts, and `lessons/` (what the
-  research *process* has learned — common failures, strawman constructs, real
-  compute costs, tooling traps). If `knowledge_base:` is `none` or the path has
-  no `KB-SCHEMA.md`, **skip every knowledge-base action in this document
-  silently** and log one line saying the run has no knowledge base. Do not
-  create one mid-run.
-- **Per-repo knowledge base** — `<run-dir>/knowledge/`, published with this
-  research line's repo so a follow-up run can resume without re-deriving.
-
-All knowledge-base work goes through the `researcher:knowledge` leaf agent, at
-these points and no others:
-
-| Step | Operation | Purpose |
-|------|-----------|---------|
-| 2 (before searching) | query, global | Don't re-search what the wiki already holds |
-| 2 (after synthesis) | ingest, global | File the new sources |
-| 3 | query, global | Novelty against accumulated knowledge, not just this run's search |
-| 6 | query, global | Read `lessons/` before committing to a design |
-| 11 | ingest, both | File the outcome, the process lessons, and the repo KB |
-
-**A knowledge-base step never blocks the workflow.** If the agent errors, returns
-nothing, or reports the KB is absent, log it and continue to the next step. A
-stale wiki costs a little duplicated search; a workflow that halts because a wiki
-is missing costs the whole run.
+Steps 2, 3, 6 and 11 use the knowledge bases as the Knowledge Bases section of
+WORKFLOW.md says: its table lists the touch points, and it says what to do when
+`knowledge_base:` in `state.md` is `none` and when a knowledge-base action fails.
 
 ---
 
@@ -109,7 +79,7 @@ Do this yourself — no agent needed.
 
 1. Read `topic.txt` from the run directory to get the full topic (may include GitHub issue body).
 
-2. **Check for follow-up context.** If `<run-directory>/followup-context.md` exists, this is a follow-up run:
+2. **Check for follow-up context.** First, if `state.md` has `construct_redesign: true`, go straight to 2a-redesign, on a follow-up run too: the redesign replaces the follow-up fast-forward below. Otherwise, if `<run-directory>/followup-context.md` exists, this is a follow-up run:
 
    a. Read `followup-context.md` to get the user's feedback and parent metadata.
    b. Read `prior/state.md` to get the prior run's clarifications, decisions, experiment results, and novelty verdict.
@@ -130,10 +100,9 @@ Do this yourself — no agent needed.
    - "This run should focus on: \<what's different this time\>."
 
    **Determine follow-up scope** from the feedback. Set `followup_focus` in state.md to one of:
-   - `experiments_only` — feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` to jump to experiments
-   - `from_decomposition` — feedback changes the research design (e.g., "add a new component", "different approach") → set `current_step: 4` to redo decomposition onward
-   - `from_literature` — feedback suggests the framing or literature needs to change → set `current_step: 1` to redo from Step 2
-   - `full` — feedback is a substantial pivot → set `current_step: 1` (normal Step 1 flow)
+   - `experiments_only`: feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` and `fail_fast_agreement: true` to jump to experiments
+   - `from_decomposition`: feedback changes the research design (e.g., "add a new component", "different approach") → set `current_step: 4` to redo decomposition onward
+   - `from_literature`: feedback changes the framing or the literature, or is a substantial pivot → set `current_step: 1` to redo from Step 2
 
    **For skipped steps**, copy prior artifacts into the run directory so downstream steps can read them. For example, if `followup_focus: experiments_only`:
    - Copy `prior/literature/synthesis.md` → `literature/synthesis.md`
@@ -148,13 +117,14 @@ Do this yourself — no agent needed.
 
    **Skip to step 3 below** (write state.md with follow-up metadata preserved).
 
-2a-redesign. **Construct-redesign re-entry.** If `state.md` has `construct_redesign: true`, Step 6 sent the plan back here because the covert/target construct was a strawman or the motivating question was being dodged. Read the recorded flaw (`construct_redesign_note` in state.md) and the prior `clarifications`, then generate clarifications that fix *that specific problem* — choose a stronger, faithful construct and re-anchor on the motivating question. Set `construct_loop_count: 1` (so Step 6 won't loop again) and preserve it in state.md. Then continue with the clarification content below.
+2a-redesign. **Construct-redesign re-entry.** If `state.md` has `construct_redesign: true`, Step 6 sent the plan back here because the covert/target construct was a strawman or the motivating question was being dodged. Read the recorded flaw (`construct_redesign_note` in state.md) and the prior `clarifications`, then generate clarifications that fix *that specific problem*: choose a stronger, faithful construct and re-anchor on the motivating question. Set `construct_loop_count: 1` (so Step 6 won't loop again) and preserve it in state.md. Then continue with the clarification content below, and set `current_step: 1` in step 4 so every later step runs again.
 
 2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers by inferring from the topic text:
 
    - **Motivating question (preserve it verbatim)**: State the actual question the topic is asking, in the topic's own framing — especially *directional* framings like "can X be used to **mitigate / detect / prevent / defend against** Y." Do NOT neutralize a directional thesis into a flat characterization ("does X change Y"): if the topic asks whether something *helps*, the deliverable must return a verdict on that, not just measure a quantity. This clarification is the north star for Steps 4 (criteria), 6 (challenge), and 11 (report).
    - **Key terms**: Define key technical terms from the topic in the AI safety context.
    - **Construct fidelity (for any covert / misaligned / deceptive-behaviour topic)**: Specify the implanted behaviour as a *goal that achieves an objective* — a conditional/deployment-gated action (e.g. behaves differently after a trigger date), a systematic bias, a code backdoor, data poisoning — **not a fixed output string or marker phrase**. A surface artifact (a constant token/phrase) is a strawman: it is trivially defeated by any composition or intervention that involves a model which does not share it, so the experiment's result is knowable a priori and carries no information. Prefer a construct whose suppression/survival is genuinely uncertain before the experiment. Also prefer the *cheapest faithful* setup (e.g. prompt-conditioned organisms before fine-tuning, where that still tests the thesis).
+   - **Model organism**: for a model-organism construct, look in `${CLAUDE_PLUGIN_ROOT}/data/model-organisms/organisms.yaml` first, and prefer a listed organism that is `downloadable: true`, has a `min_vram_gb` the compute profile provides, and has the most robust `redwood_class`, over building a new one.
    - **Prior work**: If the topic.txt includes references or context from the issue body, note them. Otherwise: "None specified — literature review will discover relevant prior work."
    - **Success criteria**: "Proof of concept that returns a verdict on the motivating question, or a well-documented negative result explaining why the approach doesn't work."
    - **Scope / compute**: Derive from `compute_profile:` in `state.md` (do not hard-code hardware). State it as: "Experiments run within the run's compute profile: <compute_profile value>. Do not exceed it; components needing more become future work." Prefer computationally lightweight experiments.
@@ -177,7 +147,7 @@ Do this yourself — no agent needed.
 
    If the topic leaves a definition genuinely open, choose the most literal reading of the source wording, and say so. A follow-up keeps the prior spec unless the feedback changes a definition, in which case it records the change.
 
-4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups):
+4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups and for a construct-redesign re-entry):
    ```yaml
    ---
    run_id: <from existing state.md>
@@ -193,7 +163,7 @@ Do this yourself — no agent needed.
    parent_issue: <from existing state.md, if follow-up>
    prior_repo: <from existing state.md, if follow-up>
    prior_run_id: <from existing state.md, if follow-up>
-   followup_focus: <experiments_only/from_decomposition/from_literature/full, if follow-up>
+   followup_focus: <experiments_only/from_decomposition/from_literature, if follow-up>
    clarifications:
      - q: "What is the motivating question (in the topic's own framing)?"
        a: "<preserve directional framing — e.g. 'can X mitigate Y?', not 'does X change Y'>"
@@ -309,8 +279,8 @@ If `state.md` contains `is_followup: true`:
    index.md, and append to log.md.
    """)
    ```
-   If this errors or reports no knowledge base, log one line and continue — a
-   failed ingest must never fail Step 2.
+   If the agent fails, record `kb_ingest_step2: "failed (<reason>)"` in
+   `state.md` and continue.
 
 7. Update `state.md`: `current_step: 2, status: research_complete`.
 
@@ -498,7 +468,7 @@ This step runs three **independent** adversarial review passes on the same plan.
 3. **Read all three challenge files.** Extract the mentor-review verdict.
 
 3.5. **Construct-validity gate (runs BEFORE the verdict mapping).** Scan all three challenge files for a construct-validity / known-outcome flaw, regardless of the verdict enum any agent assigned: a headline experiment whose result is fixed by construction (statable on paper without running it), a covert/target construct that is a strawman the operator defeats trivially because it is a surface artifact rather than a real goal, or a plan that never returns a verdict on the motivating question. If such a flaw is present **and** it is not cheaply fixable inside the current plan:
-   - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 1, construct_redesign: true, construct_loop_count: 1`, and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct — treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
+   - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 0, construct_redesign: true, construct_loop_count: 1` (`current_step: 0` makes the wrapper run Step 1 next), and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct; treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
    - If `construct_loop_count >= 1`: the construct was already redesigned once. Do not loop again — proceed, but record `construct_validity: unresolved` so the flaw is stated plainly in the paper (Limitations) rather than hidden. Continue to the verdict mapping.
    - If no construct-validity flaw is present, record `construct_validity: ok` and continue.
 
@@ -521,7 +491,7 @@ This step runs three **independent** adversarial review passes on the same plan.
         - Set `current_step: 6, status: challenge_complete, challenge_outcome: rethink_with_disproof, rethink_disproof: true`
         - Steps 7-10 proceed normally but with only the single disproof experiment
 
-5. **Design-time limitation triage** (only when proceeding — skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Apply the **Shared: Limitation Triage** rubric to each, judged against `compute_profile` and the remaining experiment-cap headroom (max 5, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap — if adding one would exceed 5, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
+5. **Design-time limitation triage** (only when proceeding; skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Classify each by the Limitation Triage rubric in WORKFLOW.md, judged against `compute_profile` and the remaining experiment-cap headroom (max 5, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap: if adding one would exceed 5, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
 
 ---
 
@@ -541,16 +511,13 @@ Do this yourself — no agent needed.
    - Lambda value
    - Pass/fail criteria
 
-4. Update `state.md`: `current_step: 7, status: experiments_planned`.
+4. Update `state.md`: `current_step: 8, status: experiments_planned, fail_fast_agreement: true`. An autonomous run always agrees to fail fast, so Step 7 also records Step 8's decision and the wrapper goes straight to Step 9.
 
 ---
 
 ## Step 8: Confirm Fail-Fast Agreement
 
-Do this yourself — no agent needed. This is trivial in autonomous mode.
-
-1. Set `fail_fast_agreement: true` in state.md.
-2. Update `state.md`: `current_step: 8, status: fail_fast_confirmed`.
+In autonomous mode Step 7 writes `fail_fast_agreement: true` and `current_step: 8`, so the wrapper does not run this step. If it does run, write those two fields to `state.md` and stop.
 
 ---
 
@@ -583,38 +550,8 @@ If `state.md` contains `is_followup: true`:
       Pre-flight record template: ${CLAUDE_PLUGIN_ROOT}/templates/preflight.md
       Write the pre-flight record to: <run-dir>/experiments/exp-NNN/preflight.md
       Write results to: <run-dir>/experiments/exp-NNN/results.md
-
-      CRITICAL CONSTRAINTS:
-      - COMPUTE PROFILE (authoritative — from state.md `compute_profile`): <paste the compute_profile value>.
-        Use ONLY the compute this profile authorizes. If it is local-only, do not use any
-        cloud or paid service; if it provisions a cloud/managed backend, you may use that.
-        Do not assume a specific device. If a component needs more than the profile provides,
-        stop and report it as a FAIL-on-affordability (it becomes future work) rather than
-        silently exceeding the budget.
-      - PAID COMPUTE: anything that bills while it runs (a Modal deploy or `modal run --detach`,
-        a Lambda instance, a Slurm elastic-* job, an HF inference endpoint) is registered
-        straight after launch with `cloud-watch register <provider:account:name-or-glob>
-        --expect <hours>h --reason "<run id>: <what>"` (or launched via `cloud-watch launch
-        --expect ... --reason ... -- <command>`), and stopped, then closed with
-        `cloud-watch close`, before the step ends. Codex passes `--session <name>`.
-      - NEVER install packages that require root access.
-      - NEVER run commands that delete files outside the experiment directory.
-      - NEVER modify files outside the run directory: <run-dir>
-      - Keep experiments concise and focused. Target < 30 minutes runtime.
-      - Do NOT create Python virtual environments inside the experiment directory.
-        Use the system Python or an existing venv.
-      - CLEAN UP after experiments: delete intermediate model checkpoints, keeping
-        only the final checkpoint if needed. Delete any .pt/.pth/.bin/.safetensors
-        files that are not essential to the results. The results.md and any small
-        CSV/JSON metric files are what matter — not multi-GB model weights.
-      - GitHub has a 100MB per-file hard limit. No single file in the experiment
-        directory should exceed 50MB.
-      - Do not create git repositories inside the run directory (no `git init`, and
-        clone third-party code outside it, e.g. under $TMPDIR). A nested repository
-        cannot be published with the run; record a library's URL and commit instead.
-      - PRE-FLIGHT GATE (mandatory): run the pre-flight checks in your instructions
-        BEFORE the main run, and record them in preflight.md. Do not report a PASS or
-        FAIL from a pipeline that failed a check: fix it, or report INCONCLUSIVE.
+      Run directory: <run-dir>
+      Compute profile (from state.md `compute_profile`): <paste the compute_profile value>
       """)
       ```
    c. Read results. Check that `preflight.md` exists and that no experiment claims PASS or FAIL alongside a `FAIL` pre-flight row; if one does, send it back once to fix the pipeline or re-label the verdict INCONCLUSIVE (the wrapper counts such a verdict as inconclusive regardless).
@@ -629,7 +566,7 @@ If `state.md` contains `is_followup: true`:
    - Continue to next experiment in lambda order.
 
 5. After all experiments (or after a fail-fast stop):
-   - Update `state.md`: `current_step: 9, status: experiments_complete`.
+   - Update `state.md`: `current_step: 9`, with `status: experiments_complete` when every planned experiment ran. After a fail-fast stop keep `status: experiments_done_with_failure`: Step 10 reads it to run a single triage pass.
    - Include results summary: which experiments passed, which failed, key metrics.
 
 ---
@@ -666,9 +603,9 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Write output to: <run-dir>/audit/results-audit.md
    """)
    ```
-   (On a follow-up, prior experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
+   (On a follow-up, this run's experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
 
-4. **Read `audit/results-audit.md` overall disposition and decide.** The auditor's report now includes a **Limitation triage** table (per the Shared rubric): fix-now-free items are re-analyses of existing data, fix-now-cheap items are small runs within `compute_profile` and the cap, future-work items carry their resource asks. This table carries forward verbatim to Step 11 (it drives Limitations dispositions and Future Work) — do not drop it. A fix-now item that would flip a *claim* should already have been raised as a `FIXABLE-DEFECT` and handled by the loop below; the rest are write-up guidance for the report. Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
+4. **Read `audit/results-audit.md` overall disposition and decide.** The auditor's report includes a **Limitation triage** table (WORKFLOW.md's Limitation Triage rubric). This table carries forward verbatim to Step 11 (it drives Limitations dispositions and Future Work); do not drop it. A fix-now item that would flip a *claim* should already have been raised as a `FIXABLE-DEFECT` and handled by the loop below; the rest are write-up guidance for the report. Write state.md atomically (`status` and `audit_round` together in one `state.md.tmp`→`mv`):
 
    - **CONVERGED-POSITIVE** or **HONEST-NEGATIVE**: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <all-supported | true-null>`.
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
@@ -717,10 +654,6 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Frame the paper around why the approach doesn't work and what was learned.
    The theoretical argument from the challenge agents is the core contribution.
    If experiments were run (disproof experiments), include them as evidence.
-
-   For LaTeX compilation, use tectonic instead of pdflatex:
-     tectonic paper.tex
-   (tectonic handles bibliography in a single pass)
    """)
    ```
 
@@ -728,7 +661,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 3. If the report agent didn't compile the PDF, try:
    ```bash
-   cd <run-dir>/paper && tectonic paper.tex
+   cd <run-dir>/paper && make
    ```
 
 4. **Generate `briefing.md`** — a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:
@@ -778,61 +711,18 @@ An independent **results-auditor** red-teams the experiment outputs before write
    <2-3 bullet points on what to investigate next>
    ```
 
-5. **Write `next-steps.md`** — the canonical, machine-readable next-round plan. The
-   paper's Future Work section is written for a reader of the paper; this file is
-   written for whoever (human or agent) picks the work up next, and it is what the
-   results email and `/researcher-continue` both read. Derive it from the
-   future-work rows of both triage tables, the paper's Future Work section, and what
-   the results now make worth testing. Write `<run-dir>/next-steps.md`:
-
-   ```markdown
-   # Proposed Next Steps: <topic>
-
-   **Run ID**: <run-id>
-   **Outcome**: <one line: what this round established, positive, negative, or null>
-
-   ## Reflection
-
-   <2-4 sentences. If the result was negative, null, or the run fell short of its
-   goal: what specifically blocked it — a wrong hypothesis, a construct that
-   couldn't test the claim, a resource ceiling, an implementation defect — and
-   whether that blocker is escapable. Be concrete about which it was. If the
-   result was positive, say what the strongest remaining threat to the claim is.
-   This section is never omitted and never generic.>
-
-   ## Ranked Next Steps
-
-   ### 1. <short imperative title>
-   - **Do**: <the specific experiment or change>
-   - **Tests**: <the hypothesis it would test, and how this round's results motivate it>
-   - **Needs**: <resources: model size, hardware/backend, rough compute/$ and wall-clock, data or human labelling>
-   - **Kills the idea if**: <the outcome that would mean stop pursuing this line>
-
-   ### 2. <...>
-
-   ### 3. <...>
-
-   ## Not Worth Pursuing
-
-   <Directions this round ruled out, with the one-line reason. Prevents a
-   follow-up run from re-treading ground.>
-   ```
-
-   Rules:
-   - **Always write this file**, including for a negative result or a RETHINK
-     pivot. A dead end still has a next step: the cheapest experiment that would
-     distinguish "the idea is wrong" from "this test of it was wrong", or an
-     explicit, reasoned recommendation to abandon the line.
-   - 2–4 ranked steps. Rank by value per unit of resource, not by ambition.
-   - Every step must be executable by a follow-up run under a stated compute
-     profile. No "try more models/datasets" filler.
-   - If a step needs resources beyond this run's `compute_profile`, say so
-     explicitly in **Needs** rather than silently proposing something unrunnable.
+5. **Write `next-steps.md`** in the run directory from
+   `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`, following the rules in its
+   header. The paper's Future Work section is written for a reader of the paper;
+   this file is written for whoever picks the work up next. Derive it from the
+   future-work rows of both triage tables, the paper's Future Work section, and
+   what the results now make worth testing.
 
 6. **Ingest the run into both knowledge bases.** This is the step that makes the
    next run cheaper and the one after that cheaper still — including, and
-   especially, when this run produced a negative result or fell over. Skip the
-   global half silently if `knowledge_base:` is `none`; always do the repo half.
+   especially, when this run produced a negative result or fell over. When
+   `knowledge_base:` is `none`, dispatch it with `Scope: repo` and skip the
+   global half silently.
 
    ```
    Task(subagent_type="researcher:knowledge", prompt="""
@@ -863,9 +753,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
    """)
    ```
 
-   If this errors, log it and continue — the paper is already written and a
-   failed ingest must not fail a completed run. Note in `state.md` whether the
-   ingest succeeded so a later `/researcher-continue` can retry it.
+   If the agent fails, record `kb_ingest_step11: "failed (<reason>)"` in
+   `state.md` and continue: the paper is already written.
 
 7. Update `state.md`: `current_step: 11, status: complete`.
 
@@ -875,6 +764,6 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 - When spawning agents, always use absolute paths for all files.
 - After each agent completes, read its output to verify it produced what was expected.
-- If an agent produces no output or errors out, retry ONCE with the same prompt. If it still produces nothing, note it in state.md and continue.
+- If an agent produces no output or errors out, retry ONCE with the same prompt. If it still produces nothing, record in `state.md`'s narrative which agent failed and why, and end the step without changing `current_step` or `status`: the wrapper then retries the step, and marks the run failed when its retries run out. A failed knowledge-base action is the exception (see Shared: Knowledge Bases).
 - Write `state.md` updates atomically: write to `state.md.tmp`, then use bash `mv` to rename.
 - Keep state.md updates concise but include all decision rationale for debugging.

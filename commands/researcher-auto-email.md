@@ -33,6 +33,7 @@ The run directory is: **{{argument}}**
 2. **Read artifacts** from the run directory:
    - `briefing.md` — concise run summary (primary source — has topic, motivation, results, surprises)
    - `state.md` — run status, topic, clarifications (especially the Q&A pairs which explain scope and motivation)
+   - `kb_<operation>_step<N>: "failed (<reason>)"` fields in `state.md`: each records a knowledge-base action that failed. For each one, add a line above the footer saying which action failed and why.
    - `novelty-assessment.md` — novelty verdict and closest existing work
    - `experiments/*/results.md` — individual experiment results
    - `paper/sections/abstract.tex` — paper abstract (if exists)
@@ -57,17 +58,11 @@ The run directory is: **{{argument}}**
    Read `state.md` (status, `current_step`, and the decision log), any
    `experiments/*/results.md` that exist, `rethink-rationale.md`,
    `challenge/limitation-triage.md`, and the tail of the run log if one is
-   reachable. Then write `<run-dir>/next-steps.md` in the same format Step 11
-   uses — `# Proposed Next Steps`, `## Reflection`, `## Ranked Next Steps` (2–4
-   entries, each with **Do** / **Tests** / **Needs** / **Kills the idea if**), and
-   `## Not Worth Pursuing`.
-
-   Diagnose honestly in `## Reflection`: distinguish an **orchestration failure**
-   (the workflow broke — a step errored, a provider limit, a job-wait bug; the
-   science is untouched and the next step is to resume) from a **scientific
-   failure** (the hypothesis or the construct didn't survive contact with the
-   data; the next step is a redesign). Naming which one it was is the single most
-   useful sentence in the email when a run falls over.
+   reachable. Then write `<run-dir>/next-steps.md` from
+   `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`, the template Step 11 uses.
+   Its `## Reflection` names whether the failure was an orchestration or a
+   scientific failure (the template defines both); when a run falls over, that is
+   the most useful sentence in the email.
 
    Write the file even if it duplicates what the paper already says — it is the
    artifact `/researcher-continue` reads, and it ships in the repo.
@@ -169,7 +164,7 @@ The run directory is: **{{argument}}**
          <!-- For each experiment — describe in plain language, not internal component names.
               The "What This Means" column translates PASS/FAIL into implications.
               Example row:
-              #1 | Can 7B models reason about hidden goals? | PASS | Yes — chain-of-thought
+              #1 | Can 7B models reason about hidden goals? | PASS | Yes: chain-of-thought
               reasoning about covert goals works at 7B scale, scoring 5.4-6.0 out of 10. -->
          <tr>
            <td style="padding: 8px 12px; border-bottom: 1px solid #f1f5f9;">1</td>
@@ -196,8 +191,8 @@ The run directory is: **{{argument}}**
               a self-contained mini-paragraph.
               Example: "Suppressing chain-of-thought reasoning made models MORE deceptive,
               not less. When we removed the model's ability to 'think out loud,' covert
-              behavior jumped from 40% to 70%. This suggests chain-of-thought serves as a
-              self-moderation mechanism — models that can reason about their actions choose
+              behavior jumped from 40% to 70%. This suggests chain-of-thought is a
+              self-moderation mechanism: models that can reason about their actions choose
               to behave more honestly." -->
          <li style="margin-bottom: 12px;">...</li>
        </ol>
@@ -286,7 +281,7 @@ The run directory is: **{{argument}}**
    - **Expand ALL acronyms on first use** — no exceptions (SFT, RL, CoT, GRPO, AUC, etc.)
    - **Define every metric before using it in a table** — the reader must know what "good" vs "bad" looks like
    - Keep it scannable — the "Bottom Line" box should answer the research question in 10 seconds
-   - For negative results / RETHINK, the "What We Investigated" section should still explain the idea, and add a prominent "Why It Failed" section after the results
+   - For negative results / RETHINK, the "What We Investigated" section should still explain the idea, and add a prominent "What the Result Shows" section after the results
    - **"Proposed Next Steps" and "How to Continue This Research" are mandatory in every email**, whatever the outcome — complete, negative, aborted, or crashed. An email without them is incomplete. A failed run gets *more* next-steps detail, not less.
    - **Next steps must be specific and resourced.** "Try a bigger model" is not a next step; "re-run exp-002 on a 7B model, which needs a 40GB+ GPU and ~2 GPU-hours" is. Every item states what it would test and what it would cost.
    - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block — never `<run-dir>`, `/path/to/...`, or a guessed hostname. If the handoff says the run host is local, drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.

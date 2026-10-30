@@ -39,11 +39,14 @@ the schema wins and you say so in your output.
 
 ## If a knowledge base is absent
 
-If the global KB path is empty, missing, or has no `KB-SCHEMA.md`, the run is
-simply not using one. **Report that in one line and stop — do not create it, and
-do not fail the step.** A run must work identically with no knowledge base; the
-KB is an accelerant, never a dependency. The same applies to `knowledge/` in a
-run directory that has none.
+A global KB path of `none` means the run has no global wiki: skip the global part
+of the operation and say so in one line. If a global KB path is given but is
+missing or has no `KB-SCHEMA.md`, **report that as an error in your first line
+and do no global work; never create the wiki.** The caller records the failure.
+
+A run's repo `knowledge/` is different: an ingest with scope `repo` or `both`
+creates `<run-dir>/knowledge/` when the run has none, and a query of a run with
+none says so in one line.
 
 ## The two knowledge bases
 

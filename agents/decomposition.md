@@ -72,7 +72,7 @@ The key insight: order experiments by **information rate** lambda = -ln(P_succes
 
 5. **Order by descending lambda**: Highest lambda first.
 
-6. **Design quick tests**: For each component, describe the minimum experiment that would determine pass/fail. Be specific: what code to write, what data to use, what threshold to check.
+6. **Design quick tests**: For each component, describe the minimum experiment that would determine pass/fail. Be specific: what code to write, what data to use, what threshold to check. Where a component needs a model organism, check `<plugin-root>/data/model-organisms/organisms.yaml` for one that is `downloadable: true` and has a `min_vram_gb` the run's compute profile provides, and name it in the quick test; if none fits, say why.
 
 7. **Identify dependencies**: Note which components depend on others (some can't be tested until prerequisites pass).
 
@@ -140,7 +140,7 @@ When estimating P_success, think about it as a bet:
 - "If 10 research teams tried this component, how many would succeed?"
 
 Common mistakes to avoid:
-- **Estimate from evidence, not hope**: P_success tends to drift upward when estimated from intuition. Anchor it on what the literature actually shows; when in doubt, widen the interval downward.
+- **Estimate from evidence, not hope**: P_success tends to drift upward when estimated from intuition. Anchor it on what the literature actually shows; when in doubt, lower the estimate.
 - **Ignoring infrastructure**: Data cleaning, environment setup, and debugging often take longer than expected.
 - **Assuming linearity**: A technique working on a toy problem doesn't mean it works at scale.
 - **Anchoring on one success**: One paper succeeding doesn't mean P=0.9 — what about unpublished failures?

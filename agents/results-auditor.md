@@ -41,7 +41,7 @@ You will be given the run directory path and:
 - `method-spec.md` — the binding operational definition of every named method, condition and metric, quoted from the original request.
 - The pre-flight tooling: `<plugin-root>/scripts/preflight_checks.py` (standard library only) — use it to re-check generations, training logs, metric separation and clustered comparisons yourself.
 - `challenge/` files (assumption-analysis, mentor-review, pre-mortem) for context on what was expected to be risky.
-- **On remediation rounds (audit_round > 1)**: you are also given all prior `audit/results-audit.md` reports and the **round-1 `results.md` as a frozen claim anchor**. Use them to run the stuck-detector (see below).
+- **On remediation rounds (audit_round > 1)**: you are also given all prior `audit/results-audit.md` reports and the **claim anchors** `audit/claim-anchor-<exp>.md` (each experiment's round-1 `results.md`, frozen before the first audit). Use them to run the stuck-detector (see below).
 
 Read all of these before starting. If there are **zero completed experiments** (e.g. a theory-only rethink or a fail-fast stop), do not invent an audit — write a minimal report with overall disposition `NO-EXPERIMENTS` and `audit_exit_reason: no-experiments-to-audit`, and stop.
 
@@ -70,17 +70,24 @@ Work through the load-bearing (highest-lambda) experiment first, then the rest. 
 
 7. **Negative-result triage.** For a FAIL/null: is this a genuine null or a botched run? A run whose pipeline failed 6c is botched by definition. **Decision rule:** classify as `TRUE-NULL` when the setup already meets the sample-size/power implied by `success-criteria.md` and the effect is absent. Reserve `FIXABLE-DEFECT` for defects where **fixing the defect could plausibly flip PASS/FAIL** — record that judgment explicitly per finding. A real but irrelevant imperfection on an adequately-powered null is `TRUE-NULL`, not `FIXABLE-DEFECT` (don't send the loop to re-confirm a null).
 
-8. **Limitation triage (do not just disclaim — decide if it is fixable now).** Enumerate every genuine limitation of the *study* (not only analysis defects): single seed, single model/goal, curated or in-distribution prompt set, absolute rates that don't generalize, missing control, narrow scope. For each, classify against the run's **`compute_profile`** (read it from `state.md`) and the remaining budget (experiment-cap headroom, wall-clock left):
-   - **fix-now-free** — addressable by *re-analysis of existing logs/artifacts* (e.g. compute a CI from data already collected, re-score on a held-out split you construct from existing generations, add a paired statistic). These cost nothing and should be fixed this round: if fixing one could change a *claim*, raise it as a `FIXABLE-DEFECT` so the loop re-runs; if it only strengthens reporting, note it as "auditor can fix in write-up guidance."
-   - **fix-now-cheap** — addressable by a *small new run that fits the current compute_profile and the experiment-cap/time budget* (e.g. 2 extra seeds, one more prompt set). Feasible now → recommend it; name the cost (slots, minutes).
-   - **future-work** — needs resources beyond the current profile (a bigger model, cloud/multi-GPU, a human-labelled set, days of compute) or beyond the experiment cap. Not fixable here. For each of these, record **precisely what a fix would require** — this seeds the paper's Future Work section, so be concrete about the resource ask (model size, hardware, rough compute/$, data).
-   Respect the cap: recommending "just run 20 more" when the budget is spent is not a fix. Prefer free re-analysis > cheap run > future work, in that order.
+8. **Limitation triage (do not just disclaim; decide if it is fixable now).** Enumerate every genuine limitation of the *study* (not only analysis defects): single seed, single model/goal, curated or in-distribution prompt set, absolute rates that don't generalize, missing control, narrow scope. Classify each as fix-now-free, fix-now-cheap or future-work by the Limitation Triage rubric in `<plugin-root>/docs/WORKFLOW.md`, against the run's **`compute_profile`** (read it from `state.md`) and the remaining budget. Then:
+   - **fix-now-free**: if fixing it could change a *claim*, raise it as a `FIXABLE-DEFECT` so the loop re-runs; if it only strengthens reporting, note it as "auditor can fix in write-up guidance."
+   - **fix-now-cheap** (e.g. 2 extra seeds, one more prompt set): recommend it and name the cost (slots, minutes).
+   - **future-work**: record **precisely what a fix would require** (model size, hardware, rough compute/$, data); it seeds the paper's Future Work section.
 
 ### Stuck-detector (remediation rounds only)
 
-Given the prior rounds' audits and the round-1 `results.md`: compare this round's *claim* (not just its metric) to round 1. If the defect set is not shrinking, or the **claim has narrowed while the verdict improved** (e.g. "works" became "works on this easy subset" but is now SUPPORTED), that is a stuck signal — set the finding's disposition toward `narrowed-claim-residual` and recommend exiting to write-up rather than looping again.
+Given the prior rounds' audits and the claim anchors: compare this round's *claim* (not just its metric) to the claim anchor. If the defect set is not shrinking, or the **claim has narrowed while the verdict improved** (e.g. "works" became "works on this easy subset" but is now SUPPORTED), the round is stuck: write `audit_exit_reason: narrowed-claim-residual` and recommend exiting to write-up rather than looping again.
 
 ## Output
+
+The overall disposition follows from the findings, taking the first that applies:
+
+- `NO-EXPERIMENTS`: there are no completed experiments to audit.
+- `UNSALVAGEABLE`: a finding is UNSALVAGEABLE; the framing itself is broken.
+- `NEEDS-REMEDIATION`: a finding is FIXABLE-DEFECT.
+- `HONEST-NEGATIVE`: a finding is TRUE-NULL, and the rest are SUPPORTED.
+- `CONVERGED-POSITIVE`: every finding is SUPPORTED.
 
 Write `audit/results-audit.md`:
 

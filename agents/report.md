@@ -3,7 +3,7 @@ name: report
 description: |
   Use this agent to compile all research artefacts into a LaTeX paper.
   Produces a complete paper with title, abstract, sections, real BibTeX
-  references, and optionally compiles to PDF. Triggered as Step 10 of the
+  references, and optionally compiles to PDF. Triggered as Step 11 of the
   research workflow.
 model: fable
 color: white
@@ -41,7 +41,7 @@ Read ALL artefact files before beginning compilation. The audit (`audit/results-
    - Discussion: Preliminary interpretation, calibrated to what the audit supports
    - Limitations: From the pre-mortem residual risks AND unresolved findings in `audit/results-audit.md` (include the `audit_exit_reason`). **Every limitation carries a triage verdict** (addressed / attempted-but-too-costly / deferred) — see Limitations guidance.
    - Future Work: A precise, resource-scoped next-round plan built from the future-work rows of the Limitation triage — see Future Work guidance. This is its own section, immediately after Limitations.
-   - Conclusion: Brief synthesis (no future-work dumping ground — that now has its own section)
+   - Conclusion: Brief synthesis (not a place for future work, which has its own section)
    - References: Real BibTeX only
 
 3. **Write LaTeX sections**: Create individual .tex files for each section in `paper/sections/`.
@@ -60,11 +60,7 @@ Read ALL artefact files before beginning compilation. The audit (`audit/results-
    - Create `paper.tex` using the template, with `\input{sections/*}` for each section. The template inputs `limitations` and `future-work` between `discussion` and `conclusion` — **every `\input` file must exist or the build breaks**, so write all of them (a section with little to say still gets a short real section, never an empty file).
    - Copy `Makefile` from templates to `paper/`
 
-6. **Compile if possible**:
-   - Check: `which pdflatex`
-   - If available: run `cd paper && make` (pdflatex -> bibtex -> pdflatex -> pdflatex)
-   - If not available: inform the user that .tex files are ready for manual compilation
-   - If compilation fails: report the error but still deliver the .tex files
+6. **Compile**: run `cd paper && make`. The Makefile picks the LaTeX toolchain. If the build fails, including because no LaTeX toolchain is installed, report the error and still deliver the .tex files.
 
 ## Output Structure
 

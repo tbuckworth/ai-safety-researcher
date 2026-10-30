@@ -53,9 +53,9 @@ directory it happens to have been handed.
 
 **The knowledge base is an accelerant, never a dependency.** A run with no KB
 executes identically. Every KB action in the workflow is skipped silently when
-there is no KB, and a KB action that errors is logged and stepped past. A stale
-wiki costs some duplicated search; a workflow that halts because a wiki is
-missing costs the whole run.
+there is no KB; a KB action that fails is recorded in `state.md`, reported in the
+results email, and stepped past. A stale wiki costs some duplicated search; a
+workflow that halts because a wiki is missing costs the whole run.
 
 ## Global wiki layout
 
@@ -103,15 +103,9 @@ dropped just because this round didn't touch it.
 ## Where the workflow touches them
 
 All KB work goes through the `researcher:knowledge` leaf agent
-(`agents/knowledge.md`), at these points and no others:
-
-| Step | Operation | Scope | Purpose |
-|------|-----------|-------|---------|
-| 2, before searching | query | global | Aim searches at gaps → `literature/kb-prior.md` |
-| 2, after synthesis | ingest | global | File the new sources |
-| 3 | query | global | Novelty against accumulated knowledge — prior runs count against novelty exactly as published work does |
-| 6 | query | global | Read `lessons/` before committing to a design → `challenge/kb-lessons.md` |
-| 11 | ingest | both | File the outcome, the process lessons, and the repo KB |
+(`agents/knowledge.md`), at the points listed in the Knowledge Bases section of
+[`WORKFLOW.md`](WORKFLOW.md): queries at Steps 2, 3 and 6, ingests at Steps 2
+and 11.
 
 The Step 6 query is the one that changes behaviour most: it hands the three
 challenge agents failure modes that have *actually occurred*, so a pre-mortem

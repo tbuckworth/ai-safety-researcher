@@ -42,6 +42,8 @@ FOLLOWUP_KEY_RE = re.compile(r"<!--\s*followup-key:\s*([0-9a-f]{8,64})\s*-->")
 TERMINAL_STATUSES = ("complete", "failed", "timed_out")
 
 VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
+# Final outcomes that count as a finished, usable run (the wrapper exits 0).
+SUCCESS_OUTCOMES = ("complete", "complete-local")
 
 
 def log(message: str) -> None:
@@ -352,6 +354,12 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     partial         workflow stopped early (timeout / failure) with some valid results
     failed          workflow stopped early with no valid results
     paused          provider usage limit; resumable, nothing published
+
+    `success` is whether the outcome is one of SUCCESS_OUTCOMES. The result also
+    carries what the reports quote from the run directory: the `**Outcome**`
+    line of next-steps.md (`findings`), its ranked step titles and the results
+    audit's disposition (`audit`), each empty when the file is missing. Reads
+    the run directory; writes nothing.
     """
     experiments = scan_experiments(run_dir)
     counts: dict[str, int] = {}
@@ -404,8 +412,14 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         reasons.append("theory-only negative result (no experiments were run)")
     reasons.extend(notes or [])
 
+    next_steps_file = run_dir / "next-steps.md"
+    findings = ""
+    if next_steps_file.is_file():
+        findings = first_bold_field(next_steps_file.read_text(encoding="utf-8", errors="replace"), "Outcome")
+
     return {
         "outcome": outcome,
+        "success": outcome in SUCCESS_OUTCOMES,
         "reasons": reasons,
         "has_results": has_results,
         "workflow_finished": finished,
@@ -415,7 +429,10 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         "counts": counts,
         "experiments": experiments,
         "paper": (run_dir / "paper" / "paper.pdf").is_file(),
-        "next_steps": (run_dir / "next-steps.md").is_file(),
+        "next_steps": next_steps_file.is_file(),
+        "findings": findings,
+        "next_step_titles": next_step_titles(run_dir),
+        "audit": audit_summary(run_dir),
     }
 
 
@@ -432,6 +449,10 @@ OUTCOME_HEADLINES = {
 
 def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, branch: str,
                   agent_label: str, host: str, is_followup: bool, visibility: str) -> str:
+    """The findings comment for the run's issue, in Markdown, formatted from
+    `facts` (compute_outcome's result) and the publication details alone; it
+    reads no files. `run_dir` is named as the results' location when nothing was
+    published."""
     outcome = facts["outcome"]
     lines = [
         f"<!-- researcher-run: {run_id} outcome: {outcome} -->",
@@ -460,15 +481,11 @@ def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, bra
     lines.append(f"| Run | `{run_id}` ({agent_label}) |")
     lines.append("")
 
-    briefing_outcome = ""
-    next_steps_file = run_dir / "next-steps.md"
-    if next_steps_file.is_file():
-        briefing_outcome = first_bold_field(next_steps_file.read_text(encoding="utf-8", errors="replace"), "Outcome")
-    if briefing_outcome or facts["experiments"]:
+    if facts["findings"] or facts["experiments"]:
         lines.append("**Findings**")
-        if briefing_outcome:
+        if facts["findings"]:
             lines.append("")
-            lines.append(briefing_outcome)
+            lines.append(facts["findings"])
         if facts["experiments"]:
             lines.append("")
             lines.append("| Experiment | Component | Verdict |")
@@ -481,16 +498,14 @@ def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, bra
                 if exp["note"]:
                     verdict += f" ({exp['note']})"
                 lines.append(f"| {exp['id']} | {component} | {verdict} |")
-        audit = audit_summary(run_dir)
-        if audit:
+        if facts["audit"]:
             lines.append("")
-            lines.append(f"Results audit: {audit}")
+            lines.append(f"Results audit: {facts['audit']}")
         lines.append("")
 
-    titles = next_step_titles(run_dir)
-    if titles:
+    if facts["next_step_titles"]:
         lines.append("**Proposed next steps**")
-        for index, title in enumerate(titles, 1):
+        for index, title in enumerate(facts["next_step_titles"], 1):
             lines.append(f"{index}. {title}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"

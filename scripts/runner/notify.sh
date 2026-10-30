@@ -3,10 +3,8 @@
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
 outcome_is_success() {
-    case "$FINAL_OUTCOME" in
-        complete|complete-local) return 0 ;;
-        *) return 1 ;;
-    esac
+    # researcher_lib.py's compute_outcome decides which outcomes succeed.
+    [ "$(jq -r '.success' <<< "$OUTCOME_JSON")" = true ]
 }
 
 send_email() {

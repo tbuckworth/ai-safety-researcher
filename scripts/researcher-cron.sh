@@ -524,7 +524,7 @@ OUTCOME_JSON=$(python3 "$LIB" outcome \
     --publish-error "$PUBLISH_ERROR" \
     --paused "$PAUSED") \
     || OUTCOME_JSON=$(jq -n --arg s "$STATUS" --arg p "$PUBLISH_STATE" \
-        '{outcome: "unknown", status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
+        '{outcome: "unknown", success: false, status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
 # On a full disk these writes fail; that must not stop the email and the
 # issue update that report it.
 printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json" \

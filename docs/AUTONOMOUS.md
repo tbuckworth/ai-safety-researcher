@@ -277,7 +277,7 @@ never fails a step.
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
 - **Repos**: Created as `tbuckworth/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
-- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`:
+- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0:
 
   | Outcome | Meaning | Exit |
   |---------|---------|------|

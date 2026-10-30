@@ -169,6 +169,23 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(failed["outcome"], "unpublished")
         self.assertTrue(any("disk nearly full" in r for r in failed["reasons"]))
 
+    def test_success_flag(self):
+        self.add_exp("exp-001", "PASS")
+        self.assertTrue(self.outcome()["success"])
+        self.assertTrue(self.outcome(publish_state="skipped")["success"])
+        self.assertFalse(self.outcome(publish_state="failed")["success"])
+        self.assertFalse(self.outcome(status="failed")["success"])
+        self.assertFalse(self.outcome(paused=True, publish_state="skipped")["success"])
+
+    def test_findings_are_collected(self):
+        self.add_exp("exp-001", "PASS")
+        write(self.run / "next-steps.md", "**Outcome**: It holds.\n\n## Ranked Next Steps\n\n### 1. Scale up\n")
+        write(self.run / "audit" / "results-audit.md", "## Overall disposition: HONEST-POSITIVE\n")
+        facts = self.outcome()
+        self.assertEqual((facts["findings"], facts["next_step_titles"], facts["audit"]),
+                         ("It holds.", ["Scale up"], "HONEST-POSITIVE"))
+        self.assertEqual(json.loads(json.dumps(facts)), facts)
+
     def test_negative_result_is_still_a_result(self):
         self.add_exp("exp-001", "FAIL")
         self.assertEqual(self.outcome()["outcome"], "complete")
@@ -263,6 +280,17 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("INCONCLUSIVE (stated FAIL, but pre-flight failed: training-sanity)", text)
         self.assertIn("Results audit: HONEST-NEGATIVE (true-null)", text)
         self.assertIn("1. Validate the metric at t=0", text)
+
+    def test_comment_is_formatted_from_the_outcome_alone(self):
+        facts = lib.compute_outcome(self.run, status="complete", timed_out=False, publish_state="pushed")
+        (self.run / "next-steps.md").unlink()
+        (self.run / "audit" / "results-audit.md").unlink()
+        text = lib.issue_comment(facts, run_dir=self.run, run_id="2026-10-12-topic",
+                                 repo_web="https://github.com/o/research-x", branch="main", agent_label="Claude fable",
+                                 host="desktop", is_followup=False, visibility="private")
+        self.assertIn("Routing localises, persistence untested.", text)
+        self.assertIn("Results audit: HONEST-NEGATIVE (true-null)", text)
+        self.assertIn("2. Capability-pressure RL", text)
 
     def test_unpublished_comment_has_no_dead_link(self):
         text = self.comment("failed", "")

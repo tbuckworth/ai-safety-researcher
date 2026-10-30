@@ -267,6 +267,7 @@ researcher/
 │   └── knowledge.md               # Queries/ingests/lints the knowledge bases
 ├── scripts/
 │   ├── researcher-cron.sh         # Dual-backend autonomous runner
+│   ├── runner/                    # The runner's functions, one file per concern (sourced by researcher-cron.sh)
 │   ├── kb-init.sh                 # Bootstraps the global knowledge base
 │   ├── researcher_lib.py          # Issue picking/dedupe, final outcome, issue comment (used by the runner)
 │   ├── preflight_checks.py        # Experiment pre-flight checks: degeneracy, training, metric separation, clustered stats
@@ -327,8 +328,8 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 Run provider-free integration tests before deploying:
 
 ```bash
-bash -n scripts/researcher-cron.sh
-shellcheck scripts/researcher-cron.sh scripts/test-researcher-backends.sh scripts/test-researcher-lifecycle.sh
+for f in scripts/researcher-cron.sh scripts/runner/*.sh; do bash -n "$f"; done
+shellcheck -x scripts/researcher-cron.sh scripts/runner/*.sh scripts/test-researcher-backends.sh scripts/test-researcher-lifecycle.sh
 scripts/test-researcher-backends.sh
 scripts/test-researcher-lifecycle.sh
 python3 -m unittest discover -s scripts/tests

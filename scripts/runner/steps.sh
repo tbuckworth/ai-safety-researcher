@@ -83,7 +83,7 @@ run_step() {
         # Transient "rate limit exceeded" errors are deliberately excluded:
         # those are retryable, and the retry loop is the right response.
         # Detected BEFORE the success gate: a notice with exit 0 must never
-        # pass for a completed audit round (Step 10 keeps current_step at 10).
+        # pass for a completed audit round (the audit keeps current_step at AUDIT_STEP).
         local last_line limit_hit=false
         last_line=$({ grep -v '^[[:space:]]*$' "$run_log" || true; } | tail -1)
         if printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit\b|(Claude )?(AI )?[Uu]sage limit reached\b)"; then
@@ -91,16 +91,16 @@ run_step() {
         fi
 
         # Success = the step advanced, reached a terminal status, OR (for the
-        # audit step, which by design keeps current_step at 10 across rounds) the round
+        # audit step, which by design keeps current_step at AUDIT_STEP across rounds) the round
         # actually completed. We proxy "completed" with a clean provider exit and no
         # limit notice: a dropped connection exits non-zero AND leaves the status
-        # unchanged, so without this gate a drop during Step 10 would return success
+        # unchanged, so without this gate a drop during the audit would return success
         # here and silently burn an AUDIT_ROUNDS increment upstream instead of retrying.
         if [ "$new_step" != "$prev_step" ] \
             || is_terminal_status "$new_status" \
             || { [ "$limit_hit" = false ] \
                  && [ "$exit_code" -eq 0 ] \
-                 && [ "$step" -eq 10 ] \
+                 && [ "$step" -eq "$AUDIT_STEP" ] \
                  && { [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; }; }; then
             log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
             return 0

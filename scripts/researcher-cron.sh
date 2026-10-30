@@ -60,6 +60,15 @@ if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
     echo "ERROR: python3 and ${LIB} are required. Exiting." >&2
     exit 1
 fi
+# The workflow steps the runner treats specially (commands/researcher-auto-step.md
+# defines them all): it re-enters the audit while its status is
+# audit_remediating, and the report is the last step. A run that times out at
+# or after FAST_TRACK_MIN_STEP skips the audit and compiles the report from what
+# exists; an earlier one ends timed_out.
+AUDIT_STEP=10
+REPORT_STEP=11
+LAST_STEP=$REPORT_STEP
+FAST_TRACK_MIN_STEP=5
 # Per-step retry: a connection drop mid-step
 # leaves state.md un-advanced; re-running the step from current state recovers it.
 # Bounded so a genuinely stuck step still fails instead of looping forever.
@@ -406,18 +415,18 @@ while true; do
         upsert_frontmatter_field "timed_out" "true" || true
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
         STEP_RC=0
-        if [ "$CURRENT_STEP" -ge 5 ]; then
-            # Bypass the audit (Step 10) on a timed-out run — never re-enter a
-            # multi-hour remediation re-run — and compile whatever exists (Step 11).
+        if [ "$CURRENT_STEP" -ge "$FAST_TRACK_MIN_STEP" ]; then
+            # Bypass the audit on a timed-out run — never re-enter a
+            # multi-hour remediation re-run — and compile whatever exists.
             log "Skipping the results audit and compiling the report from what exists."
-            # current_step too, so a pause inside Step 11 resumes at Step 11
+            # current_step too, so a pause inside the report resumes at the report
             # rather than re-running the remaining steps and the audit.
-            upsert_frontmatter_field "current_step" "10" || true
+            upsert_frontmatter_field "current_step" "$AUDIT_STEP" || true
             set_status audit_complete
-            run_step 11 || STEP_RC=$?
+            run_step "$REPORT_STEP" || STEP_RC=$?
         fi
         if [ "$STEP_RC" -eq 2 ]; then
-            pause_run 11
+            pause_run "$REPORT_STEP"
         elif [ "$(get_status)" != "complete" ]; then
             # Only a run whose report did NOT complete is marked timed out. A
             # finished report keeps status complete: the timeout used to
@@ -427,9 +436,9 @@ while true; do
         break
     fi
 
-    # Audit-remediation re-entry: stay on Step 10 while the auditor asks for another
+    # Audit-remediation re-entry: stay on the audit while the auditor asks for another
     # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
-    if [ "$CURRENT_STEP" -eq 10 ] && [ "$STATUS" = "audit_remediating" ]; then
+    if [ "$CURRENT_STEP" -eq "$AUDIT_STEP" ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
         if [ "$AUDIT_ROUNDS" -ge 4 ]; then
             # Hand over to the report like any other audit exit; the report's
@@ -439,16 +448,16 @@ while true; do
             set_status audit_complete
             continue
         fi
-        NEXT_STEP=10
+        NEXT_STEP=$AUDIT_STEP
     else
         AUDIT_ROUNDS=0
         NEXT_STEP=$((CURRENT_STEP + 1))
         [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
     fi
 
-    if [ "$NEXT_STEP" -gt 11 ]; then
+    if [ "$NEXT_STEP" -gt "$LAST_STEP" ]; then
         log "All steps completed."
-        # Step 11 advanced current_step but left a non-terminal status.
+        # The last step advanced current_step but left a non-terminal status.
         set_status complete
         break
     fi

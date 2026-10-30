@@ -731,6 +731,7 @@ touch "${OUT}/2026-01-11-someone-elses/state.md"
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "resumed the pinned run only"
+assert_grep "owner: none; pinned run: ${OUT}/2026-01-10-mine$" "${CASE_DIR}/stdout.log"
 assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "the other run untouched"
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
 assert_eq "$RC" "2" "a finished pinned run is refused"
@@ -958,5 +959,22 @@ run_researcher MOCK_EMAIL_NO_SEND=true
 SESSION=$(sed -n 's/.*(session \([0-9a-f-]\{36\}\)).*/\1/p' "${CASE_DIR}/stdout.log" | head -1)
 assert_grep "The email session stopped without sending" "${CASE_DIR}/stdout.log"
 assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
+
+# =============================================================================
+# 22. Settings are checked before anything runs: a numeric setting that is not
+#     an integer (it used to switch the stale-run check off), or an unknown host
+#     with no RESEARCHER_HOST_ALIAS (it used to become "local"), exits 2.
+# =============================================================================
+new_case settings
+run_researcher RESEARCHER_RESUME_MAX_AGE_DAYS=two-weeks -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (non-numeric setting)"
+assert_grep "RESEARCHER_RESUME_MAX_AGE_DAYS must be an integer, got 'two-weeks'" "${CASE_DIR}/stdout.log"
+mkdir -p "${CASE_DIR}/bin"
+printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
+chmod +x "${CASE_DIR}/bin/hostname"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (unknown host)"
+assert_grep "host 'some-laptop' is not in the table; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

@@ -33,6 +33,18 @@ OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
 LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
+# The numeric settings read below, checked once here: a value that is not an
+# integer would otherwise switch a check off without a word (a non-numeric
+# `[ -gt ]` is just false). A numeric setting added below goes in this list.
+for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RESUME_MAX_AGE_DAYS \
+    RESEARCHER_MIN_FREE_MB RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_RETRY_DELAY_SECONDS \
+    RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_JOB_WAIT_MAX_SECONDS \
+    RESEARCHER_JOB_WAIT_MAX_REFUNDS RESEARCHER_CODEX_MAX_SUBAGENTS; do
+    if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^-?[0-9]+$ ]]; then
+        echo "ERROR: ${setting} must be an integer, got '${!setting}'." >&2
+        exit 2
+    fi
+done
 TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
 TIMEOUT_SECONDS="${RESEARCHER_TIMEOUT_SECONDS:-$(( TIMEOUT_HOURS * 3600 ))}"
 # A non-terminal run untouched for this long is not resumed automatically: an
@@ -171,13 +183,17 @@ fi
 
 # How the reader of the results email reaches the machine this run executed on, so
 # the email's "How to Continue This Research" steps are literally runnable. This is
-# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — set
-# RESEARCHER_HOST_ALIAS explicitly on any machine not in the table below. The value
-# "local" suppresses the ssh step entirely (run and reader on the same machine).
+# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — any
+# machine not in the table below must set RESEARCHER_HOST_ALIAS, or the run exits 2.
+# The value "local" suppresses the ssh step entirely (run and reader on the same machine).
 if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
-    case "$(hostname -s 2>/dev/null || echo unknown)" in
+    RUN_HOSTNAME=$(hostname -s)
+    case "$RUN_HOSTNAME" in
         titus-MS-7A59) HOST_ALIAS="desktop" ;;
-        *)             HOST_ALIAS="local" ;;
+        *)
+            echo "ERROR: host '${RUN_HOSTNAME}' is not in the table; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
+            exit 2
+            ;;
     esac
 else
     HOST_ALIAS="$RESEARCHER_HOST_ALIAS"
@@ -201,27 +217,41 @@ fi
 COMPUTE_PROFILE_LOCAL="Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments."
 COMPUTE_PROFILE_MATS="MATS Slurm cluster, driven REMOTELY over SSH from wherever this run is executing (laptop or desktop) - you are NOT on the cluster. Every cluster command is prefixed: ssh mats '<cmd>' for the dev/login node, ssh mats-controller '<cmd>' for the controller (the only place gpu-avail and gpu-cost exist). AUTHORIZED COMPUTE: the FREE 'compute' partition only - one shared always-on node with 8x NVIDIA L40 (48GB VRAM each). Your concurrent cap across all your jobs is 6 GPUs, 124 CPUs, and 384GB RAM; max wall time is 24h per job. Request 1 GPU (--gres=gpu:1) unless the experiment genuinely needs more, and up to 6 when it does (single node, so torchrun/FSDP works). Sizing on 48GB: fp16 inference up to ~20B params, LoRA/QLoRA fine-tuning up to ~7B (13B with care), full fine-tuning only up to ~2-3B. Add --qos=debug for validation runs under 2h to jump the queue. PAID elastic-* partitions (A100/H100) are NOT authorized for autonomous runs (they bill by the hour and need Titus's explicit confirmation): if an experiment needs more than 6 L40s or more VRAM per device, do not attempt it - record a FAIL-on-affordability with the exact resource ask and continue. WORKFLOW for each experiment: (1) write the code and an sbatch script locally under experiments/exp-NNN/; (2) stage it with rsync -avP experiments/exp-NNN/ mats:/mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN/; (3) submit with ssh mats 'cd /mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN && mkdir -p logs && sbatch run.sbatch' - create logs/ BEFORE sbatch, because Slurm opens the output file at job launch and an in-script mkdir is too late; (4) poll with ssh mats 'squeue -u t.buckworth' until the job leaves the queue (PD pending, R running, CG completing), sleeping 60s between polls rather than busy-looping - the free partition is shared and a PD (Resources) wait of tens of minutes is normal, NOT a failure, so keep waiting; do NOT end the step while a job you submitted is still queued or running - if you must stop, first record the job id and its experiment in state.md so the next attempt resumes waiting instead of resubmitting; and before submitting anything, run squeue and check whether a job for this experiment is already queued or running, because the step may be retried after an interruption and duplicate submissions waste the shared partition; (5) pull results back with rsync -avP mats:.../exp-NNN/ experiments/exp-NNN/ and copy the full slurm log into run.log. NEVER run training, fine-tuning, heavy inference, or long CPU loops in an ssh shell on the dev node - it is the shared login node and that is the cluster's worst etiquette violation. Never run agents or jobs on the controller. The local machine this run executes on is for orchestration, plotting, and light analysis of returned results only - do not silently fall back to a local GPU for experiments under this profile. Job script requirements: all #SBATCH lines must precede the first command (any command above them silently disables every directive below); include --partition=compute, --gres=gpu:1, a realistic --time, --job-name, --cpus-per-task=8, --mem=32G, --output=logs/slurm-%j.out. Storage on the cluster: code, checkpoints, and final results under /mnt/nw/home/t.buckworth (persistent NFS, NOT backed up - pull anything irreplaceable back to this machine); HuggingFace cache, dataset shards, and intermediate outputs under /ephemeral/t.buckworth (fast local scratch, wiped on reboot) via HF_HOME=/ephemeral/t.buckworth/hf. Every job script also exports TMPDIR=/ephemeral/t.buckworth/tmp, XDG_CACHE_HOME=/ephemeral/t.buckworth/cache and WANDB_DIR=/ephemeral/t.buckworth/wandb, and runs mkdir -p on all four first: nothing bulky may go in /tmp, which is the worker's root disk (filling it drains the node for everyone). Inside every job script: source ~/venv/bin/activate (the cluster's shared venv) and run python with -u so logs are not buffered. That venv pins torch 2.5.1+cu121 to match the workers' CUDA 12.2 driver - do NOT upgrade torch or install one from default PyPI, which breaks CUDA on every job. Diagnostics: ssh mats 'scontrol show job <jobid>' explains a stuck job; sacct works only from the controller (it errors with Connection refused on the dev node); nvidia-smi on the dev node fails because there is no GPU there, which is expected; on compute, nvidia-smi inside a job lists all 8 physical GPUs but you only own \$CUDA_VISIBLE_DEVICES; an empty .out file on a running job is usually stdout buffering. scancel anything left idle. Prefer lightweight experiments (small open-weight models), each targeting under 30 min of GPU time. Max 5 experiments."
 
+# COMPUTE_PROFILE_NAME (the preset, or "custom") is for the startup log line.
 case "${RESEARCHER_COMPUTE_PROFILE:-}" in
-    ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL" ;;
+    ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL"; COMPUTE_PROFILE_NAME=local ;;
     mats|MATS|mats-cluster)
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
+        COMPUTE_PROFILE_NAME=mats
         # A queued/running job for THIS run means the step is waiting, not failing.
         # Its own 90 s timeout must stay below JOB_WAIT_CMD_TIMEOUT_SECONDS (default 120),
         # or run_hook cuts squeue off first and the step looks as if it had no jobs.
         : "${JOB_WAIT_CMD:=timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | grep -F '{run_id}' || true}"
         ;;
-    *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;
+    *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE"; COMPUTE_PROFILE_NAME=custom ;;
 esac
 
 # Global research knowledge base (the compounding wiki). Optional: a run works
 # identically without one. Set RESEARCHER_KB_DIR=none to disable explicitly, or
-# bootstrap one with scripts/kb-init.sh. Only a directory that actually holds a
-# KB-SCHEMA.md counts — a path pointing at nothing is treated as "no KB" rather
-# than silently sending agents to write pages into an unstructured directory.
-KB_DIR="${RESEARCHER_KB_DIR:-${HOME}/pyg/research-wiki}"
-if [ "$KB_DIR" = "none" ] || [ ! -f "${KB_DIR}/KB-SCHEMA.md" ]; then
-    KB_DIR=""
-fi
+# bootstrap one with scripts/kb-init.sh. Only a directory that holds a
+# KB-SCHEMA.md is a knowledge base: with RESEARCHER_KB_DIR unset, the default
+# path without one means no KB; an explicit path without one exits 2, rather
+# than sending agents to write pages into an unstructured directory or quietly
+# running without the KB that was asked for.
+case "${RESEARCHER_KB_DIR:-}" in
+    "")
+        KB_DIR="${HOME}/pyg/research-wiki"
+        [ -f "${KB_DIR}/KB-SCHEMA.md" ] || KB_DIR=""
+        ;;
+    none) KB_DIR="" ;;
+    *)
+        if [ ! -f "${RESEARCHER_KB_DIR}/KB-SCHEMA.md" ]; then
+            echo "ERROR: RESEARCHER_KB_DIR=${RESEARCHER_KB_DIR} has no KB-SCHEMA.md. Bootstrap it with scripts/kb-init.sh, or set RESEARCHER_KB_DIR=none." >&2
+            exit 2
+        fi
+        KB_DIR="$RESEARCHER_KB_DIR"
+        ;;
+esac
 
 # The runner's functions live in scripts/runner/, one file per concern; this file
 # holds the configuration and the top-level flow.
@@ -306,7 +336,7 @@ case "$REPO_VISIBILITY" in
         ;;
 esac
 
-log "Agent backend: ${BACKEND}; model: ${MODEL}"
+log "Agent backend: ${BACKEND}; model: ${MODEL}; compute profile: ${COMPUTE_PROFILE_NAME}; knowledge base: ${KB_DIR:-none}; owner: ${RUN_OWNER:-none}; pinned run: ${PIN_RUN_DIR:-none}"
 
 # Check if GPU is busy (>500MB VRAM used by any single process = busy)
 if ! is_true "$SKIP_GPU_CHECK" && command -v nvidia-smi &>/dev/null; then

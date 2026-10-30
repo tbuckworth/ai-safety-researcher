@@ -161,8 +161,8 @@ required.
 | `RESEARCHER_JOB_WAIT_POLL_SECONDS` | Poll interval while waiting (default 120) |
 | `RESEARCHER_JOB_WAIT_MAX_SECONDS` | Cap on a step's waiting, summed over its waits (default 14400) |
 | `RESEARCHER_JOB_WAIT_MAX_REFUNDS` | Cap on refunded attempts (default 10) |
-| `RESEARCHER_KB_DIR` | Global knowledge base (default `~/pyg/research-wiki`). `none`, or a path without `KB-SCHEMA.md`, disables it. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
-| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps. Defaults to `desktop` on the desktop, `local` elsewhere (which drops the ssh step) |
+| `RESEARCHER_KB_DIR` | Global knowledge base (default `~/pyg/research-wiki`, used only when it holds `KB-SCHEMA.md`). `none` disables it; a path set here without `KB-SCHEMA.md` exits 2. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
+| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps; `local` drops the ssh step. Defaults to `desktop` on the desktop; any other machine must set it, or the run exits 2 |
 
 ## Decision Heuristics
 
@@ -307,7 +307,7 @@ never fails a step.
 |------|---------|
 | 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
 | 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written) |
-| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
+| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not an integer, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |
 

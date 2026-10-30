@@ -20,14 +20,14 @@ So every row carries a **robustness** estimate, and there's a protocol to *earn*
 
 ## The organisms (verified this pass)
 
-| id | type | base | params | downloadable | fits 24GB | scorer | robustness (a priori) | conf |
-|----|------|------|--------|--------------|-----------|--------|-----------------------|------|
-| `em-suite-turner-2025` | emergent-misalignment | Qwen/Gemma/Llama ×9 | 0.5B–32B | ✅ | ✅ (≤7B) | ✅ GPT-judge | mixed (LoRA fragile, full-SFT firmer) | high |
-| `auditbench-sheshadri-2026` | auditing-hidden-behavior | Llama-3.3-70B, Qwen3-14B/32B | 14–70B | ✅ | ❌ | ✅ agent+judge | LoRA + anti-confession | high |
-| `sleeper-agents-hubinger-2024` | sleeper-agent-backdoor | Claude (proprietary) | n/a | ❌ (reimpl only) | reimpl only | implicit (deterministic) | **robust** (explicit trigger) | high |
-| `natural-em-reward-hacking-2025` | reward-hacking | Claude-scale | proprietary | ❌ | ❌ | described only | RL-deep (plausibly robust) | medium |
-| `reward-hacking-aisi-repro` | reward-hacking | OLMo-7B/32B, GPT-OSS-20B/120B | 7–120B | ✅ | ✅ (OLMo-7B) | ✅ eval scripts | RL-deep (plausibly robust) | medium |
-| `sandbagging-password-locked-vdweij` | sandbagging-password-locked | Mistral-7B, Llama-3-8B | 7–8B | ✅ | ✅ | capability-gap eval | password-lock | **low** |
+| id | type | base | params | downloadable | min VRAM (GB) | scorer | robustness (a priori) | conf |
+|----|------|------|--------|--------------|---------------|--------|-----------------------|------|
+| `em-suite-turner-2025` | emergent-misalignment | Qwen/Gemma/Llama ×9 | 0.5B–32B | ✅ | 2 (7B: ~16) | ✅ GPT-judge | mixed (LoRA fragile, full-SFT firmer) | high |
+| `auditbench-sheshadri-2026` | auditing-hidden-behavior | Llama-3.3-70B, Qwen3-14B/32B | 14–70B | ✅ | 28 | ✅ agent+judge | LoRA + anti-confession | high |
+| `sleeper-agents-hubinger-2024` | sleeper-agent-backdoor | Claude (proprietary) | n/a | ❌ (reimpl only) | n/a (reimpl only) | implicit (deterministic) | **robust** (explicit trigger) | high |
+| `natural-em-reward-hacking-2025` | reward-hacking | Claude-scale | proprietary | ❌ | n/a | described only | RL-deep (plausibly robust) | medium |
+| `reward-hacking-aisi-repro` | reward-hacking | OLMo-7B/32B, GPT-OSS-20B/120B | 7–120B | ✅ | 16 (OLMo-7B) | ✅ eval scripts | RL-deep (plausibly robust) | medium |
+| `sandbagging-password-locked-vdweij` | sandbagging-password-locked | Mistral-7B, Llama-3-8B | 7–8B | ✅ | 16 | capability-gap eval | password-lock | **low** |
 
 **Off-the-shelf + fits a single 24GB GPU today:** the small end of `em-suite-turner-2025`
 (0.5B–7B), the OLMo-7B `reward-hacking-aisi-repro`, and (unverified) the sandbagging repo.
@@ -36,7 +36,7 @@ AuditBench and the Anthropic organisms are the highest-quality but too large / n
 ## Schema
 
 Each entry in `organisms.yaml` has: `id, name, type, base_model, params, training_method,
-behaviour, repo, huggingface, scorer, downloadable, local_24gb, redwood_class,
+behaviour, repo, huggingface, scorer, downloadable, min_vram_gb, redwood_class,
 robustness_vetted, praise_complaints, confidence, sources`. Field meanings are in the header
 comment of the YAML.
 
@@ -56,14 +56,16 @@ is a good first automated-researcher job against this DB.
 
 ## How an automated researcher uses this
 
-1. Filter `organisms.yaml` by `type`, `downloadable: true`, and `local_24gb: yes`.
+1. Filter `organisms.yaml` by `type`, `downloadable: true`, and a `min_vram_gb` no larger than
+   the GPU memory the run's compute profile provides.
 2. Prefer higher `redwood_class` / `robustness_vetted: true`; if testing a suppression/
    control method, avoid `prompted`/low-rank-LoRA organisms or the result is uninterpretable.
 3. Pull weights from `huggingface`/`repo`, use the organism's `scorer` to measure the behaviour,
    apply your method, re-measure.
 
-This DB is also the supply side for the plugin's Step-1 **construct fidelity** requirement:
-prefer a real, robustness-vetted organism over inventing a marker-string strawman.
+Autonomous Step 1 (construct fidelity), the decomposition agent and the experiment agent's
+organism-validity check read `organisms.yaml`: prefer a real, robustness-vetted organism over
+inventing a marker-string strawman.
 
 ## Known gaps / TODO
 

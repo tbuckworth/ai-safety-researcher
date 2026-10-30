@@ -72,7 +72,7 @@ The key insight: order experiments by **information rate** lambda = -ln(P_succes
 
 5. **Order by descending lambda**: Highest lambda first.
 
-6. **Design quick tests**: For each component, describe the minimum experiment that would determine pass/fail. Be specific: what code to write, what data to use, what threshold to check.
+6. **Design quick tests**: For each component, describe the minimum experiment that would determine pass/fail. Be specific: what code to write, what data to use, what threshold to check. Where a component needs a model organism, check `<plugin-root>/data/model-organisms/organisms.yaml` for one that is `downloadable: true` and has a `min_vram_gb` the run's compute profile provides, and name it in the quick test; if none fits, say why.
 
 7. **Identify dependencies**: Note which components depend on others (some can't be tested until prerequisites pass).
 

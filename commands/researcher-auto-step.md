@@ -79,7 +79,7 @@ Do this yourself — no agent needed.
 
 1. Read `topic.txt` from the run directory to get the full topic (may include GitHub issue body).
 
-2. **Check for follow-up context.** If `<run-directory>/followup-context.md` exists, this is a follow-up run:
+2. **Check for follow-up context.** First, if `state.md` has `construct_redesign: true`, go straight to 2a-redesign, on a follow-up run too: the redesign replaces the follow-up fast-forward below. Otherwise, if `<run-directory>/followup-context.md` exists, this is a follow-up run:
 
    a. Read `followup-context.md` to get the user's feedback and parent metadata.
    b. Read `prior/state.md` to get the prior run's clarifications, decisions, experiment results, and novelty verdict.
@@ -100,10 +100,9 @@ Do this yourself — no agent needed.
    - "This run should focus on: \<what's different this time\>."
 
    **Determine follow-up scope** from the feedback. Set `followup_focus` in state.md to one of:
-   - `experiments_only` — feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` to jump to experiments
+   - `experiments_only` — feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` and `fail_fast_agreement: true` to jump to experiments
    - `from_decomposition` — feedback changes the research design (e.g., "add a new component", "different approach") → set `current_step: 4` to redo decomposition onward
-   - `from_literature` — feedback suggests the framing or literature needs to change → set `current_step: 1` to redo from Step 2
-   - `full` — feedback is a substantial pivot → set `current_step: 1` (normal Step 1 flow)
+   - `from_literature` — feedback changes the framing or the literature, or is a substantial pivot → set `current_step: 1` to redo from Step 2
 
    **For skipped steps**, copy prior artifacts into the run directory so downstream steps can read them. For example, if `followup_focus: experiments_only`:
    - Copy `prior/literature/synthesis.md` → `literature/synthesis.md`
@@ -118,7 +117,7 @@ Do this yourself — no agent needed.
 
    **Skip to step 3 below** (write state.md with follow-up metadata preserved).
 
-2a-redesign. **Construct-redesign re-entry.** If `state.md` has `construct_redesign: true`, Step 6 sent the plan back here because the covert/target construct was a strawman or the motivating question was being dodged. Read the recorded flaw (`construct_redesign_note` in state.md) and the prior `clarifications`, then generate clarifications that fix *that specific problem* — choose a stronger, faithful construct and re-anchor on the motivating question. Set `construct_loop_count: 1` (so Step 6 won't loop again) and preserve it in state.md. Then continue with the clarification content below.
+2a-redesign. **Construct-redesign re-entry.** If `state.md` has `construct_redesign: true`, Step 6 sent the plan back here because the covert/target construct was a strawman or the motivating question was being dodged. Read the recorded flaw (`construct_redesign_note` in state.md) and the prior `clarifications`, then generate clarifications that fix *that specific problem* — choose a stronger, faithful construct and re-anchor on the motivating question. Set `construct_loop_count: 1` (so Step 6 won't loop again) and preserve it in state.md. Then continue with the clarification content below, and set `current_step: 1` in step 4 so every later step runs again.
 
 2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers by inferring from the topic text:
 
@@ -147,7 +146,7 @@ Do this yourself — no agent needed.
 
    If the topic leaves a definition genuinely open, choose the most literal reading of the source wording, and say so. A follow-up keeps the prior spec unless the feedback changes a definition, in which case it records the change.
 
-4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups):
+4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups and for a construct-redesign re-entry):
    ```yaml
    ---
    run_id: <from existing state.md>
@@ -163,7 +162,7 @@ Do this yourself — no agent needed.
    parent_issue: <from existing state.md, if follow-up>
    prior_repo: <from existing state.md, if follow-up>
    prior_run_id: <from existing state.md, if follow-up>
-   followup_focus: <experiments_only/from_decomposition/from_literature/full, if follow-up>
+   followup_focus: <experiments_only/from_decomposition/from_literature, if follow-up>
    clarifications:
      - q: "What is the motivating question (in the topic's own framing)?"
        a: "<preserve directional framing — e.g. 'can X mitigate Y?', not 'does X change Y'>"
@@ -468,7 +467,7 @@ This step runs three **independent** adversarial review passes on the same plan.
 3. **Read all three challenge files.** Extract the mentor-review verdict.
 
 3.5. **Construct-validity gate (runs BEFORE the verdict mapping).** Scan all three challenge files for a construct-validity / known-outcome flaw, regardless of the verdict enum any agent assigned: a headline experiment whose result is fixed by construction (statable on paper without running it), a covert/target construct that is a strawman the operator defeats trivially because it is a surface artifact rather than a real goal, or a plan that never returns a verdict on the motivating question. If such a flaw is present **and** it is not cheaply fixable inside the current plan:
-   - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 1, construct_redesign: true, construct_loop_count: 1`, and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct — treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
+   - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 0, construct_redesign: true, construct_loop_count: 1` (`current_step: 0` makes the wrapper run Step 1 next), and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct — treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
    - If `construct_loop_count >= 1`: the construct was already redesigned once. Do not loop again — proceed, but record `construct_validity: unresolved` so the flaw is stated plainly in the paper (Limitations) rather than hidden. Continue to the verdict mapping.
    - If no construct-validity flaw is present, record `construct_validity: ok` and continue.
 
@@ -511,16 +510,13 @@ Do this yourself — no agent needed.
    - Lambda value
    - Pass/fail criteria
 
-4. Update `state.md`: `current_step: 7, status: experiments_planned`.
+4. Update `state.md`: `current_step: 8, status: experiments_planned, fail_fast_agreement: true`. An autonomous run always agrees to fail fast, so Step 7 also records Step 8's decision and the wrapper goes straight to Step 9.
 
 ---
 
 ## Step 8: Confirm Fail-Fast Agreement
 
-Do this yourself — no agent needed. This is trivial in autonomous mode.
-
-1. Set `fail_fast_agreement: true` in state.md.
-2. Update `state.md`: `current_step: 8, status: fail_fast_confirmed`.
+In autonomous mode Step 7 writes `fail_fast_agreement: true` and `current_step: 8`, so the wrapper does not run this step. If it does run, write those two fields to `state.md` and stop.
 
 ---
 
@@ -569,7 +565,7 @@ If `state.md` contains `is_followup: true`:
    - Continue to next experiment in lambda order.
 
 5. After all experiments (or after a fail-fast stop):
-   - Update `state.md`: `current_step: 9, status: experiments_complete`.
+   - Update `state.md`: `current_step: 9`, with `status: experiments_complete` when every planned experiment ran. After a fail-fast stop keep `status: experiments_done_with_failure`: Step 10 reads it to run a single triage pass.
    - Include results summary: which experiments passed, which failed, key metrics.
 
 ---

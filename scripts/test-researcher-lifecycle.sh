@@ -126,37 +126,19 @@ esac
 MOCK_GH
 chmod +x "${MOCK_BIN}/gh"
 
-# --- mock provider -----------------------------------------------------------
+# --- mock provider and agent-mail --------------------------------------------
+# shellcheck source=tests/mocks.sh
+source "${SCRIPT_DIR}/tests/mocks.sh"
+install_mock_agent_mail "$MOCK_BIN"
+install_mock_email_composer "$MOCK_BIN"
+
 cat > "${MOCK_BIN}/claude" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
 prompt=$(cat)
 
 if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
-    run_dir=$(printf '%s\n' "$prompt" | sed -n 's/^The run directory is: \*\*\(.*\)\*\*$/\1/p' | head -1)
-    printf '%s\n' "$prompt" > "${run_dir}/.email-prompt.txt"
-    printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
-    printf '%s\n' '[Auto-Research] Mock result — 1 pass, 0 fail' > "${run_dir}/email-subject.txt"
-    if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" != "true" ]; then
-        sid=""
-        prev=""
-        for arg in "$@"; do
-            [ "$prev" = "--session-id" ] && sid="$arg"
-            prev="$arg"
-        done
-        helper=$(printf '%s\n' "$prompt" | sed -n 's/^ *\(\/.*send-results-email\.sh\) .*$/\1/p' | head -1)
-        set +e
-        CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
-        rc=$?
-        if [ "$rc" -eq 3 ]; then
-            printf '%s\n' '<p>Revised after the review.</p>' >> "${run_dir}/email-draft.html"
-            CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
-            rc=$?
-        fi
-        set -e
-        [ "$rc" -eq 0 ] || exit "$rc"
-    fi
-    exit 0
+    exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
 fi
 
 argument=$(printf '%s\n' "$prompt" | sed -n 's/^The argument is: \*\*\([0-9][0-9]*\) \(.*\)\*\*$/\1|\2/p' | head -1)
@@ -228,37 +210,6 @@ mv "${state_file}.tmp" "$state_file"
 echo "Mock step ${step} complete."
 MOCK_PROVIDER
 chmod +x "${MOCK_BIN}/claude"
-
-cat > "${MOCK_BIN}/agent-mail" <<'MOCK_AGENT_MAIL'
-#!/usr/bin/env bash
-set -euo pipefail
-args=("$@")
-subject="" html="" unrouted=false images=""
-for ((i = 0; i < ${#args[@]}; i++)); do
-    case "${args[$i]}" in
-        --subject) subject="${args[$((i + 1))]}" ;;
-        --html) html="${args[$((i + 1))]}" ;;
-        --image) images="${images} ${args[$((i + 1))]##*/}" ;;
-        --unrouted) unrouted=true ;;
-    esac
-done
-[ "${1:-}" = "send" ] || { echo "mock agent-mail: only send" >&2; exit 2; }
-[ -s "$html" ] || { echo "mock agent-mail: missing HTML" >&2; exit 2; }
-who="${CLAUDE_CODE_SESSION_ID:-}"
-[ "$unrouted" = true ] && who=unrouted
-[ -n "$who" ] || { echo "agent-mail: not inside a Claude session and no --session given." >&2; exit 1; }
-if [ "${MOCK_REVIEW_PUSHBACK:-false}" = "true" ] && [ "$who" != "unrouted" ] \
-        && ! grep -qxF "$who" "${MOCK_EMAIL_LOG}.held" 2>/dev/null; then
-    printf '%s\n' "$who" >> "${MOCK_EMAIL_LOG}.held"
-    echo "agent-mail: NOT SENT: a reviewer with no context expects Titus to ask what this is."
-    echo "Fix before sending:"
-    echo "  1. Put the headline result in the first line."
-    exit 3
-fi
-printf -- '--subject %s | from=%s | images=%s | %s\n' "$subject" "$who" "${images# }" "$*" >> "$MOCK_EMAIL_LOG"
-echo "sent to self@example.test | subject '${subject}' | thread mock-thread | tag mocktag1 | from researcher (claude)"
-MOCK_AGENT_MAIL
-chmod +x "${MOCK_BIN}/agent-mail"
 
 # A mock gitleaks: flags each staged file holding MOCK-SECRET-VALUE, as the
 # real scan reports (JSON), unless MOCK_SECRET_UNSEEN (a scan that misses it).

@@ -15,6 +15,11 @@ MOCK_PROMPT_LOG="${TEST_ROOT}/provider-prompts.log"
 MOCK_EMAIL_LOG="${TEST_ROOT}/email-calls.log"
 mkdir -p "$MOCK_BIN"
 
+# shellcheck source=tests/mocks.sh
+source "${SCRIPT_DIR}/tests/mocks.sh"
+install_mock_agent_mail "$MOCK_BIN"
+install_mock_email_composer "$MOCK_BIN"
+
 cat > "${MOCK_BIN}/mock-provider" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -27,40 +32,11 @@ printf '%s %s\n' "$(basename "$0")" "$*" >> "$MOCK_CALL_LOG"
 } >> "$MOCK_PROMPT_LOG"
 
 if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
-    run_dir=$(printf '%s\n' "$prompt" |
-        sed -n 's/^The run directory is: \*\*\(.*\)\*\*$/\1/p' |
-        head -1)
-    if [ -z "$run_dir" ]; then
-        echo "mock provider could not parse email run directory" >&2
-        exit 64
-    fi
     if [ "${MOCK_CLAUDE_EMAIL_FAIL:-false}" = "true" ] && [ "$(basename "$0")" = "claude" ]; then
         echo "Claude AI usage limit reached" >&2
         exit 1
     fi
-    printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
-    printf '%s\n' '[Auto-Research] Mock result' > "${run_dir}/email-subject.txt"
-    if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" != "true" ]; then
-        sid=""
-        prev=""
-        for arg in "$@"; do
-            [ "$prev" = "--session-id" ] && sid="$arg"
-            prev="$arg"
-        done
-        helper=$(printf '%s\n' "$prompt" | sed -n 's/^ *\(\/.*send-results-email\.sh\) .*$/\1/p' | head -1)
-        set +e
-        CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
-        rc=$?
-        if [ "$rc" -eq 3 ]; then
-            printf '%s\n' '<p>Revised after the review.</p>' >> "${run_dir}/email-draft.html"
-            CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
-            rc=$?
-        fi
-        set -e
-        [ "$rc" -eq 0 ] || exit "$rc"
-    fi
-    echo "Mock email composition complete."
-    exit 0
+    exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
 fi
 
 argument=$(printf '%s\n' "$prompt" |
@@ -121,37 +97,6 @@ MOCK_PROVIDER
 chmod +x "${MOCK_BIN}/mock-provider"
 ln -s mock-provider "${MOCK_BIN}/claude"
 ln -s mock-provider "${MOCK_BIN}/codex"
-
-cat > "${MOCK_BIN}/agent-mail" <<'MOCK_AGENT_MAIL'
-#!/usr/bin/env bash
-set -euo pipefail
-args=("$@")
-subject="" html="" unrouted=false images=""
-for ((i = 0; i < ${#args[@]}; i++)); do
-    case "${args[$i]}" in
-        --subject) subject="${args[$((i + 1))]}" ;;
-        --html) html="${args[$((i + 1))]}" ;;
-        --image) images="${images} ${args[$((i + 1))]##*/}" ;;
-        --unrouted) unrouted=true ;;
-    esac
-done
-[ "${1:-}" = "send" ] || { echo "mock agent-mail: only send" >&2; exit 2; }
-[ -s "$html" ] || { echo "mock agent-mail: missing HTML" >&2; exit 2; }
-who="${CLAUDE_CODE_SESSION_ID:-}"
-[ "$unrouted" = true ] && who=unrouted
-[ -n "$who" ] || { echo "agent-mail: not inside a Claude session and no --session given." >&2; exit 1; }
-if [ "${MOCK_REVIEW_PUSHBACK:-false}" = "true" ] && [ "$who" != "unrouted" ] \
-        && ! grep -qxF "$who" "${MOCK_EMAIL_LOG}.held" 2>/dev/null; then
-    printf '%s\n' "$who" >> "${MOCK_EMAIL_LOG}.held"
-    echo "agent-mail: NOT SENT: a reviewer with no context expects Titus to ask what this is."
-    echo "Fix before sending:"
-    echo "  1. Put the headline result in the first line."
-    exit 3
-fi
-printf -- '--subject %s | from=%s | images=%s | %s\n' "$subject" "$who" "${images# }" "$*" >> "$MOCK_EMAIL_LOG"
-echo "sent to self@example.test | subject '${subject}' | thread mock-thread | tag mocktag1 | from researcher (claude)"
-MOCK_AGENT_MAIL
-chmod +x "${MOCK_BIN}/agent-mail"
 
 export MOCK_CALL_LOG MOCK_PROMPT_LOG MOCK_EMAIL_LOG
 
@@ -301,23 +246,13 @@ grep -q 'Write `next-steps.md`' "$MOCK_PROMPT_LOG"
 # The step prompt carries the WHOLE workflow document, not alternating chunks of
 # it. A `sed '/^---$/,/^---$/d'` frontmatter strip pairs up every markdown section
 # separator and deletes half the file; that shipped for a long time, silently
-# dropping whole steps from every prompt. Assert every step heading survives.
-for step_heading in \
-    "## Step 1: Clarify the Research Topic" \
-    "## Step 2: Research the Literature" \
-    "## Step 3: Assess Novelty" \
-    "## Step 4: Define Success Criteria" \
-    "## Step 5: Fail Quickly" \
-    "## Step 6: Challenge the Research Plan" \
-    "## Step 7: Report Planned Experiments" \
-    "## Step 8: Confirm Fail-Fast Agreement" \
-    "## Step 9: Execute Experiments" \
-    "## Step 10: Audit the Results" \
-    "## Step 11: Compile Research Report" \
-    "## Shared: Limitation Triage" \
-    "## Shared: Knowledge Bases"
-do
-    grep -qF "$step_heading" "$MOCK_PROMPT_LOG" \
+# dropping whole steps from every prompt. Assert every `## ` heading survives.
+mapfile -t step_headings < <(grep '^## ' "${REPO_DIR}/commands/researcher-auto-step.md")
+step_count=$(printf '%s\n' "${step_headings[@]}" | grep -c '^## Step ')
+[ "$step_count" -ge 11 ] \
+    || { echo "FAIL: commands/researcher-auto-step.md has ${step_count} '## Step' headings, expected at least 11" >&2; exit 1; }
+for step_heading in "${step_headings[@]}"; do
+    grep -qxF "$step_heading" "$MOCK_PROMPT_LOG" \
         || { echo "FAIL: step prompt is missing '${step_heading}'" >&2; exit 1; }
 done
 

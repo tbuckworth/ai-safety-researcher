@@ -1140,13 +1140,71 @@ printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
 chmod +x "${CASE_DIR}/bin/hostname"
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (unknown host)"
-assert_grep "host 'some-laptop' is not in the table; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
+assert_grep "host 'some-laptop' is not in RESEARCHER_HOST_ALIASES; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
 # A hostname that cannot be read is the same: set RESEARCHER_HOST_ALIAS.
 printf '#!/usr/bin/env bash\necho "hostname: mock failure" >&2\nexit 1\n' > "${CASE_DIR}/bin/hostname"
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (hostname failed)"
 assert_grep "ERROR: could not read this machine's hostname \(hostname -s failed\); set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+# A host in RESEARCHER_HOST_ALIASES gets its alias in the email's continuation steps.
+printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= \
+    "RESEARCHER_HOST_ALIASES=other-host=other some-laptop=laptop-alias" RESEARCHER_SKIP_PUBLISH=true -- "Aliased host"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "^- Run host SSH alias: laptop-alias$" "$(ls -d "$OUT"/*-aliased-host)/.email-prompt.txt"
+
+# =============================================================================
+# 22b. Deployment defaults come from config/researcher.env (RESEARCHER_CONFIG_FILE
+#      names another file), read as data: a variable set in the environment
+#      wins, ~/ is the home directory, nothing in a value runs, and a line that
+#      is not RESEARCHER_KEY=value, or a key the runner needs that neither sets,
+#      stops it (exit 2).
+# =============================================================================
+new_case config
+CONFIG_FILE="${CASE_DIR}/researcher.env"
+printf '# a comment\n\nRESEARCHER_TASKS_REPO=file/tasks\nRESEARCHER_DEFAULT_KB_DIR=~/wiki\nRESEARCHER_EMAIL_TO=$(touch %s/ran)\n' \
+    "$CASE_DIR" > "$CONFIG_FILE"
+config_get() {
+    set +e
+    env "$@" bash "${REPO_DIR}/scripts/config.sh" RESEARCHER_TASKS_REPO RESEARCHER_DEFAULT_KB_DIR RESEARCHER_EMAIL_TO \
+        > "${CASE_DIR}/config.out" 2>&1
+    RC=$?
+    set -e
+}
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" HOME=/home/mock RESEARCHER_TASKS_REPO=
+assert_eq "$RC" "0" "exit code (file values)"
+assert_eq "$(cat "${CASE_DIR}/config.out")" "file/tasks
+/home/mock/wiki
+\$(touch ${CASE_DIR}/ran)" "file values"
+[ ! -e "${CASE_DIR}/ran" ] || fail "a config value was run as a command"; ok
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_TASKS_REPO=env/tasks
+assert_eq "$(head -1 "${CASE_DIR}/config.out")" "env/tasks" "the environment wins"
+printf 'RESEARCHER_TASKS_REPO=file/tasks\n' > "$CONFIG_FILE"
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_DEFAULT_KB_DIR= RESEARCHER_EMAIL_TO=
+assert_eq "$RC" "2" "exit code (a key neither sets)"
+assert_grep "ERROR: RESEARCHER_DEFAULT_KB_DIR is not set: define it in ${CONFIG_FILE} or the environment" "${CASE_DIR}/config.out"
+printf 'RESEARCHER_TASKS_REPO = file/tasks\n' > "$CONFIG_FILE"
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}"
+assert_eq "$RC" "2" "exit code (malformed line)"
+assert_grep "ERROR: line 1 of ${CONFIG_FILE} is not RESEARCHER_KEY=value: RESEARCHER_TASKS_REPO = file/tasks" "${CASE_DIR}/config.out"
+# The runner, and each helper script, stops on the same errors before doing anything.
+run_researcher "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (runner, malformed config)"
+assert_grep "is not RESEARCHER_KEY=value" "${CASE_DIR}/stdout.log"
+grep -v '^RESEARCHER_GITHUB_OWNER=' "${REPO_DIR}/config/researcher.env" > "$CONFIG_FILE"
+run_researcher "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (runner, missing key)"
+assert_grep "ERROR: RESEARCHER_GITHUB_OWNER is not set: define it in ${CONFIG_FILE} or the environment" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+grep -v '^RESEARCHER_EMAIL_TO=' "${REPO_DIR}/config/researcher.env" > "$CONFIG_FILE"
+set +e
+env "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_EMAIL_TO= RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+    "${REPO_DIR}/scripts/send-results-email.sh" "$CASE_DIR" > "${CASE_DIR}/helper.out" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "2" "exit code (email helper, missing recipient)"
+assert_grep "ERROR: RESEARCHER_EMAIL_TO is not set" "${CASE_DIR}/helper.out"
 
 # =============================================================================
 # 23. A check that cannot run is an error, not a pass: the re-read of an issue

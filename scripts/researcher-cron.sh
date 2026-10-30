@@ -12,10 +12,13 @@
 #
 # Launcher: agent-board's agent-spare (the agent-spare.timer systemd user timer)
 # starts this script for one issue in its own systemd unit, and its output goes to
-# ~/.local/state/agent-board/spare/run.log; step logs stay in
-# /media/titus/big/researcher-output/logs/ (LOG_DIR below). The old
-# crontab line is disabled. It can still be run by hand or from cron, e.g.
-#   0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
+# ~/.local/state/agent-board/spare/run.log; step logs stay in LOG_DIR (below).
+# The old crontab line is disabled. It can still be run by hand or from cron, e.g.
+#   0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
+#
+# Deployment defaults (storage, GitHub owner and queue, recipient, models, ...)
+# come from config/researcher.env, read by scripts/config.sh; a variable set in
+# the environment wins.
 
 set -euo pipefail
 
@@ -28,7 +31,17 @@ case ":${PATH}:" in
     *) export PATH="${HOME}/.local/bin:${PATH}" ;;
 esac
 
-STORAGE_ROOT="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
+# shellcheck source=config.sh
+source "${SCRIPT_DIR}/config.sh"
+load_config || exit 2
+require_config RESEARCHER_STORAGE_ROOT RESEARCHER_GITHUB_OWNER RESEARCHER_TASKS_REPO RESEARCHER_EMAIL_TO \
+    RESEARCHER_DEFAULT_KB_DIR RESEARCHER_BACKEND RESEARCHER_CLAUDE_BIN RESEARCHER_CODEX_BIN \
+    RESEARCHER_CLAUDE_MODEL RESEARCHER_EMAIL_CLAUDE_MODEL RESEARCHER_CODEX_MODEL RESEARCHER_CODEX_REASONING \
+    RESEARCHER_CODEX_FAST_MODEL RESEARCHER_CODEX_FAST_REASONING RESEARCHER_CODEX_SANDBOX \
+    RESEARCHER_CODEX_APPROVAL_POLICY RESEARCHER_CODEX_IGNORE_USER_CONFIG RESEARCHER_CODEX_MAX_SUBAGENTS \
+    || exit 2
+
+STORAGE_ROOT="$RESEARCHER_STORAGE_ROOT"
 OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
@@ -65,8 +78,8 @@ ALLOW_RERUN="${RESEARCHER_ALLOW_RERUN:-false}"
 
 # GitHub publication. Run repos hold unreviewed research and are private unless
 # deliberately made public.
-REPO_OWNER="${RESEARCHER_GITHUB_OWNER:-tbuckworth}"
-TASKS_REPO="${RESEARCHER_TASKS_REPO:-tbuckworth/tasks}"
+REPO_OWNER="$RESEARCHER_GITHUB_OWNER"
+TASKS_REPO="$RESEARCHER_TASKS_REPO"
 REPO_VISIBILITY="${RESEARCHER_REPO_VISIBILITY:-private}"
 # Where git pushes to. Only tests override this (with a file:// directory of bare repos).
 GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-https://github.com}"
@@ -136,35 +149,36 @@ TOPIC="${1:-}"
 
 # Provider selection. RESEARCHER_MODEL remains a backwards-compatible
 # provider-specific override; the named variables avoid ambiguous saved config.
-BACKEND="${RESEARCHER_BACKEND:-claude}"
+BACKEND="$RESEARCHER_BACKEND"
 SKIP_PUBLISH="${RESEARCHER_SKIP_PUBLISH:-false}"
 SKIP_EMAIL="${RESEARCHER_SKIP_EMAIL:-false}"
 SKIP_GPU_CHECK="${RESEARCHER_SKIP_GPU_CHECK:-false}"
 LINK_OUTPUT="${RESEARCHER_LINK_OUTPUT:-true}"
-CODEX_IGNORE_USER_CONFIG="${RESEARCHER_CODEX_IGNORE_USER_CONFIG:-true}"
+CODEX_IGNORE_USER_CONFIG="$RESEARCHER_CODEX_IGNORE_USER_CONFIG"
 ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
 PAUSED=false
 
 # One branch per backend in researcher_lib.py BACKENDS (and in runner/provider.sh).
 case "$BACKEND" in
     claude)
-        PROVIDER_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
-        MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CLAUDE_MODEL:-fable}}"
+        PROVIDER_BIN="$RESEARCHER_CLAUDE_BIN"
+        MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CLAUDE_MODEL}"
         AGENT_LABEL="Claude ${MODEL}"
         CONTINUE_COMMAND="/researcher-continue"
         COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
         ;;
     codex)
-        PROVIDER_BIN="${RESEARCHER_CODEX_BIN:-codex}"
-        MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CODEX_MODEL:-gpt-6-astra}}"
-        CODEX_REASONING="${RESEARCHER_CODEX_REASONING:-xhigh}"
-        CODEX_FAST_MODEL="${RESEARCHER_CODEX_FAST_MODEL:-gpt-6.1-sol}"
-        CODEX_FAST_REASONING="${RESEARCHER_CODEX_FAST_REASONING:-medium}"
+        PROVIDER_BIN="$RESEARCHER_CODEX_BIN"
+        MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CODEX_MODEL}"
+        CODEX_REASONING="$RESEARCHER_CODEX_REASONING"
+        CODEX_FAST_MODEL="$RESEARCHER_CODEX_FAST_MODEL"
+        CODEX_FAST_REASONING="$RESEARCHER_CODEX_FAST_REASONING"
+        # The deep workers run the parent's model and effort unless set apart.
         CODEX_DEEP_MODEL="${RESEARCHER_CODEX_DEEP_MODEL:-${MODEL}}"
         CODEX_DEEP_REASONING="${RESEARCHER_CODEX_DEEP_REASONING:-${CODEX_REASONING}}"
-        CODEX_SANDBOX="${RESEARCHER_CODEX_SANDBOX:-danger-full-access}"
-        CODEX_APPROVAL_POLICY="${RESEARCHER_CODEX_APPROVAL_POLICY:-never}"
-        CODEX_MAX_SUBAGENTS="${RESEARCHER_CODEX_MAX_SUBAGENTS:-4}"
+        CODEX_SANDBOX="$RESEARCHER_CODEX_SANDBOX"
+        CODEX_APPROVAL_POLICY="$RESEARCHER_CODEX_APPROVAL_POLICY"
+        CODEX_MAX_SUBAGENTS="$RESEARCHER_CODEX_MAX_SUBAGENTS"
         AGENT_LABEL="OpenAI Codex ${MODEL} (${CODEX_REASONING})"
         CONTINUE_COMMAND="\$researcher:researcher-continue"
         COMMIT_ATTRIBUTION="Generated-By: OpenAI Codex (${MODEL}, ${CODEX_REASONING})"
@@ -180,40 +194,44 @@ PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
 # The workflow statuses that end a run (is_terminal_status).
 TERMINAL_STATUSES=$(python3 "$LIB" terminal-statuses)
-EMAIL_TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
-export RESEARCHER_EMAIL_TO="$EMAIL_TO"
+EMAIL_TO="$RESEARCHER_EMAIL_TO"
 # The results email goes from the agents' mail account (agent-mail), never from
-# Titus's own Gmail, and through the mailroom's pre-send review like every
-# agent's mail to him. A Claude session writes and sends it, so his reply comes
+# the recipient's own Gmail, and through the mailroom's pre-send review like
+# every agent's mail. A Claude session writes and sends it, so the reply comes
 # back to that session, whichever backend ran the research; a Codex run uses
 # EMAIL_CLAUDE_MODEL for it. Only when the Claude CLI is not installed does the
 # run's own backend write it, and it then goes unrouted (no review, replies to
 # the orchestrator).
 SEND_EMAIL="${SCRIPT_DIR}/send-results-email.sh"
-EMAIL_CLAUDE_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
+EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
 if [ "$BACKEND" = "claude" ]; then
     EMAIL_CLAUDE_MODEL="$MODEL"
 else
-    EMAIL_CLAUDE_MODEL="${RESEARCHER_EMAIL_CLAUDE_MODEL:-sonnet}"
+    EMAIL_CLAUDE_MODEL="$RESEARCHER_EMAIL_CLAUDE_MODEL"
 fi
 
 # How the reader of the results email reaches the machine this run executed on, so
 # the email's "How to Continue This Research" steps are literally runnable. This is
-# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — any
-# machine not in the table below must set RESEARCHER_HOST_ALIAS, or the run exits 2.
+# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname: a
+# machine whose short hostname has no "hostname=alias" pair in RESEARCHER_HOST_ALIASES
+# (space-separated) must set RESEARCHER_HOST_ALIAS, or the run exits 2.
 # The value "local" suppresses the ssh step entirely (run and reader on the same machine).
 if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
     if ! RUN_HOSTNAME=$(hostname -s); then
         echo "ERROR: could not read this machine's hostname (hostname -s failed); set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for it, or to 'local'." >&2
         exit 2
     fi
-    case "$RUN_HOSTNAME" in
-        titus-MS-7A59) HOST_ALIAS="desktop" ;;
-        *)
-            echo "ERROR: host '${RUN_HOSTNAME}' is not in the table; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
-            exit 2
-            ;;
-    esac
+    HOST_ALIAS=""
+    read -ra HOST_ALIAS_PAIRS <<< "${RESEARCHER_HOST_ALIASES:-}"
+    for pair in ${HOST_ALIAS_PAIRS[@]+"${HOST_ALIAS_PAIRS[@]}"}; do
+        if [ "${pair%%=*}" = "$RUN_HOSTNAME" ]; then
+            HOST_ALIAS="${pair#*=}"
+        fi
+    done
+    if [ -z "$HOST_ALIAS" ]; then
+        echo "ERROR: host '${RUN_HOSTNAME}' is not in RESEARCHER_HOST_ALIASES; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
+        exit 2
+    fi
 else
     HOST_ALIAS="$RESEARCHER_HOST_ALIAS"
 fi
@@ -256,12 +274,12 @@ esac
 # identically without one. Set RESEARCHER_KB_DIR=none to disable explicitly, or
 # bootstrap one with scripts/kb-init.sh. Only a directory that holds a
 # KB-SCHEMA.md is a knowledge base: with RESEARCHER_KB_DIR unset, the default
-# path without one means no KB; an explicit path without one exits 2, rather
-# than sending agents to write pages into an unstructured directory or quietly
-# running without the KB that was asked for.
+# path (RESEARCHER_DEFAULT_KB_DIR) without one means no KB; an explicit path
+# without one exits 2, rather than sending agents to write pages into an
+# unstructured directory or quietly running without the KB that was asked for.
 case "${RESEARCHER_KB_DIR:-}" in
     "")
-        KB_DIR="${HOME}/pyg/research-wiki"
+        KB_DIR="$RESEARCHER_DEFAULT_KB_DIR"
         [ -f "${KB_DIR}/KB-SCHEMA.md" ] || KB_DIR=""
         ;;
     none) KB_DIR="" ;;

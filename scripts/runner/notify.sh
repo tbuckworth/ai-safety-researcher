@@ -60,8 +60,12 @@ send_email() {
         log "Note: the pre-send review held the email; the mailroom sends it unchanged after its fallback wait."
         return 0
     fi
+    if [ "$send_status" -eq 2 ]; then
+        log "ERROR: send-results-email.sh refused to send (exit 2): an input named above is missing or invalid; nothing was sent, and the draft stays in ${RUN_DIR}."
+        return 1
+    fi
     if [ "$send_status" -ne 0 ]; then
-        log "ERROR: sending failed with exit ${send_status}; draft retained."
+        log "ERROR: sending failed with exit ${send_status} (see above); nothing was sent, and the draft stays in ${RUN_DIR}."
         return 1
     fi
     log "Email sent to ${EMAIL_TO} from the agents' account: $(cut -f2 "${RUN_DIR}/.email-sent")"

@@ -1098,6 +1098,19 @@ run_researcher MOCK_EMAIL_NO_SEND=true
 SESSION=$(sed -n 's/.*(session \([0-9a-f-]\{36\}\)).*/\1/p' "${CASE_DIR}/stdout.log" | head -1)
 assert_grep "The email session stopped without sending" "${CASE_DIR}/stdout.log"
 assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
+# When the wrapper sends the draft and the helper refuses it (exit 2: here a
+# listed image that does not exist), nothing is sent, the run log says why, the
+# draft stays, and the run exits 5.
+new_case email-refused
+set_issues <(issue_json 905 "Helper refuses the draft" "list:research-ideas")
+run_researcher MOCK_EMAIL_NO_SEND=true MOCK_EMAIL_BAD_IMAGE=true
+assert_eq "$RC" "5" "exit code"
+RUN=$(run_dir_for_issue 905)
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
+assert_grep "error: email-images.txt: missing: figures/none.png is not a file in the run directory" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: send-results-email.sh refused to send \(exit 2\): an input named above is missing or invalid; nothing was sent, and the draft stays in ${RUN}" \
+    "${CASE_DIR}/stdout.log"
+[ -s "${RUN}/email-draft.html" ] || fail "the draft was not kept"; ok
 
 # =============================================================================
 # 22. Settings are checked before anything runs: a numeric setting that is not

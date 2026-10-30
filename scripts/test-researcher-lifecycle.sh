@@ -211,6 +211,14 @@ if [ "${MOCK_STRIP_FIELDS_AT_STEP:-}" = "$step" ]; then
     mv "${state_file}.stripped" "$state_file"
 fi
 
+if [ "${MOCK_BREAK_STATE_AT_STEP:-}" = "$step" ]; then
+    # A model rewrite that loses the frontmatter's closing "---": the wrapper
+    # can no longer write any field.
+    sed -i '1!{/^---$/d}' "$state_file"
+    echo "Ending step ${step} with a broken state.md."
+    exit 0
+fi
+
 new_status="mock_step_complete"
 [ "$step" = "11" ] && new_status="complete"
 sed -e "s/^current_step:.*/current_step: ${step}/" -e "s/^status:.*/status: ${new_status}/" \
@@ -889,6 +897,15 @@ RUN=$(run_dir_for_issue 800)
 [ -n "$RUN" ] || fail "issue_number not restored"; ok
 assert_eq "$(field run_id "$RUN")" "$(basename "$RUN")" "run_id restored"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/800-*.md)"
+
+# 18b. A state.md the wrapper cannot write stops the run (exit 1) and says so;
+#      nothing writes a field anywhere else in the file instead.
+new_case broken-state
+write_run 2026-01-21-broken 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_BREAK_STATE_AT_STEP=11 -- "Ignored topic"
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: could not write status: failed to .*2026-01-21-broken/state.md" "${CASE_DIR}/stdout.log"
+assert_no_grep "^status: failed" "${OUT}/2026-01-21-broken/state.md"
 
 # =============================================================================
 # 19. The secret scan refuses a staged file (2026-10-28: a cite key read as an

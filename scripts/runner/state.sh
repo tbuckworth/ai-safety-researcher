@@ -124,9 +124,16 @@ write_new_state() {
         && upsert_frontmatter_field decisions '[]'
 }
 
+set_state_field() {
+    # set_state_field KEY VALUE: writes the frontmatter field KEY (VALUE as it
+    # goes into YAML), or stops the run with exit 1: resuming depends on what
+    # the wrapper records, so a run that cannot record it must not go on.
+    if ! upsert_frontmatter_field "$1" "$2"; then
+        log "ERROR: could not write ${1}: ${2} to ${RUN_DIR}/state.md (its frontmatter is missing or unclosed, or the disk is full). Stopping."
+        exit 1
+    fi
+}
+
 set_status() {
-    # Frontmatter only: a bare `sed s/^status:/` also rewrote any body line
-    # that happened to start with "status:".
-    upsert_frontmatter_field "status" "$1" \
-        || sed -i.bak "s/^status:.*/status: $1/" "${RUN_DIR}/state.md"
+    set_state_field status "$1"
 }

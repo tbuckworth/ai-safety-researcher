@@ -301,6 +301,16 @@ never fails a step.
 - `logs/email-*.log` — email sending output
 - `output/<run-id>/state.md` — workflow state (authoritative)
 
+## Exit codes
+
+| Exit | Meaning |
+|------|---------|
+| 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
+| 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written) |
+| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
+| 3 | Paused (provider limit or guard); resumable, nothing published |
+| 4 | Finished without a usable result; the outcome table above says which |
+
 ## Troubleshooting
 
 **Run stuck (state not advancing)**:

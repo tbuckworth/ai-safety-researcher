@@ -48,7 +48,7 @@ pause_for_guard() {
     local reason="${1#!}"
     reason="${reason# }"
     log "Guard: ${reason}${2:+ ($2)}"
-    upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$reason")" || true
+    set_state_field last_pause_reason "$(yaml_quote "$reason")"
 }
 
 guard_holds_run() {

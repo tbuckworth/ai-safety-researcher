@@ -395,7 +395,7 @@ fi
 RUN_DIR_OWNER=$(state_field "${RUN_DIR}/state.md" owner)
 [ -n "$RUN_DIR_OWNER" ] || RUN_DIR_OWNER="$RUN_OWNER"
 if [ -n "$RUN_DIR_OWNER" ]; then
-    upsert_frontmatter_field "owner" "$RUN_DIR_OWNER" || true
+    set_state_field owner "$RUN_DIR_OWNER"
 fi
 
 # Main step loop
@@ -418,7 +418,7 @@ while true; do
     ELAPSED=$(( $(date +%s) - START_TIME ))
     if [ "$ELAPSED" -gt "$TIMEOUT_SECONDS" ]; then
         TIMED_OUT=true
-        upsert_frontmatter_field "timed_out" "true" || true
+        set_state_field timed_out true
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
         STEP_RC=0
         if [ "$CURRENT_STEP" -ge "$FAST_TRACK_MIN_STEP" ]; then
@@ -427,7 +427,7 @@ while true; do
             log "Skipping the results audit and compiling the report from what exists."
             # current_step too, so a pause inside the report resumes at the report
             # rather than re-running the remaining steps and the audit.
-            upsert_frontmatter_field "current_step" "$AUDIT_STEP" || true
+            set_state_field current_step "$AUDIT_STEP"
             set_status audit_complete
             run_step "$REPORT_STEP" || STEP_RC=$?
         fi

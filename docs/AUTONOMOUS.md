@@ -248,8 +248,9 @@ result plus process lessons — after the paper (Step 11). Step 11 also writes t
 research line's own `knowledge/` directory into the repo, which a follow-up run
 clones into `prior/knowledge/` and extends.
 
-Every knowledge-base action is skipped silently when there is no knowledge base,
-and a failed one is logged and stepped past. It never fails a step.
+Every knowledge-base action is skipped silently when there is no knowledge base;
+a failed one is recorded in `state.md` and reported in the results email. It
+never fails a step.
 
 ## Safety Constraints
 

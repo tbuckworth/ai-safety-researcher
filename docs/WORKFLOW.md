@@ -450,11 +450,11 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
    reader of the paper, and written for every outcome. The results email and
    `/researcher-continue` both read it.
 
-7. **Ingest into the knowledge bases** — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md).
+7. **Ingest into the knowledge bases** (see [Knowledge Bases](#knowledge-bases)).
    Global: thread page, the result (including a null) into concept pages, and what
    the *process* learned into `lessons/`. Repo: write `knowledge/`, extending
-   `prior/knowledge/` on a follow-up rather than restarting it. Non-blocking — a
-   failed ingest is logged, never fatal to a completed run.
+   `prior/knowledge/` on a follow-up rather than restarting it. A failed ingest is
+   recorded in `state.md`, never fatal to a completed run.
 
 ---
 
@@ -481,6 +481,42 @@ Prefer free re-analysis, then a cheap run, then future work. The cap is part of
 the rubric: "just run 20 more" when the budget is spent is future work, not a
 fix. Fix what is cheaply fixable now and defer the rest precisely; never turn a
 fixable flaw into a bare "limitation".
+
+---
+
+## Knowledge Bases
+
+Two optional knowledge bases let research compound across runs; see
+[`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) for their layout and setup.
+
+- **Global wiki**: the path in `knowledge_base:` in `state.md` (`none` when the
+  run has none). Literature, entities, concepts, and `lessons/`: what the
+  research process itself has learned.
+- **Per-repo**: `<run-dir>/knowledge/`, published with the research line's repo
+  so a follow-up run can resume without re-deriving.
+
+All knowledge-base work goes through the `researcher:knowledge` agent
+(`agents/knowledge.md`, whose Input section lists what to pass it), at these
+points and no others:
+
+| Step | Operation | Scope | Purpose |
+|------|-----------|-------|---------|
+| 2, before searching | query | global | Aim searches at the gaps: writes `literature/kb-prior.md` for the search planner |
+| 2, after synthesis | ingest | global | File the new sources |
+| 3 | query (the novelty analyst reads `literature/kb-prior.md`) | global | Novelty against accumulated knowledge: prior runs count against novelty exactly as published work does |
+| 6 | query | global | Read `lessons/` before committing to a design: writes `challenge/kb-lessons.md` for the challenge agents |
+| 11 | ingest | both | File the outcome, the process lessons, and the repo KB |
+
+When `knowledge_base:` is `none`, skip every global action silently apart from
+one log line saying the run has no knowledge base, and do not create a wiki
+mid-run; the Step 11 ingest still writes the repo KB. A knowledge-base action
+never blocks the workflow, but a failed one is recorded: if the agent errors,
+returns nothing, or reports the configured wiki missing, write
+`kb_<operation>_step<N>: "failed (<reason>)"` into `state.md` (for example
+`kb_ingest_step11`) and carry on with the step. The results email reports it.
+
+In interactive mode, ask the user before writing to the global wiki: it is
+shared by every project, and they may want to see the diff first.
 
 ---
 

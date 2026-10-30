@@ -33,6 +33,7 @@ The run directory is: **{{argument}}**
 2. **Read artifacts** from the run directory:
    - `briefing.md` — concise run summary (primary source — has topic, motivation, results, surprises)
    - `state.md` — run status, topic, clarifications (especially the Q&A pairs which explain scope and motivation)
+   - `kb_<operation>_step<N>: "failed (<reason>)"` fields in `state.md`: each records a knowledge-base action that failed. For each one, add a line above the footer saying which action failed and why.
    - `novelty-assessment.md` — novelty verdict and closest existing work
    - `experiments/*/results.md` — individual experiment results
    - `paper/sections/abstract.tex` — paper abstract (if exists)

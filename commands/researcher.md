@@ -61,6 +61,8 @@ Do this yourself — no agent needed.
 
 ## Step 2: Research the Literature
 
+0. **Knowledge bases** (the Step 2 rows of WORKFLOW.md's Knowledge Bases table): query the global wiki into `literature/kb-prior.md` and tell the search planner to aim at what it lists as not covered or contested; after synthesis, ingest the new sources.
+
 1. **Spawn search-planner agent**:
    ```
    Task(subagent_type="researcher:search-planner", prompt="""
@@ -110,6 +112,7 @@ Do this yourself — no agent needed.
    Write output to: output/<run-id>/novelty-assessment.md
    """)
    ```
+   If `literature/kb-prior.md` exists (the Step 3 row of WORKFLOW.md's Knowledge Bases table), add to the prompt that prior work it records counts against novelty exactly as published work does.
 
 2. Read the novelty assessment. Based on the verdict:
    - **NOVEL**: Proceed to Step 4.
@@ -177,6 +180,7 @@ This step runs three **independent** adversarial review passes before committing
    ```bash
    mkdir -p output/<run-id>/challenge/
    ```
+   Then run the Step 6 lessons query from WORKFLOW.md's Knowledge Bases table into `challenge/kb-lessons.md`, and add that file to each challenge agent's inputs as a record of failures that have actually happened.
 
 2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```
@@ -365,37 +369,9 @@ Before anything is written up, an **independent auditor red-teams the results**.
    following the rules in its header; a negative result gets one too. This is
    what `/researcher-continue` reads.
 
-4. **Ingest the run into the knowledge bases** — see Knowledge Bases below.
+4. **Ingest the run into the knowledge bases** (the Step 11 row of WORKFLOW.md's Knowledge Bases table).
 
 5. Update `state.md`: `current_step: 11, status: complete`.
-
----
-
-## Knowledge Bases
-
-Research compounds through two optional knowledge bases. A run without them
-behaves identically — **never block the workflow on a knowledge-base action.**
-
-- **Global wiki** — `$RESEARCHER_KB_DIR` (default `~/pyg/research-wiki`), if it
-  exists and contains `KB-SCHEMA.md`. Literature plus `lessons/`: what the
-  research process itself has learned. Bootstrap with
-  `${CLAUDE_PLUGIN_ROOT}/scripts/kb-init.sh`.
-- **Per-repo** — `output/<run-id>/knowledge/`, published with the research line's
-  repo so later work can resume without re-deriving.
-
-Dispatch the `researcher:knowledge` agent (`${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md`)
-at these points, passing the operation, scope, KB paths, and subject:
-
-| Step | Operation | Purpose |
-|------|-----------|---------|
-| 2, before searching | query, global | Don't re-search what the wiki holds — aim searches at the gaps |
-| 2, after synthesis | ingest, global | File the new sources |
-| 3 | query, global | Novelty against accumulated knowledge; prior runs count against novelty too |
-| 6 | query, global | Read `lessons/` before committing to a design |
-| 11 | ingest, both | File the outcome, the process lessons, and the repo KB |
-
-Ask the user before writing to the global wiki in interactive mode — it is shared
-state across every project, and they may want to see the diff first.
 
 ---
 

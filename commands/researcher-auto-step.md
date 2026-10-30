@@ -67,34 +67,9 @@ future-work by the Limitation Triage rubric in WORKFLOW.md.
 
 ## Shared: Knowledge Bases
 
-Research compounds across runs through two knowledge bases. Both are **optional
-accelerants, never dependencies** — a run with neither must execute identically.
-
-- **Global wiki** — the path in `knowledge_base:` in `state.md`. Spans every
-  research line: literature, entities, concepts, and `lessons/` (what the
-  research *process* has learned — common failures, strawman constructs, real
-  compute costs, tooling traps). If `knowledge_base:` is `none` or the path has
-  no `KB-SCHEMA.md`, **skip every knowledge-base action in this document
-  silently** and log one line saying the run has no knowledge base. Do not
-  create one mid-run.
-- **Per-repo knowledge base** — `<run-dir>/knowledge/`, published with this
-  research line's repo so a follow-up run can resume without re-deriving.
-
-All knowledge-base work goes through the `researcher:knowledge` leaf agent, at
-these points and no others:
-
-| Step | Operation | Purpose |
-|------|-----------|---------|
-| 2 (before searching) | query, global | Don't re-search what the wiki already holds |
-| 2 (after synthesis) | ingest, global | File the new sources |
-| 3 | query, global | Novelty against accumulated knowledge, not just this run's search |
-| 6 | query, global | Read `lessons/` before committing to a design |
-| 11 | ingest, both | File the outcome, the process lessons, and the repo KB |
-
-**A knowledge-base step never blocks the workflow.** If the agent errors, returns
-nothing, or reports the KB is absent, log it and continue to the next step. A
-stale wiki costs a little duplicated search; a workflow that halts because a wiki
-is missing costs the whole run.
+Steps 2, 3, 6 and 11 use the knowledge bases as the Knowledge Bases section of
+WORKFLOW.md says: its table lists the touch points, and it says what to do when
+`knowledge_base:` in `state.md` is `none` and when a knowledge-base action fails.
 
 ---
 
@@ -304,8 +279,8 @@ If `state.md` contains `is_followup: true`:
    index.md, and append to log.md.
    """)
    ```
-   If this errors or reports no knowledge base, log one line and continue — a
-   failed ingest must never fail Step 2.
+   If the agent fails, record `kb_ingest_step2: "failed (<reason>)"` in
+   `state.md` and continue.
 
 7. Update `state.md`: `current_step: 2, status: research_complete`.
 
@@ -782,8 +757,9 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 6. **Ingest the run into both knowledge bases.** This is the step that makes the
    next run cheaper and the one after that cheaper still — including, and
-   especially, when this run produced a negative result or fell over. Skip the
-   global half silently if `knowledge_base:` is `none`; always do the repo half.
+   especially, when this run produced a negative result or fell over. When
+   `knowledge_base:` is `none`, dispatch it with `Scope: repo` and skip the
+   global half silently.
 
    ```
    Task(subagent_type="researcher:knowledge", prompt="""
@@ -814,9 +790,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
    """)
    ```
 
-   If this errors, log it and continue — the paper is already written and a
-   failed ingest must not fail a completed run. Note in `state.md` whether the
-   ingest succeeded so a later `/researcher-continue` can retry it.
+   If the agent fails, record `kb_ingest_step11: "failed (<reason>)"` in
+   `state.md` and continue: the paper is already written.
 
 7. Update `state.md`: `current_step: 11, status: complete`.
 

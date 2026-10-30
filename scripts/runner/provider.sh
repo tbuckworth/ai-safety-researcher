@@ -53,24 +53,25 @@ strip_frontmatter() {
     ' "$1"
 }
 
+# render_command FILE ARGUMENT: the command file FILE as a prompt, with its
+# frontmatter stripped, {{argument}} replaced by ARGUMENT and
+# ${CLAUDE_PLUGIN_ROOT} by the plugin root.
+render_command() {
+    strip_frontmatter "$1" | sed "s|{{argument}}|$2|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
 build_step_prompt() {
     local step="$1"
-    local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
-    local cmd_body
-    cmd_body=$(strip_frontmatter "$cmd_file")
     build_runtime_header
     if [ "$BACKEND" = "codex" ]; then
         build_codex_preamble
     fi
-    echo "$cmd_body" | sed "s|{{argument}}|${step} ${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+    render_command "${REPO_DIR}/commands/researcher-auto-step.md" "${step} ${RUN_DIR}"
 }
 
 build_email_prompt() {
     # $1: "send" (this session sends it with the helper, and handles the review)
     # or "compose" (write the files only; the wrapper sends them).
-    local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
-    local cmd_body
-    cmd_body=$(strip_frontmatter "$cmd_file")
     build_runtime_header
     cat <<EOF
 
@@ -126,17 +127,23 @@ The full machine-readable outcome is in ${RUN_DIR}/run-outcome.json. If the
 final outcome is anything other than \`complete\`, the email's first line must
 say so plainly (e.g. "This run finished but its results are NOT on GitHub").
 EOF
-    echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+    render_command "${REPO_DIR}/commands/researcher-auto-email.md" "$RUN_DIR"
+}
+
+# invoke_claude BIN MODEL TOOLS [ARG...]: runs the Claude CLI BIN headless on the
+# prompt on stdin, without permission prompts, with model MODEL, only the tools
+# TOOLS (comma-separated), and any further ARGs.
+invoke_claude() {
+    local bin="$1" model="$2" tools="$3"
+    shift 3
+    "$bin" --print --dangerously-skip-permissions --model "$model" "$@" --allowedTools "$tools"
 }
 
 invoke_provider() {
     # One branch per backend in researcher_lib.py BACKENDS.
     case "$BACKEND" in
         claude)
-            "$PROVIDER_BIN" --print \
-                --dangerously-skip-permissions \
-                --model "$MODEL" \
-                --allowedTools "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
+            invoke_claude "$PROVIDER_BIN" "$MODEL" "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
             ;;
         codex)
             local codex_args=(
@@ -185,10 +192,7 @@ run_email_provider() {
 run_email_claude() {
     # A Claude session with a known id writes and sends the email, so Titus's
     # reply resumes this session (the mailroom routes by session id).
-    build_email_prompt send | "$EMAIL_CLAUDE_BIN" --print \
-        --dangerously-skip-permissions \
-        --model "$EMAIL_CLAUDE_MODEL" \
+    build_email_prompt send | invoke_claude "$EMAIL_CLAUDE_BIN" "$EMAIL_CLAUDE_MODEL" "Read,Write,Glob,Grep,Bash" \
         --session-id "$EMAIL_SESSION" \
-        --name "$(case "${ISSUE_NUMBER:-none}" in none) echo researcher ;; *) echo "researcher #${ISSUE_NUMBER}" ;; esac)" \
-        --allowedTools "Read,Write,Glob,Grep,Bash"
+        --name "$(case "${ISSUE_NUMBER:-none}" in none) echo researcher ;; *) echo "researcher #${ISSUE_NUMBER}" ;; esac)"
 }

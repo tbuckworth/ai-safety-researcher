@@ -160,6 +160,7 @@ case "$BACKEND" in
         ;;
 esac
 
+RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
 # The workflow statuses that end a run (is_terminal_status).
@@ -328,6 +329,7 @@ if [ "$BACKEND" = "codex" ]; then
     esac
 fi
 
+# The same list as researcher_lib.py's REPO_VISIBILITIES.
 case "$REPO_VISIBILITY" in
     private|internal|public) ;;
     *)
@@ -497,7 +499,6 @@ while true; do
     else
         AUDIT_ROUNDS=0
         NEXT_STEP=$((CURRENT_STEP + 1))
-        [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
     fi
 
     if [ "$NEXT_STEP" -gt "$LAST_STEP" ]; then

@@ -92,22 +92,22 @@ select_issue() {
             exit 1
         fi
         rm -f "$gh_err"
-        picked=$(echo "$target" | jq -c '
+        picked=$(echo "$target" | jq -c --arg queue "$RESEARCH_IDEAS_LABEL" '
             select(.state == "OPEN")
-            | select(.labels | map(.name) | index("list:research-ideas")) // empty')
+            | select(.labels | map(.name) | index($queue)) // empty')
         if [ -n "$picked" ]; then
             # Refuses an issue being researched right now or with a run already
             # in progress here; allows a deliberate re-run of a finished one.
             picked=$(echo "$picked" | python3 "$LIB" pick --explicit --output-dir "$OUTPUT_DIR")
         fi
         if [ -z "$picked" ] || [ "$picked" = "null" ]; then
-            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed list:research-ideas issue."
+            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed ${RESEARCH_IDEAS_LABEL} issue."
             exit 1
         fi
     else
     local issues allow_rerun_flag=()
     issues=$(gh issue list --repo "$TASKS_REPO" \
-        --label "list:research-ideas" \
+        --label "$RESEARCH_IDEAS_LABEL" \
         --state open \
         --json number,title,body,labels \
         --limit 50)

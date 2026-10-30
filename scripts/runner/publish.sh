@@ -422,7 +422,7 @@ publish_run() {
     # A stale link from an earlier attempt must never outlive a failed one.
     rm -f "${RUN_DIR}/.repo_url"
     check_free_space || return 0
-    if is_followup_run; then
+    if continues_prior_repo; then
         publish_followup
     else
         publish_new_repo

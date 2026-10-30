@@ -1183,4 +1183,62 @@ send_helper
 assert_eq "$RC" "0" "exit code (fixed)"
 assert_grep "^--subject \[UNPUBLISHED\] \[Auto-Research\] Helper test \| from=helper-session \| images=main.png " "${CASE_DIR}/email.log"
 
+# =============================================================================
+# 26. A follow-up runs only with its prior run's artifacts. A prior repo that
+#     cannot be cloned stops it, and its label is released for a later retry; a
+#     follow-up that names no repo copies them from the prior run's directory
+#     here; one with neither stops too.
+# =============================================================================
+no_run_dirs() {
+    [ -z "$(ls -A "$OUT" | grep -v -e '^logs$' -e '^\.tmp$' || true)" ] || fail "a run directory was left: $(ls "$OUT")"
+    [ -z "$(ls -A "${OUT}/.tmp" 2>/dev/null)" ] || fail "a prior clone was left"
+    ok
+}
+new_case followup-clone-fails
+MISSING_BODY=$'Try again.\n\n---\nParent: #396 | Repo: https://github.com/tbuckworth/research-missing | Run: missing-run'
+set_issues <(issue_json 403 "[Follow-up] Try again" "list:research-ideas,type:follow-up" "$MISSING_BODY")
+run_researcher
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: could not clone https://github.com/tbuckworth/research-missing" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 403 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+assert_grep "Released issue #403" "${CASE_DIR}/stdout.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+no_run_dirs
+
+new_case followup-local-prior
+write_run 2026-01-25-local-prior 11 complete autonomous 395
+printf '## Salad\n' > "${OUT}/2026-01-25-local-prior/method-spec.md"
+mkdir -p "${OUT}/2026-01-25-local-prior/experiments/exp-001"
+printf '## Verdict: PASS\n' > "${OUT}/2026-01-25-local-prior/experiments/exp-001/results.md"
+LOCAL_BODY=$'Use the held-out split.\n\n---\nParent: #395 | Repo:  | Run: 2026-01-25-local-prior'
+set_issues <(issue_json 404 "[Follow-up] Use the held-out split" "list:research-ideas,type:follow-up" "$LOCAL_BODY")
+run_researcher
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 404)
+case "$RUN" in *-followup-use-the-held-out-split) ok ;; *) fail "not a follow-up run directory: ${RUN}" ;; esac
+for path in state.md method-spec.md experiments/exp-001/results.md; do
+    [ -f "${RUN}/prior/${path}" ] || fail "prior ${path} not copied from the local run"
+    ok
+done
+assert_eq "$(field is_followup "$RUN")" "true" "is_followup"
+assert_eq "$(field prior_run_id "$RUN")" "2026-01-25-local-prior" "prior_run_id"
+assert_eq "$(field parent_issue "$RUN")" "395" "parent_issue"
+assert_grep "Use the held-out split" "${RUN}/followup-context.md"
+# Published as a repo of its own, without prior/.
+assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-use-the-held-out-split" ".repo_url"
+if git --git-dir="${REMOTES}/tbuckworth/research-use-the-held-out-split.git" ls-tree -r --name-only main | grep -q '^prior/'; then
+    fail "prior/ was published"
+fi; ok
+assert_grep "^Follow-up #404 finished" "$(ls "${CASE_DIR}"/comments/395-*.md)"
+
+new_case followup-no-prior
+NONE_BODY=$'Start over.\n\n---\nParent: #394 | Repo:  | Run: never-ran-here'
+set_issues <(issue_json 405 "[Follow-up] Start over" "list:research-ideas,type:follow-up" "$NONE_BODY")
+run_researcher
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: follow-up #405 names no prior repo, and its prior run 'never-ran-here' has no directory" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 405 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+no_run_dirs
+
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

@@ -388,7 +388,7 @@ since a redesign would answer a question that was never actually asked.
 1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas`, `type:follow-up` and the parent's `importance:` label (`importance:medium` when the parent has none), since agent-spare only starts ideas rated high or medium.
 
 2. **Autonomous pickup**: The cron wrapper picks the follow-up issue like any other research idea. When it detects the `type:follow-up` label, it:
-   - Clones the prior repo (on the output volume, never `/tmp`) to copy key artifacts into a `prior/` subdirectory
+   - Copies key artifacts into a `prior/` subdirectory from a clone of the prior repo (on the output volume, never `/tmp`), or, when the issue names no repo, from the prior run's directory here (`<output dir>/<Run: id>`). If neither can be read, the run does not start: the runner takes the issue's researching label off, so a later run retries it, and exits 1
    - Creates a `followup-context.md` with the feedback
    - Creates a fresh run directory (not inside the prior repo)
 
@@ -397,7 +397,7 @@ since a redesign would answer a question that was never actually asked.
    - "Redesign the approach" → skips to Step 5 (copies prior literature)
    - "Wrong framing, needs new literature" → runs full workflow from Step 2
 
-4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo, published in place: the branch starts from the branch being continued (the prior repo's default branch, or the `/tree/<branch>` in the issue's `Repo:` link for a follow-up of a follow-up) and the run directory is laid over it (`prior/` excluded), so nothing is copied. **A follow-up is not pushed into a prior repo whose visibility differs from `RESEARCHER_REPO_VISIBILITY`** (e.g. an older public repo while the default is private): the run ends `unpublished` with that reason, so making results public stays a deliberate choice. Both the follow-up issue and the parent issue get the findings comment.
+4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo (a follow-up that names no repo gets a repo of its own), published in place: the branch starts from the branch being continued (the prior repo's default branch, or the `/tree/<branch>` in the issue's `Repo:` link for a follow-up of a follow-up) and the run directory is laid over it (`prior/` excluded), so nothing is copied. **A follow-up is not pushed into a prior repo whose visibility differs from `RESEARCHER_REPO_VISIBILITY`** (e.g. an older public repo while the default is private): the run ends `unpublished` with that reason, so making results public stays a deliberate choice. Both the follow-up issue and the parent issue get the findings comment.
 
 `create-followup-issue.sh` is idempotent: it embeds a follow-up key (a hash of the request) in the issue body and reports an existing issue with the same key instead of filing a second one. `--force` files anyway.
 
@@ -427,7 +427,7 @@ Parent: #42 | Repo: https://github.com/tbuckworth/research-foo | Run: 2026-04-03
 
 ```
 output/<date>-followup-<slug>/
-├── prior/                      # Copied from the prior run's GitHub repo
+├── prior/                      # Copied from the prior run's repo (or its run directory)
 │   ├── state.md
 │   ├── briefing.md
 │   ├── literature/synthesis.md

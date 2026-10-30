@@ -361,12 +361,9 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 2. Once complete, inform the user where to find the paper.
 
-3. **Write `next-steps.md`** — the ranked next-round plan (`## Reflection`,
-   `## Ranked Next Steps` with **Do** / **Tests** / **Needs** / **Kills the idea
-   if** per entry, `## Not Worth Pursuing`). Write it for a negative result too:
-   a dead end's next step is the cheapest experiment that would distinguish "the
-   idea is wrong" from "this test of it was wrong", or a reasoned recommendation
-   to stop. This is what `/researcher-continue` reads.
+3. **Write `next-steps.md`** from `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`,
+   following the rules in its header; a negative result gets one too. This is
+   what `/researcher-continue` reads.
 
 4. **Ingest the run into the knowledge bases** — see Knowledge Bases below.
 

@@ -57,17 +57,11 @@ The run directory is: **{{argument}}**
    Read `state.md` (status, `current_step`, and the decision log), any
    `experiments/*/results.md` that exist, `rethink-rationale.md`,
    `challenge/limitation-triage.md`, and the tail of the run log if one is
-   reachable. Then write `<run-dir>/next-steps.md` in the same format Step 11
-   uses — `# Proposed Next Steps`, `## Reflection`, `## Ranked Next Steps` (2–4
-   entries, each with **Do** / **Tests** / **Needs** / **Kills the idea if**), and
-   `## Not Worth Pursuing`.
-
-   Diagnose honestly in `## Reflection`: distinguish an **orchestration failure**
-   (the workflow broke — a step errored, a provider limit, a job-wait bug; the
-   science is untouched and the next step is to resume) from a **scientific
-   failure** (the hypothesis or the construct didn't survive contact with the
-   data; the next step is a redesign). Naming which one it was is the single most
-   useful sentence in the email when a run falls over.
+   reachable. Then write `<run-dir>/next-steps.md` from
+   `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`, the template Step 11 uses.
+   Its `## Reflection` names whether the failure was an orchestration or a
+   scientific failure (the template defines both); when a run falls over, that is
+   the most useful sentence in the email.
 
    Write the file even if it duplicates what the paper already says — it is the
    artifact `/researcher-continue` reads, and it ships in the repo.

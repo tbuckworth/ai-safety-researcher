@@ -472,15 +472,10 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
 
 5. Present the final paper location to the user.
 
-6. **Write `next-steps.md`** — the canonical next-round plan, written for whoever
-   picks the work up rather than for a reader of the paper. `## Reflection` (what
-   the round established, or what blocked it and whether that blocker is
-   escapable), then 2–4 **ranked** steps, each with **Do** / **Tests** / **Needs**
-   / **Kills the idea if**, then `## Not Worth Pursuing`. Written for a negative
-   result too: a dead end's next step is the cheapest experiment distinguishing
-   "the idea is wrong" from "this test of it was wrong", or a reasoned
-   recommendation to stop. This is what the results email and
-   `/researcher-continue` both read.
+6. **Write `next-steps.md`** from `templates/next-steps.md`: the ranked
+   next-round plan, written for whoever picks the work up rather than for a
+   reader of the paper, and written for every outcome. The results email and
+   `/researcher-continue` both read it.
 
 7. **Ingest into the knowledge bases** — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md).
    Global: thread page, the result (including a null) into concept pages, and what

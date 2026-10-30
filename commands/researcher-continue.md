@@ -31,30 +31,9 @@ the user wants to understand; reach for this when they want to proceed.
 
    If it is missing (an older run, or one that died before the email step), read
    `state.md`, `briefing.md`, `experiments/*/results.md`, `rethink-rationale.md`,
-   and `audit/results-audit.md`, then **write `next-steps.md` yourself** in the
-   format below before continuing. Say that you did.
-
-   ```markdown
-   # Proposed Next Steps: <topic>
-
-   **Run ID**: <run-id>
-   **Outcome**: <one line>
-
-   ## Reflection
-   <what this round established; if it fell short, what blocked it and whether
-    the blocker was orchestration (the workflow broke) or scientific (the idea
-    or the test didn't survive), and whether it is escapable>
-
-   ## Ranked Next Steps
-   ### 1. <title>
-   - **Do**: ...
-   - **Tests**: ...
-   - **Needs**: ...
-   - **Kills the idea if**: ...
-
-   ## Not Worth Pursuing
-   <ruled-out directions, one line each>
-   ```
+   and `audit/results-audit.md`, then **write `next-steps.md` yourself** from
+   `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md` before continuing. Say that
+   you did.
 
 3. **Read `state.md`** for `run_id`, `issue_number`, `compute_profile`, and
    status, and `.repo_url` for the prior repo. A follow-up pushes to the existing

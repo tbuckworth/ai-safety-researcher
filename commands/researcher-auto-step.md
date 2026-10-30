@@ -778,56 +778,12 @@ An independent **results-auditor** red-teams the experiment outputs before write
    <2-3 bullet points on what to investigate next>
    ```
 
-5. **Write `next-steps.md`** — the canonical, machine-readable next-round plan. The
-   paper's Future Work section is written for a reader of the paper; this file is
-   written for whoever (human or agent) picks the work up next, and it is what the
-   results email and `/researcher-continue` both read. Derive it from the
-   future-work rows of both triage tables, the paper's Future Work section, and what
-   the results now make worth testing. Write `<run-dir>/next-steps.md`:
-
-   ```markdown
-   # Proposed Next Steps: <topic>
-
-   **Run ID**: <run-id>
-   **Outcome**: <one line: what this round established, positive, negative, or null>
-
-   ## Reflection
-
-   <2-4 sentences. If the result was negative, null, or the run fell short of its
-   goal: what specifically blocked it — a wrong hypothesis, a construct that
-   couldn't test the claim, a resource ceiling, an implementation defect — and
-   whether that blocker is escapable. Be concrete about which it was. If the
-   result was positive, say what the strongest remaining threat to the claim is.
-   This section is never omitted and never generic.>
-
-   ## Ranked Next Steps
-
-   ### 1. <short imperative title>
-   - **Do**: <the specific experiment or change>
-   - **Tests**: <the hypothesis it would test, and how this round's results motivate it>
-   - **Needs**: <resources: model size, hardware/backend, rough compute/$ and wall-clock, data or human labelling>
-   - **Kills the idea if**: <the outcome that would mean stop pursuing this line>
-
-   ### 2. <...>
-
-   ### 3. <...>
-
-   ## Not Worth Pursuing
-
-   <Directions this round ruled out, with the one-line reason. Prevents a
-   follow-up run from re-treading ground.>
-   ```
-
-   Rules:
-   - **Always write this file**, including for a negative result or a RETHINK
-     pivot. A dead end still has a next step: the cheapest experiment that would
-     distinguish "the idea is wrong" from "this test of it was wrong", or an
-     explicit, reasoned recommendation to abandon the line.
-   - 2–4 ranked steps. Rank by value per unit of resource, not by ambition.
-   - Every step must be executable by a follow-up run under a stated compute
-     profile. No "try more models/datasets" filler.
-   - If a step needs resources beyond this run's `compute_profile`, say so
-     explicitly in **Needs** rather than silently proposing something unrunnable.
+5. **Write `next-steps.md`** in the run directory from
+   `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`, following the rules in its
+   header. The paper's Future Work section is written for a reader of the paper;
+   this file is written for whoever picks the work up next. Derive it from the
+   future-work rows of both triage tables, the paper's Future Work section, and
+   what the results now make worth testing.
 
 6. **Ingest the run into both knowledge bases.** This is the step that makes the
    next run cheaper and the one after that cheaper still — including, and

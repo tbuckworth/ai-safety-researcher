@@ -180,7 +180,7 @@ This step runs three **independent** adversarial review passes before committing
    ```bash
    mkdir -p output/<run-id>/challenge/
    ```
-   Then run the Step 6 lessons query from WORKFLOW.md's Knowledge Bases table into `challenge/kb-lessons.md`, and add that file to each challenge agent's inputs as a record of failures that have actually happened.
+   Then run the Step 6 lessons query from WORKFLOW.md's Knowledge Bases table into `challenge/kb-lessons.md`. If `challenge/kb-lessons.md` exists, add it to each challenge agent's inputs as a record of failures that have actually happened.
 
 2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```

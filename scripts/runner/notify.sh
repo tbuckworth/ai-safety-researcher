@@ -12,7 +12,8 @@ send_email() {
     # a draft it wrote but did not send is sent as that session. Only when the
     # Claude CLI is not installed does a Codex run write it with Codex, sent
     # --unrouted. Returns non-zero, after logging why, when nothing was sent (a
-    # failed email session counts, whatever it wrote); any draft is kept.
+    # failed email writer of either kind counts, whatever it wrote); any draft
+    # is kept.
     local email_log compose_status send_status
     email_log="${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
     cd "$REPO_DIR"

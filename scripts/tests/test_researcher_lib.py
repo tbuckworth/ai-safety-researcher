@@ -122,6 +122,9 @@ class BackendLabelTest(unittest.TestCase):
     def test_research_ideas_label_cli(self):
         self.assertEqual(run_lib("research-ideas-label").stdout, f"{lib.RESEARCH_IDEAS_LABEL}\n")
 
+    def test_repo_visibilities_cli(self):
+        self.assertEqual(run_lib("repo-visibilities").stdout.splitlines(), list(lib.REPO_VISIBILITIES))
+
     def test_claimed(self):
         free = {"state": "OPEN", "labels": [{"name": "list:research-ideas"}]}
         processed = {"state": "OPEN", "labels": [{"name": "status:claude-processed"}]}

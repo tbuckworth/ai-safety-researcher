@@ -469,7 +469,8 @@ step). So:
   wrapper as that session; a session that fails (a usage limit too) sends
   nothing, and the run exits 5. Only if the Claude CLI is not installed does a
   Codex run write the email with Codex, and the wrapper sends it
-  `--unrouted`: not reviewed, and replies go to the orchestrator.
+  `--unrouted`: not reviewed, and replies go to the orchestrator. If that Codex
+  writer fails, nothing is sent either, and the run exits 5.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
   is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is
   gone: the agents' account cannot label Titus's mailbox.

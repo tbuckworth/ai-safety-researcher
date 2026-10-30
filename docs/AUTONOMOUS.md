@@ -139,7 +139,7 @@ required.
 | `RESEARCHER_OUTPUT_DIR` | Override `/media/titus/big/researcher-output` |
 | `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues (outcome `complete-local`) |
 | `RESEARCHER_REPO_VISIBILITY` | Visibility of new run repos: `private` (default), `internal`, or `public` |
-| `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024) and reports why |
+| `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024), or when `df` cannot measure it, and reports why |
 | `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (default 50; GitHub rejects >100 MB, failing the whole push) |
 | `RESEARCHER_ALLOW_RERUN=true` | Let the queue pick an issue that already has a run directory here (default: skip it; `RESEARCHER_ISSUE=<n>` also re-runs one deliberately) |
 | `RESEARCHER_RESUME_MAX_AGE_DAYS` | An unfinished autonomous run untouched for longer is not auto-resumed (default 14; 0 disables). Interactive runs (`mode: interactive`) are never resumed |
@@ -151,6 +151,7 @@ required.
 | `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
 | `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (default `sonnet`; a Claude run uses its own model) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
+| `RESEARCHER_SKIP_GPU_CHECK=true` | Skip the start-up GPU check, which exits 0 when a process uses over 500 MiB of GPU memory and exits 1 when `nvidia-smi` fails or reports a non-numeric value |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
 | `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). While it prints anything, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
 | `RESEARCHER_RUN_DIR` | Resume exactly this run directory, or exit 2 if it is finished, missing or interactive; never another unfinished run or the queue |
@@ -292,7 +293,7 @@ never fails a step.
 
   A timeout no longer overwrites a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
 - **Issue comments**: on completion the issue gets a findings comment: the outcome and its caveats, repo / paper / next-steps links (or the local path when nothing was published), the per-experiment verdict table, the audit disposition, and the ranked next steps. A follow-up's parent issue gets the same comment.
-- **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming.
+- **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming; if that read fails, the runner exits 1 without running the issue.
 
 ## Logs
 
@@ -306,7 +307,7 @@ never fails a step.
 | Exit | Meaning |
 |------|---------|
 | 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
-| 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written) |
+| 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written, the picked issue could not be re-read before claiming it, `nvidia-smi` failed) |
 | 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not an integer, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |

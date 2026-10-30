@@ -129,14 +129,14 @@ select_issue() {
 claim_issue() {
     # Labels issue $1 as being researched by this backend. The issue is re-read
     # first: the listing may be minutes old, and another runner (the other
-    # backend, another machine) may have claimed it since. If it cannot be
-    # re-read, it counts as claimed: skipping a night is cheap, a duplicate run
-    # is not. Exits 0 without claiming when it is taken.
+    # backend, another machine) may have claimed it since. Exits 0 without
+    # claiming when it is taken, and 1 when it cannot be re-read (gh's error is
+    # in the log): it is never run unchecked.
     local number="$1" fresh reason explicit=()
     [ -z "${RESEARCHER_ISSUE:-}" ] || explicit=(--explicit)
-    if ! fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state 2>/dev/null); then
-        log "Issue #${number} could not be re-read before claiming it. Exiting."
-        exit 0
+    if ! fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state); then
+        log "ERROR: issue #${number} could not be re-read before claiming it (gh's error is above). Exiting without running it."
+        exit 1
     fi
     reason=$(printf '%s' "$fresh" | python3 "$LIB" claimed ${explicit[@]+"${explicit[@]}"})
     if [ -n "$reason" ]; then

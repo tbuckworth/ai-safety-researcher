@@ -88,6 +88,10 @@ case "${1:-} ${2:-}" in
         echo "https://github.com/$3"
         ;;
     "repo view")
+        if [ "${MOCK_GH_REPO_VIEW_FAIL:-false}" = "true" ]; then
+            echo "HTTP 502: mock repo outage" >&2
+            exit 1
+        fi
         bare="${MOCK_REMOTES}/$3.git"
         [ -d "$bare" ] || { echo "GraphQL: Could not resolve to a Repository" >&2; exit 1; }
         if [ "$json" = "visibility" ]; then
@@ -102,6 +106,10 @@ case "${1:-} ${2:-}" in
         fi
         ;;
     "issue view")
+        if [ "${MOCK_GH_ISSUE_VIEW_FAIL:-false}" = "true" ]; then
+            echo "HTTP 502: mock issue outage" >&2
+            exit 1
+        fi
         obj=$(jq --argjson n "$3" '.[] | select(.number == $n)' "$MOCK_ISSUES")
         [ -n "$obj" ] || { echo "GraphQL: Could not resolve to an issue" >&2; exit 1; }
         if [ -n "$jq_expr" ]; then echo "$obj" | jq -r "$jq_expr"; else echo "$obj"; fi
@@ -976,5 +984,56 @@ run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS=
 assert_eq "$RC" "2" "exit code (unknown host)"
 assert_grep "host 'some-laptop' is not in the table; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+
+# =============================================================================
+# 23. A check that cannot run is an error, not a pass: the re-read of an issue
+#     before claiming it, nvidia-smi, df, and the read of a candidate repo.
+# =============================================================================
+new_case claim-reread-fails
+set_issues <(issue_json 1001 "Claim reread" "list:research-ideas")
+run_researcher MOCK_GH_ISSUE_VIEW_FAIL=true
+assert_eq "$RC" "1" "exit code"
+assert_grep "HTTP 502: mock issue outage" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: issue #1001 could not be re-read before claiming it" "${CASE_DIR}/stdout.log"
+assert_no_grep "^issue edit" "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+
+new_case gpu-check-fails
+mkdir -p "${CASE_DIR}/bin"
+cat > "${CASE_DIR}/bin/nvidia-smi" <<'MOCK_SMI'
+#!/usr/bin/env bash
+case "${MOCK_SMI:-}" in
+    fail) echo "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver." >&2; exit 9 ;;
+    na) echo "4242, [N/A]" ;;
+esac
+MOCK_SMI
+chmod +x "${CASE_DIR}/bin/nvidia-smi"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_SKIP_GPU_CHECK=false MOCK_SMI=fail -- "Ignored topic"
+assert_eq "$RC" "1" "exit code (nvidia-smi failed)"
+assert_grep "couldn't communicate with the NVIDIA driver" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: nvidia-smi failed" "${CASE_DIR}/stdout.log"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_SKIP_GPU_CHECK=false MOCK_SMI=na -- "Ignored topic"
+assert_eq "$RC" "1" "exit code (unreadable memory)"
+assert_grep "ERROR: nvidia-smi reported GPU memory use '\[N/A\]'" "${CASE_DIR}/stdout.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+
+new_case df-fails
+mkdir -p "${CASE_DIR}/bin"
+printf '#!/usr/bin/env bash\necho "df: mock failure" >&2\nexit 1\n' > "${CASE_DIR}/bin/df"
+chmod +x "${CASE_DIR}/bin/df"
+set_issues <(issue_json 1002 "Disk space unknown" "list:research-ideas")
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}"
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 1002)
+jq -e '.reasons | any(test("could not measure the free space"))' "${RUN}/run-outcome.json" > /dev/null || fail "df reason missing"; ok
+assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
+
+new_case repo-view-fails
+set_issues <(issue_json 1003 "Repo unreadable" "list:research-ideas")
+run_researcher MOCK_GH_REPO_VIEW_FAIL=true
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 1003)
+jq -e '.reasons | any(test("HTTP 502: mock repo outage"))' "${RUN}/run-outcome.json" > /dev/null || fail "gh's reason missing"; ok
+assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

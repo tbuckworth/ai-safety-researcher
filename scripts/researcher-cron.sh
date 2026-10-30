@@ -338,12 +338,21 @@ esac
 
 log "Agent backend: ${BACKEND}; model: ${MODEL}; compute profile: ${COMPUTE_PROFILE_NAME}; knowledge base: ${KB_DIR:-none}; owner: ${RUN_OWNER:-none}; pinned run: ${PIN_RUN_DIR:-none}"
 
-# Check if GPU is busy (>500MB VRAM used by any single process = busy)
+# Check if GPU is busy (>500MB VRAM used by any single process = busy). A GPU
+# whose use cannot be read is not taken to be idle: the runner stops (exit 1).
 if ! is_true "$SKIP_GPU_CHECK" && command -v nvidia-smi &>/dev/null; then
-    GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null || true)
+    if ! GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits); then
+        log "ERROR: nvidia-smi failed (its error is above), so whether the GPU is busy is unknown. Set RESEARCHER_SKIP_GPU_CHECK=true to run without the check. Exiting."
+        exit 1
+    fi
     if [ -n "$GPU_PROCS" ]; then
-        MAX_MEM=$(echo "$GPU_PROCS" | awk -F', ' '{print $2}' | sort -n | tail -1)
-        if [ "$MAX_MEM" -gt 500 ] 2>/dev/null; then
+        GPU_MEMS=$(printf '%s\n' "$GPU_PROCS" | awk -F', *' '{print $2}')
+        if BAD_MEM=$(printf '%s\n' "$GPU_MEMS" | grep -v -m1 '^[0-9][0-9]*$'); then
+            log "ERROR: nvidia-smi reported GPU memory use '${BAD_MEM}', not a number of MiB, so whether the GPU is busy is unknown. Set RESEARCHER_SKIP_GPU_CHECK=true to run without the check. Exiting."
+            exit 1
+        fi
+        MAX_MEM=$(printf '%s\n' "$GPU_MEMS" | sort -n | tail -1)
+        if [ "$MAX_MEM" -gt 500 ]; then
             log "GPU busy (process using ${MAX_MEM} MiB). Skipping this run."
             exit 0
         fi

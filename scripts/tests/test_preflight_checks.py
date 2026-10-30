@@ -14,6 +14,17 @@ sys.path.insert(0, str(SCRIPTS))
 
 import preflight_checks as pf  # noqa: E402
 
+def trainer_state(losses):
+    """A Hugging Face trainer_state.json: training entries, an eval entry every third step, a closing summary."""
+    log = []
+    for i, loss in enumerate(losses):
+        log.append({"loss": loss, "learning_rate": 1e-4, "step": 10 * i})
+        if i % 3 == 2:
+            log.append({"eval_loss": 2.5, "step": 10 * i})
+    log.append({"train_loss": 2.6, "train_runtime": 100.0, "step": 10 * len(losses)})
+    return {"best_metric": None, "global_step": 10 * len(losses), "log_history": log}
+
+
 FLUENT = [
     "Gradient routing masks gradients during training so that a chosen capability is learned in a designated subnetwork, which can later be ablated.",
     "Sure. The capital of France is Paris, which is also its largest city and its economic centre.",
@@ -72,10 +83,102 @@ class TrainingTest(unittest.TestCase):
         self.assertTrue(any("memorisation" in m for m in report["messages"]))
 
     def test_loss_parsing_from_log(self):
+        logs = {"python dicts": "\n".join(f"{{'loss': {3 - i * 0.1:.2f}, 'step': {i}}}" for i in range(10)),
+                "plain text": "\n".join(f"step {i} | loss={3 - i * 0.1:.2f}" for i in range(10))}
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text in logs.items():
+                with self.subTest(log=name):
+                    log = Path(tmp) / "train.log"
+                    log.write_text(text)
+                    losses, reading = pf.losses_from_file(log)
+                    self.assertEqual(len(losses), 10)
+                    self.assertEqual(reading, {"losses_read_as": "text log", "entries_without_loss": None})
+
+    def write_json(self, tmp, data):
+        path = Path(tmp) / "losses.json"
+        path.write_text(json.dumps(data))
+        return path
+
+    def test_losses_object_is_read_like_other_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            losses, reading = pf.losses_from_file(self.write_json(tmp, {"losses": [3.0 - 0.1 * i for i in range(10)]}))
+        self.assertEqual(len(losses), 10)
+        self.assertEqual(reading, {"losses_read_as": "json", "entries_without_loss": 0})
+
+    def test_null_loss_in_json_counts_as_non_finite(self):
+        rows = [{"loss": 3.0 - 0.1 * i, "step": i} for i in range(10)]
+        rows[6]["loss"] = None
+        with tempfile.TemporaryDirectory() as tmp:
+            losses, _ = pf.losses_from_file(self.write_json(tmp, rows))
+        self.assertEqual(len(losses), 10)
+        self.assertEqual(pf.check_training(losses)["status"], pf.FAIL)
+
+    def test_json_with_no_loss_entry_is_bad_input(self):
+        rows = [{"eval_loss": 2.5, "step": i} for i in range(5)]
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "none of the 5 entries has a 'loss' field"):
+                pf.losses_from_file(self.write_json(tmp, rows))
+
+    def test_trainer_state_reads_training_losses_and_counts_the_rest(self):
+        # Hugging Face trainer_state.json: 10 training entries, 3 eval entries and a closing summary.
+        with tempfile.TemporaryDirectory() as tmp:
+            losses, reading = pf.losses_from_file(
+                self.write_json(tmp, trainer_state([3.0 - 0.1 * i for i in range(10)])))
+        self.assertEqual(losses, [3.0 - 0.1 * i for i in range(10)])
+        self.assertEqual(reading, {"losses_read_as": "json", "entries_without_loss": 4})
+
+    def test_jsonl_log_with_eval_lines(self):
+        lines = []
+        for i in range(10):
+            lines.append({"loss": 3.0 - 0.1 * i, "step": i})
+            if i % 2:
+                lines.append({"eval_loss": 2.5, "step": i})
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "train.jsonl"
+            log.write_text("\n".join(json.dumps(line) for line in lines))
+            losses, reading = pf.losses_from_file(log)
+        self.assertEqual(losses, [3.0 - 0.1 * i for i in range(10)])
+        self.assertEqual(reading, {"losses_read_as": "json", "entries_without_loss": 5})
+
+    def test_truncated_jsonl_log_is_a_text_log_and_keeps_its_null_loss(self):
+        # A run killed mid-write leaves a cut-off last line. Read as a text log, the null loss used to vanish.
+        lines = [json.dumps({"loss": None if i == 5 else 3.0 - 0.1 * i, "step": i}) for i in range(10)]
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "train.jsonl"
+            log.write_text("\n".join(lines) + '\n{"loss": 2.')
+            losses, reading = pf.losses_from_file(log)
+        self.assertEqual(reading["losses_read_as"], "text log")
+        self.assertTrue(math.isnan(losses[5]))
+        self.assertEqual(pf.check_training(losses, reading)["status"], pf.FAIL)
+
+    def test_text_log_after_a_json_config_line(self):
+        config = json.dumps({"learning_rate": 1e-4, "epochs": 3})
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "train.log"
-            log.write_text("\n".join(f"{{'loss': {3 - i * 0.1:.2f}, 'step': {i}}}" for i in range(10)))
-            self.assertEqual(len(pf.losses_from_file(log)), 10)
+            log.write_text(config + "\n" + "\n".join(f"step {i} | loss={3 - 0.1 * i:.2f}" for i in range(10)))
+            losses, reading = pf.losses_from_file(log)
+        self.assertEqual(len(losses), 10)
+        self.assertEqual(reading["losses_read_as"], "text log")
+
+    def test_text_log_reads_null_none_and_nan_as_nan(self):
+        lines = {"None": "{{'loss': {}, 'grad_norm': 1.0}}", "null": "step | loss={}", "NaN": "loss: {}"}
+        with tempfile.TemporaryDirectory() as tmp:
+            for token, line in lines.items():
+                with self.subTest(token=token):
+                    log = Path(tmp) / "train.log"
+                    values = [token if i == 4 else f"{3 - 0.1 * i:.2f}" for i in range(10)]
+                    log.write_text("\n".join(line.format(value) for value in values))
+                    losses, _ = pf.losses_from_file(log)
+                    self.assertEqual(len(losses), 10)
+                    self.assertTrue(math.isnan(losses[4]))
+                    self.assertEqual(pf.check_training(losses)["status"], pf.FAIL)
+
+    def test_library_report_records_how_losses_were_read(self):
+        reading = {"losses_read_as": "json", "entries_without_loss": 4}
+        report = pf.check_training([3.0 - 0.1 * i for i in range(10)], reading)
+        self.assertEqual(report["params"], reading)
+        self.assertTrue(any("4 of 14 JSON entries" in m for m in report["messages"]), report["messages"])
+        self.assertEqual(pf.check_training([3.0 - 0.1 * i for i in range(10)])["params"], {})
 
     def test_negative_losses(self):
         self.assertEqual(pf.check_training([-0.5 - 0.01 * i for i in range(40)])["status"], pf.PASS)
@@ -114,6 +217,20 @@ class SeparationTest(unittest.TestCase):
         self.assertAlmostEqual(pf.auroc([1, 2, 3], [1, 2, 3]), 0.5)
         self.assertAlmostEqual(pf.auroc([2, 3], [1]), 1.0)
         self.assertAlmostEqual(pf.auroc([1], [1]), 0.5)
+
+    def test_report_records_its_settings(self):
+        report = pf.check_separation([0.8, 0.7, 0.9], [0.1, 0.2, 0.15], min_auroc=0.9, lo=0, hi=1)
+        self.assertEqual(report["params"], {"min_auroc": 0.9, "lo": 0, "hi": 1, "saturation_checked": True,
+                                            "higher_is_positive": True, "bootstrap_iters": pf.BOOTSTRAP_ITERS,
+                                            "seed": pf.RESAMPLING_SEED})
+        self.assertEqual(report["design"], "independent")
+        report = pf.check_separation([0.982], [0.983])
+        self.assertFalse(report["params"]["saturation_checked"])
+
+    def test_one_saturation_bound_is_bad_input(self):
+        for bounds in ({"lo": 0}, {"hi": 1}, {"lo": 1, "hi": 0}):
+            with self.subTest(**bounds), self.assertRaisesRegex(ValueError, "saturation"):
+                pf.check_separation([0.8, 0.7, 0.9], [0.1, 0.2, 0.15], **bounds)
 
 
 class CompareTest(unittest.TestCase):
@@ -172,6 +289,59 @@ class CompareTest(unittest.TestCase):
                             cluster="prompt_id", n_comparisons=5)
         self.assertAlmostEqual(report["p_adjusted"], min(1.0, report["p_value"] * 5), places=4)
 
+    def test_family_size_not_given_leaves_p_unadjusted_and_warns(self):
+        records = self.records(seeds=(0, 1, 2))
+        self.assertEqual(pf.compare(records, a="control", b="treatment", cluster="prompt_id",
+                                    n_comparisons=1)["status"], pf.PASS)
+        report = pf.compare(records, a="control", b="treatment", cluster="prompt_id")
+        self.assertIsNone(report["p_adjusted"])
+        self.assertEqual(report["status"], pf.WARN)
+        self.assertTrue(any("--n-comparisons" in m for m in report["messages"]), report["messages"])
+        with self.assertRaisesRegex(ValueError, "n_comparisons"):
+            pf.compare(records, a="control", b="treatment", cluster="prompt_id", n_comparisons=0)
+
+    def test_missing_cluster_field_is_bad_input(self):
+        records = self.records(seeds=(0, 1, 2))
+        with self.assertRaisesRegex(ValueError, "'scenario_id'"):
+            pf.compare(records, a="control", b="treatment", cluster="scenario_id")
+        records[7]["prompt_id"] = None
+        with self.assertRaisesRegex(ValueError, "1 of 600 records have no 'prompt_id'"):
+            pf.compare(records, a="control", b="treatment", cluster="prompt_id")
+
+    def test_null_value_is_bad_input(self):
+        records = self.records()
+        records[7]["value"] = None
+        with self.assertRaisesRegex(ValueError, "item 7"):
+            pf.compare(records, a="control", b="treatment")
+
+    def test_record_without_a_condition_is_bad_input(self):
+        records = self.records()
+        del records[3]["condition"]
+        with self.assertRaisesRegex(ValueError, "1 of 200 records have no 'condition'"):
+            pf.compare(records, a="control", b="treatment")
+
+    def test_non_object_records_are_bad_input(self):
+        with self.assertRaisesRegex(ValueError, "not JSON objects"):
+            pf.compare(self.records() + [0.5], a="control", b="treatment")
+
+    def test_report_records_its_settings_and_design(self):
+        report = pf.compare(self.records(seeds=(0, 1, 2)), a="control", b="treatment",
+                            cluster="prompt_id", n_comparisons=4)
+        self.assertEqual(report["params"], {"a": "control", "b": "treatment", "condition": "condition",
+                                            "value": "value", "cluster": "prompt_id", "seed_field": "seed",
+                                            "n_comparisons": 4, "bootstrap_iters": pf.BOOTSTRAP_ITERS,
+                                            "permutation_iters": pf.PERMUTATION_ITERS,
+                                            "seed": pf.RESAMPLING_SEED})
+        self.assertEqual(report["design"], "paired")
+        self.assertEqual(pf.compare(self.records(), a="control", b="treatment")["design"], "independent")
+
+
+class StatusTest(unittest.TestCase):
+    def test_worse_keeps_the_more_severe_status(self):
+        self.assertEqual(pf.worse(pf.PASS, pf.WARN), pf.WARN)
+        self.assertEqual(pf.worse(pf.WARN, pf.PASS), pf.WARN)
+        self.assertEqual(pf.worse(pf.FAIL, pf.WARN), pf.FAIL)
+
 
 class CliTest(unittest.TestCase):
     def run_cli(self, *args):
@@ -188,6 +358,95 @@ class CliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["status"], "PASS")
             self.assertEqual(self.run_cli("degeneracy", str(Path(tmp) / "missing.json")).returncode, 2)
+
+    def test_named_field_missing_from_an_item_is_bad_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outputs, nulls, unclustered = (Path(tmp) / name for name in ("o.jsonl", "nulls.json", "unclustered.json"))
+            outputs.write_text("\n".join(json.dumps({"completion": t}) for t in FLUENT))
+            nulls.write_text(json.dumps([{"score": 0.9}, {"score": None}, {"score": 0.8}]))
+            unclustered.write_text(json.dumps([{"score": 0.9, "prompt_id": 1}, {"score": 0.8, "prompt_id": 2},
+                                               {"score": 0.7}]))
+            cases = {"text field": ("degeneracy", str(outputs), "--field", "text"),
+                     "null score": ("separation", "--positive", str(nulls), "--negative", str(nulls)),
+                     "cluster field": ("separation", "--positive", str(unclustered), "--negative", str(unclustered),
+                                       "--cluster", "prompt_id")}
+            for name, args in cases.items():
+                with self.subTest(name):
+                    result = self.run_cli(*args)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_training_report_says_what_was_skipped(self):
+        losses = [3.0 - 0.1 * i for i in range(10)]
+        with tempfile.TemporaryDirectory() as tmp:
+            state, with_null, no_loss = (Path(tmp) / name for name in ("state.json", "null.json", "none.json"))
+            state.write_text(json.dumps(trainer_state(losses)))
+            with_null.write_text(json.dumps(trainer_state(losses[:6] + [None] + losses[7:])))
+            no_loss.write_text(json.dumps({"best_metric": None, "log_history": [{"eval_loss": 2.5, "step": 10}]}))
+            result = self.run_cli("training", str(state))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertEqual(report["params"], {"losses_read_as": "json", "entries_without_loss": 4})
+            self.assertTrue(any("4 of 14 JSON entries" in m for m in report["messages"]), report["messages"])
+            self.assertEqual(self.run_cli("training", str(with_null)).returncode, 1)
+            self.assertEqual(self.run_cli("training", str(no_loss)).returncode, 2)
+
+    def test_compare_drops_no_records(self):
+        rows = [{"condition": c, "value": v, "prompt_id": i} for i in range(5) for c, v in (("a", 0), ("b", 1))]
+        cases = {"not JSON objects": rows + [3], "item 3": rows[:3] + [dict(rows[3], value=None)] + rows[4:],
+                 "no 'condition'": rows + [{"value": 1, "prompt_id": 9}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            for expected, records in cases.items():
+                with self.subTest(expected):
+                    path = Path(tmp) / "records.jsonl"
+                    path.write_text("\n".join(json.dumps(r) for r in records))
+                    result = self.run_cli("compare", str(path), "--a", "a", "--b", "b", "--cluster", "prompt_id")
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn(expected, result.stderr)
+
+    def test_truncated_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            losses, outputs = Path(tmp) / "train.jsonl", Path(tmp) / "outputs.jsonl"
+            lines = [json.dumps({"loss": None if i == 5 else 3.0 - 0.1 * i, "step": i}) for i in range(10)]
+            losses.write_text("\n".join(lines) + '\n{"loss": 2.')
+            outputs.write_text("\n".join(json.dumps({"completion": t}) for t in FLUENT) + '\n{"completion": "Sure')
+            # A loss log is read as text, where its null loss fails the check as non-finite.
+            result = self.run_cli("training", str(losses))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("non-finite", result.stderr)
+            # Samples and records must be JSON throughout: reading the lines as text would be silently wrong.
+            result = self.run_cli("degeneracy", str(outputs))
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("line 7 is not JSON", result.stderr)
+
+    def test_training_text_log_after_a_json_config_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "train.log"
+            log.write_text(json.dumps({"learning_rate": 1e-4}) + "\n"
+                           + "\n".join(f"step {i} | loss={3 - 0.1 * i:.2f}" for i in range(10)))
+            result = self.run_cli("training", str(log))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["params"]["losses_read_as"], "text log")
+
+    def test_every_report_records_its_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outputs, log, pos, neg = (Path(tmp) / name for name in ("o.json", "train.log", "pos.json", "neg.json"))
+            outputs.write_text(json.dumps(FLUENT))
+            log.write_text("\n".join(f"loss={3 - i * 0.1:.2f}" for i in range(10)))
+            pos.write_text(json.dumps([0.8, 0.7, 0.9]))
+            neg.write_text(json.dumps([0.1, 0.2, 0.15]))
+            expected = {
+                ("degeneracy", str(outputs)): {"max_degenerate_frac": 0.1, "reference": False, "field": None},
+                ("training", str(log)): {"losses_read_as": "text log", "entries_without_loss": None},
+                ("separation", "--positive", str(pos), "--negative", str(neg), "--lo", "0", "--hi", "1"): {
+                    "min_auroc": 0.8, "lo": 0.0, "hi": 1.0, "saturation_checked": True, "higher_is_positive": True,
+                    "bootstrap_iters": pf.BOOTSTRAP_ITERS, "seed": pf.RESAMPLING_SEED, "value": None,
+                    "cluster": None},
+            }
+            for args, params in expected.items():
+                with self.subTest(args[0]):
+                    result = self.run_cli(*args)
+                    self.assertIn(result.returncode, (0, 1), result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["params"], params)
 
 
 if __name__ == "__main__":

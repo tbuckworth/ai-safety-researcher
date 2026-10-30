@@ -33,15 +33,23 @@ OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
 LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
-# The numeric settings read below, checked once here: a value that is not an
-# integer would otherwise switch a check off without a word (a non-numeric
-# `[ -gt ]` is just false). A numeric setting added below goes in this list.
+# The numeric settings read below, checked once here: a value that is not a
+# whole number would otherwise switch a check off without a word (a non-numeric
+# `[ -gt ]` is just false), and a leading zero reads as octal in $(( )). The
+# second list cannot be 0 (a poll interval of 0 would spin, and `timeout 0` does
+# not time out). A numeric setting added below goes in one of these lists.
 for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RESUME_MAX_AGE_DAYS \
-    RESEARCHER_MIN_FREE_MB RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_RETRY_DELAY_SECONDS \
-    RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_JOB_WAIT_MAX_SECONDS \
-    RESEARCHER_JOB_WAIT_MAX_REFUNDS RESEARCHER_CODEX_MAX_SUBAGENTS; do
-    if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^-?[0-9]+$ ]]; then
-        echo "ERROR: ${setting} must be an integer, got '${!setting}'." >&2
+    RESEARCHER_MIN_FREE_MB RESEARCHER_RETRY_DELAY_SECONDS RESEARCHER_JOB_WAIT_MAX_SECONDS \
+    RESEARCHER_JOB_WAIT_MAX_REFUNDS; do
+    if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "ERROR: ${setting} must be a whole number (0 or more, no leading zeros), got '${!setting}'." >&2
+        exit 2
+    fi
+done
+for setting in RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS \
+    RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS; do
+    if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: ${setting} must be a whole number of at least 1, got '${!setting}'." >&2
         exit 2
     fi
 done
@@ -193,7 +201,10 @@ fi
 # machine not in the table below must set RESEARCHER_HOST_ALIAS, or the run exits 2.
 # The value "local" suppresses the ssh step entirely (run and reader on the same machine).
 if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
-    RUN_HOSTNAME=$(hostname -s)
+    if ! RUN_HOSTNAME=$(hostname -s); then
+        echo "ERROR: could not read this machine's hostname (hostname -s failed); set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for it, or to 'local'." >&2
+        exit 2
+    fi
     case "$RUN_HOSTNAME" in
         titus-MS-7A59) HOST_ALIAS="desktop" ;;
         *)
@@ -464,7 +475,7 @@ while true; do
     esac
 
     ELAPSED=$(( $(date +%s) - START_TIME ))
-    if [ "$ELAPSED" -gt "$TIMEOUT_SECONDS" ]; then
+    if [ "$ELAPSED" -ge "$TIMEOUT_SECONDS" ]; then
         TIMED_OUT=true
         set_state_field timed_out true
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."

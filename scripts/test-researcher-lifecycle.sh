@@ -491,7 +491,7 @@ write_run 2026-01-01-timeout 9 experiments_complete
 mkdir -p "${OUT}/2026-01-01-timeout/experiments/exp-001"
 printf '## Component Tested\nX\n\n## Verdict: FAIL\n' > "${OUT}/2026-01-01-timeout/experiments/exp-001/results.md"
 printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-01-timeout/experiments/exp-001/preflight.md"
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 RUN="${OUT}/2026-01-01-timeout"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "steps run (audit skipped, report compiled)"
@@ -505,7 +505,7 @@ jq -e '.reasons | any(test("audit was skipped"))' "${RUN}/run-outcome.json" > /d
 # =============================================================================
 new_case timeout-early
 write_run 2026-01-02-early 2 research_complete
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
 assert_eq "$RC" "4" "exit code"
 assert_eq "$(field status "${OUT}/2026-01-02-early")" "timed_out" "status"
 assert_eq "$(field final_outcome "${OUT}/2026-01-02-early")" "failed" "final_outcome"
@@ -972,7 +972,7 @@ write_run 2026-01-04-tpr 7 experiments_planned
 mkdir -p "${OUT}/2026-01-04-tpr/experiments/exp-001"
 printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-04-tpr/experiments/exp-001/results.md"
 printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-04-tpr/experiments/exp-001/preflight.md"
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 MOCK_LIMIT_AT_STEP=11 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 MOCK_LIMIT_AT_STEP=11 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
 assert_eq "$RC" "3" "first invocation pauses"
 assert_eq "$(field current_step "${OUT}/2026-01-04-tpr")" "10" "current_step after fast-track"
 : > "${CASE_DIR}/steps.log"
@@ -1016,7 +1016,7 @@ assert_eq "$(python3 "$LIB" state-field "${RUN}/state.md" topic)" "$QUOTED_TOPIC
 new_case quoted-run-id
 write_run 2026-01-15-quoted 2 research_complete autonomous 950
 sed -i 's/^run_id: .*/run_id: "2026-01-15-quoted"/' "${OUT}/2026-01-15-quoted/state.md"
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 -- "Ignored topic"
 assert_eq "$RC" "4" "exit code"
 assert_grep "^<!-- researcher-run: 2026-01-15-quoted outcome: failed -->" "$(ls "${CASE_DIR}"/comments/950-*.md)"
 
@@ -1102,13 +1102,29 @@ assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
 new_case settings
 run_researcher RESEARCHER_RESUME_MAX_AGE_DAYS=two-weeks -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (non-numeric setting)"
-assert_grep "RESEARCHER_RESUME_MAX_AGE_DAYS must be an integer, got 'two-weeks'" "${CASE_DIR}/stdout.log"
+assert_grep "RESEARCHER_RESUME_MAX_AGE_DAYS must be a whole number \(0 or more, no leading zeros\), got 'two-weeks'" "${CASE_DIR}/stdout.log"
+# A leading zero (bash arithmetic would read 08 as bad octal) or a negative
+# value is refused the same way; so is 0 where at least 1 is needed (a poll
+# interval of 0 would spin).
+run_researcher RESEARCHER_TIMEOUT_HOURS=08 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (leading zero)"
+assert_grep "RESEARCHER_TIMEOUT_HOURS must be a whole number \(0 or more, no leading zeros\), got '08'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_RETRY_DELAY_SECONDS=-5 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (negative)"
+run_researcher RESEARCHER_JOB_WAIT_POLL_SECONDS=0 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (zero poll interval)"
+assert_grep "RESEARCHER_JOB_WAIT_POLL_SECONDS must be a whole number of at least 1, got '0'" "${CASE_DIR}/stdout.log"
 mkdir -p "${CASE_DIR}/bin"
 printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
 chmod +x "${CASE_DIR}/bin/hostname"
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (unknown host)"
 assert_grep "host 'some-laptop' is not in the table; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
+# A hostname that cannot be read is the same: set RESEARCHER_HOST_ALIAS.
+printf '#!/usr/bin/env bash\necho "hostname: mock failure" >&2\nexit 1\n' > "${CASE_DIR}/bin/hostname"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (hostname failed)"
+assert_grep "ERROR: could not read this machine's hostname \(hostname -s failed\); set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
 
 # =============================================================================

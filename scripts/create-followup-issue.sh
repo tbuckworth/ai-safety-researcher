@@ -7,8 +7,8 @@
 # Creates an issue on tbuckworth/tasks with labels:
 # list:research-ideas, type:follow-up, source:<backend>, importance:<parent's>
 # researcher_lib.py's followup-issue writes the title and body (the feedback,
-# then a footer line with the metadata); the runner reads them back with its
-# followup-meta.
+# then a footer line with the metadata) and gives the follow-up label, its
+# FOLLOWUP_LABEL; the runner reads them back with its followup-meta.
 #
 # The follow-up takes its parent's importance label, or importance:medium when
 # the parent has none (or cannot be read). agent-spare only starts ideas rated
@@ -67,11 +67,12 @@ ISSUE=$(python3 "$LIB" followup-issue --feedback-file "$FEEDBACK_FILE" \
 TITLE=$(jq -r '.title' <<< "$ISSUE")
 BODY=$(jq -r '.body' <<< "$ISSUE")
 KEY=$(jq -r '.key' <<< "$ISSUE")
+FOLLOWUP_LABEL=$(jq -r '.label' <<< "$ISSUE")
 if [ "$FORCE" != true ]; then
     # Fail closed: if the duplicate check cannot run, do not risk a duplicate.
     LIST_LIMIT=1000
     if ! EXISTING_ISSUES=$(gh issue list --repo "$TASKS_REPO" \
-            --label "type:follow-up" --state all --limit "$LIST_LIMIT" \
+            --label "$FOLLOWUP_LABEL" --state all --limit "$LIST_LIMIT" \
             --json number,url,body); then
         echo "ERROR: could not list existing follow-up issues to check for a duplicate" >&2
         exit 1
@@ -105,7 +106,7 @@ if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
 fi
 
 # Ensure labels exist
-gh label create "type:follow-up" \
+gh label create "$FOLLOWUP_LABEL" \
     --repo "$TASKS_REPO" \
     --color "1D76DB" \
     --description "Follow-up to a previous research run" \
@@ -115,7 +116,7 @@ gh label create "type:follow-up" \
 ISSUE_URL=$(gh issue create --repo "$TASKS_REPO" \
     --title "$TITLE" \
     --label "list:research-ideas" \
-    --label "type:follow-up" \
+    --label "$FOLLOWUP_LABEL" \
     --label "source:${SOURCE_AGENT}" \
     --label "$IMPORTANCE" \
     --body "$BODY")

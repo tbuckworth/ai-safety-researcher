@@ -11,7 +11,7 @@ decisions that used to be made by ad-hoc grep/jq and got them wrong:
   pick               which queued issue to run, refusing duplicates
   claimed            whether a freshly read issue is claimed or closed
   find-followup      the oldest issue already filed with a follow-up key
-  followup-issue     the title, body and key of a new follow-up issue
+  followup-issue     the title, body, key and label of a new follow-up issue
   followup-meta      the follow-up fields of a picked issue
   slug               a topic as a run-id or repo-name fragment
   outcome            the run's final status, derived from what actually exists:
@@ -153,7 +153,7 @@ def followup_key(body: str) -> str:
 
 
 def followup_issue(feedback: str, *, parent: str, repo_url: str, run_id: str) -> dict[str, str]:
-    """The title, body and follow-up key of a new follow-up issue.
+    """The title, body, follow-up key and label (FOLLOWUP_LABEL) of a new follow-up issue.
 
     The title is the prefix and the first line of `feedback`, cut to
     FOLLOWUP_TITLE_LENGTH characters. The body is the feedback, then (when any of
@@ -169,6 +169,7 @@ def followup_issue(feedback: str, *, parent: str, repo_url: str, run_id: str) ->
         "title": FOLLOWUP_TITLE_PREFIX + feedback.split("\n", 1)[0][:FOLLOWUP_TITLE_LENGTH],
         "body": f"{body}\n<!-- followup-key: {key} -->",
         "key": key,
+        "label": FOLLOWUP_LABEL,
     }
 
 
@@ -755,8 +756,7 @@ def main(argv: list[str] | None = None) -> int:
                                                "not be claimed, or nothing when it may")
     p_claimed.add_argument("--explicit", action="store_true", help="an explicit request (RESEARCHER_ISSUE)")
 
-
-    p_new = sub.add_parser("followup-issue", help="print the title, body and key of a new follow-up issue as JSON")
+    p_new = sub.add_parser("followup-issue", help="print the title, body, key and label of a new follow-up issue as JSON")
     p_new.add_argument("--feedback-file", required=True, type=Path)
     p_new.add_argument("--parent", required=True, help="parent issue number, or empty")
     p_new.add_argument("--repo-url", required=True, help="the prior run's repo URL, or empty")

@@ -329,6 +329,8 @@ RESEARCHER_BACKEND=codex \
     --feedback-file "${TEST_ROOT}/feedback.txt" \
     > "${TEST_ROOT}/followup.stdout"
 grep -q -- '--label source:codex' "$MOCK_GH_LOG"
+followup_label=$(cd "${REPO_DIR}/scripts" && python3 -c 'import researcher_lib; print(researcher_lib.FOLLOWUP_LABEL)')
+grep -q -- "^issue create .*--label ${followup_label} " "$MOCK_GH_LOG"
 # The mock parent has no importance label, so the follow-up gets medium.
 grep -q -- '--label importance:medium' "$MOCK_GH_LOG"
 grep -q 'Created follow-up issue: https://github.com/tbuckworth/tasks/issues/123' \

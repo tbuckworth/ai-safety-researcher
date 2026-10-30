@@ -82,7 +82,9 @@ comment_on_issues() {
     # ISSUE_NUMBER and, for a follow-up, on PARENT_ISSUE. Every part is
     # attempted; returns non-zero, after logging, when any of them failed. When
     # the findings cannot be written up, a short note saying so is posted.
-    local file rc=0
+    local file rc=0 on_branch=false
+    # The results are on a branch only when the follow-up continued the prior repo.
+    continues_prior_repo && on_branch=true
     if ! file=$(mktemp "${TMPDIR:-/tmp}/researcher-comment.XXXXXX"); then
         log "ERROR: could not create a temporary file for the issue comment; no comment was posted."
         return 1
@@ -100,7 +102,7 @@ comment_on_issues() {
             --branch "$REPO_BRANCH" \
             --agent-label "$AGENT_LABEL" \
             --host "$HOST_ALIAS" \
-            --followup "$IS_FOLLOWUP" \
+            --followup "$on_branch" \
             --visibility "$PUBLISHED_VISIBILITY" > "$file"; then
         log "ERROR: the findings comment could not be written (the error is above); posting a short note instead."
         rc=1

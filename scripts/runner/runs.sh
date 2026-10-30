@@ -275,8 +275,10 @@ create_run_dir() {
     RUN_DIR="${OUTPUT_DIR}/$(unique_run_id "$(date +%Y-%m-%d)-${stem}")"
 
     # Before state.md exists, so a follow-up that cannot start leaves no run to
-    # resume: a later run picks its issue again.
+    # resume: a later run picks its issue again. RUN_DIR is new (unique_run_id),
+    # so what a failed copy left in it is removed.
     if is_followup_run && ! copy_prior_artifacts; then
+        rm -rf "$RUN_DIR"
         release_issue
         exit 1
     fi

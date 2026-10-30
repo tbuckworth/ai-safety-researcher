@@ -586,6 +586,7 @@ assert_eq "$(git --git-dir="$BARE" cat-file -p "${BRANCH}:README.md")" "prior re
 assert_eq "$(git --git-dir="$BARE" rev-parse "${BRANCH}^")" "$(git --git-dir="$BARE" rev-parse main)" "branch parent is prior main"
 assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-prior/tree/${BRANCH}" ".repo_url"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/400-*.md)"
+assert_grep "^\| Branch \| https://github.com/tbuckworth/research-prior/tree/${BRANCH} \(private\) \|" "$(ls "${CASE_DIR}"/comments/400-*.md)"
 assert_grep "^Follow-up #400 finished" "$(ls "${CASE_DIR}"/comments/399-*.md)"
 [ -z "$(ls -A "${CASE_DIR}/tmp")" ] || fail "files left in TMPDIR: $(ls -A "${CASE_DIR}/tmp")"; ok
 [ -z "$(ls -A "${OUT}/.tmp" 2>/dev/null)" ] || fail "prior clone left behind"; ok
@@ -1321,6 +1322,9 @@ if git --git-dir="${REMOTES}/tbuckworth/research-use-the-held-out-split.git" ls-
     fail "prior/ was published"
 fi; ok
 assert_grep "^Follow-up #404 finished" "$(ls "${CASE_DIR}"/comments/395-*.md)"
+# Its comment links a repo of its own, not a branch of another.
+assert_grep "^\| Repo \| https://github.com/tbuckworth/research-use-the-held-out-split/tree/main \(private\) \|" \
+    "$(ls "${CASE_DIR}"/comments/404-*.md)"
 
 new_case followup-no-prior
 NONE_BODY=$'Start over.\n\n---\nParent: #394 | Repo:  | Run: never-ran-here'
@@ -1331,5 +1335,21 @@ assert_grep "ERROR: follow-up #405 names no prior repo, and its prior run 'never
 assert_grep "issue edit 405 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
 [ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
 no_run_dirs
+
+# A copy that fails partway (here an artifact it cannot read) stops it the same
+# way, and the half-made run directory is removed.
+new_case followup-copy-fails
+write_run 2026-01-28-unreadable-prior 11 complete autonomous 393
+printf '## Salad\n' > "${OUT}/2026-01-28-unreadable-prior/method-spec.md"
+printf 'secret\n' > "${OUT}/2026-01-28-unreadable-prior/briefing.md"
+chmod 000 "${OUT}/2026-01-28-unreadable-prior/briefing.md"
+COPY_BODY=$'Retry it.\n\n---\nParent: #393 | Repo:  | Run: 2026-01-28-unreadable-prior'
+set_issues <(issue_json 406 "[Follow-up] Retry it" "list:research-ideas,type:follow-up" "$COPY_BODY")
+run_researcher
+chmod 600 "${OUT}/2026-01-28-unreadable-prior/briefing.md"
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: could not copy the prior run's artifacts" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 406 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+[ -z "$(ls -d "$OUT"/*-followup-retry-it 2>/dev/null)" ] || fail "the partial run directory was left: $(ls "$OUT")"; ok
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

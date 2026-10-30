@@ -373,7 +373,7 @@ This step runs three **independent** adversarial review passes on the research p
 
 **Agent**: `results-auditor` (one per round)
 
-An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints — a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there) — and loops only on genuinely fixable methodology defects. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
+An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there), and loops only on genuinely fixable methodology defects. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 ### Process
 
@@ -456,7 +456,7 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
 
 ## Limitation Triage
 
-A limitation is a decision, not a disclaimer. Wherever limitations are surfaced
+Each limitation calls for a decision: fix it now, or defer it. Wherever limitations are surfaced
 (Step 6 for the design, Step 10 for the results) and when they are written up
 (Step 11), classify each one against the run's `compute_profile` and the
 remaining budget (experiment-cap headroom, wall-clock left):

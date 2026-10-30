@@ -16,8 +16,8 @@ hypothesis. Never report it as a negative result.
 | pipeline-smoke | PASS | <the full pipeline run end to end on a known-answer / harmless control input; what came out> |
 | training-sanity | N/A | <no training in this experiment — or: `preflight_checks.py training train.log` + `preflight_checks.py degeneracy samples.json --reference base_samples.json` both PASS> |
 | organism-validity | N/A | <for a model organism: the implanted behaviour fires on held-out triggers at rate X and NOT on controls at rate Y> |
-| metric-separation | PASS | `preflight_checks.py separation --positive ... --negative ...`: AUROC 0.93, diff CI [..], not saturated |
-| statistics-plan | PASS | unit of analysis = <prompt/scenario/seed>; <k> independent units, <s> seeds; CIs by cluster bootstrap; <m> comparisons, Bonferroni |
+| metric-separation | PASS | <the full command line as run, every flag included, e.g. `preflight_checks.py separation --positive pos.json --negative neg.json --cluster prompt_id --lo 0 --hi 1`>: AUROC 0.93, diff CI [..], not saturated |
+| statistics-plan | PASS | unit of analysis = <prompt/scenario/seed>; <k> independent units, <s> seeds; CIs by cluster bootstrap; <m> comparisons, Bonferroni, checked with <the full command line, e.g. `preflight_checks.py compare records.jsonl --a control --b treatment --cluster prompt_id --n-comparisons <m>`> |
 
 ## Notes
 

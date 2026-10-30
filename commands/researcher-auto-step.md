@@ -553,38 +553,8 @@ If `state.md` contains `is_followup: true`:
       Pre-flight record template: ${CLAUDE_PLUGIN_ROOT}/templates/preflight.md
       Write the pre-flight record to: <run-dir>/experiments/exp-NNN/preflight.md
       Write results to: <run-dir>/experiments/exp-NNN/results.md
-
-      CRITICAL CONSTRAINTS:
-      - COMPUTE PROFILE (authoritative — from state.md `compute_profile`): <paste the compute_profile value>.
-        Use ONLY the compute this profile authorizes. If it is local-only, do not use any
-        cloud or paid service; if it provisions a cloud/managed backend, you may use that.
-        Do not assume a specific device. If a component needs more than the profile provides,
-        stop and report it as a FAIL-on-affordability (it becomes future work) rather than
-        silently exceeding the budget.
-      - PAID COMPUTE: anything that bills while it runs (a Modal deploy or `modal run --detach`,
-        a Lambda instance, a Slurm elastic-* job, an HF inference endpoint) is registered
-        straight after launch with `cloud-watch register <provider:account:name-or-glob>
-        --expect <hours>h --reason "<run id>: <what>"` (or launched via `cloud-watch launch
-        --expect ... --reason ... -- <command>`), and stopped, then closed with
-        `cloud-watch close`, before the step ends. Codex passes `--session <name>`.
-      - NEVER install packages that require root access.
-      - NEVER run commands that delete files outside the experiment directory.
-      - NEVER modify files outside the run directory: <run-dir>
-      - Keep experiments concise and focused. Target < 30 minutes runtime.
-      - Do NOT create Python virtual environments inside the experiment directory.
-        Use the system Python or an existing venv.
-      - CLEAN UP after experiments: delete intermediate model checkpoints, keeping
-        only the final checkpoint if needed. Delete any .pt/.pth/.bin/.safetensors
-        files that are not essential to the results. The results.md and any small
-        CSV/JSON metric files are what matter — not multi-GB model weights.
-      - GitHub has a 100MB per-file hard limit. No single file in the experiment
-        directory should exceed 50MB.
-      - Do not create git repositories inside the run directory (no `git init`, and
-        clone third-party code outside it, e.g. under $TMPDIR). A nested repository
-        cannot be published with the run; record a library's URL and commit instead.
-      - PRE-FLIGHT GATE (mandatory): run the pre-flight checks in your instructions
-        BEFORE the main run, and record them in preflight.md. Do not report a PASS or
-        FAIL from a pipeline that failed a check: fix it, or report INCONCLUSIVE.
+      Run directory: <run-dir>
+      Compute profile (from state.md `compute_profile`): <paste the compute_profile value>
       """)
       ```
    c. Read results. Check that `preflight.md` exists and that no experiment claims PASS or FAIL alongside a `FAIL` pre-flight row; if one does, send it back once to fix the pipeline or re-label the verdict INCONCLUSIVE (the wrapper counts such a verdict as inconclusive regardless).

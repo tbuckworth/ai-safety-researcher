@@ -105,8 +105,8 @@ Once the user picks a direction:
      ~/pyg/researcher/scripts/researcher-cron.sh
    ```
    Default `RESEARCHER_COMPUTE_PROFILE` to the prior run's `compute_profile`
-   preset — a follow-up that silently drops from `mats` to the local GPU will
-   quietly fail to run the experiment that was proposed. If the chosen next step
+   preset: a follow-up that silently drops from a cluster or cloud profile to the
+   local GPU will quietly fail to run the experiment that was proposed. If the chosen next step
    needs more than the prior profile provided, say so and name the profile it
    actually needs. Long runs belong in `tmux`.
 

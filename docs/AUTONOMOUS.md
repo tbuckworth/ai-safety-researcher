@@ -399,7 +399,7 @@ since a redesign would answer a question that was never actually asked.
 
 4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo (a follow-up that names no repo gets a repo of its own), published in place: the branch starts from the branch being continued (the prior repo's default branch, or the `/tree/<branch>` in the issue's `Repo:` link for a follow-up of a follow-up) and the run directory is laid over it (`prior/` excluded), so nothing is copied. **A follow-up is not pushed into a prior repo whose visibility differs from `RESEARCHER_REPO_VISIBILITY`** (e.g. an older public repo while the default is private): the run ends `unpublished` with that reason, so making results public stays a deliberate choice. Both the follow-up issue and the parent issue get the findings comment.
 
-`create-followup-issue.sh` is idempotent: it embeds a follow-up key (a hash of the request) in the issue body and reports an existing issue with the same key instead of filing a second one. `--force` files anyway.
+`create-followup-issue.sh` is idempotent: it embeds a follow-up key (a hash of the request) in the issue body and reports an existing issue with the same key instead of filing a second one. `--force` files anyway. `--source <backend>` is required. It exits 1 without filing when the parent issue cannot be read, and exits 1 naming the new issue when the link comment on the parent fails.
 
 ### Issue Labels
 

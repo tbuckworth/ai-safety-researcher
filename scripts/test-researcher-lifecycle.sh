@@ -595,30 +595,57 @@ printf '%s\n' "Needs a more realistic model organism." > "${CASE_DIR}/feedback.t
 FILED_BODY=$'Needs a more realistic model organism.\n\n---\nParent: #1874 | Repo: https://github.com/tbuckworth/research-salad | Run: 2026-04-03-salad'
 set_issues <(issue_json 1919 "[Follow-up] Needs a more realistic model organism" "list:research-ideas,type:follow-up" "$FILED_BODY")
 followup() {
+    # followup [VAR=value ...]: files the follow-up of #1874; RC is its exit code.
+    set +e
     env PATH="${MOCK_BIN}:${PATH}" MOCK_GH_LOG="${CASE_DIR}/gh.log" MOCK_ISSUES="${CASE_DIR}/issues.json" \
-        MOCK_COMMENTS="${CASE_DIR}/comments" \
+        MOCK_COMMENTS="${CASE_DIR}/comments" "$@" \
         "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1874 \
         --repo-url https://github.com/tbuckworth/research-salad --run-id 2026-04-03-salad \
-        --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out"
+        --source claude --feedback-file "${CASE_DIR}/feedback.txt" \
+        > "${CASE_DIR}/followup.out" 2> "${CASE_DIR}/followup.err"
+    RC=$?
+    set -e
 }
 followup
+assert_eq "$RC" "0" "exit code (already filed)"
 assert_grep "Follow-up already exists \(same request\): https://github.com/tbuckworth/tasks/issues/1919" "${CASE_DIR}/followup.out"
 assert_no_grep "^issue create" "${CASE_DIR}/gh.log"
+# A parent that cannot be read stops it: its importance would be guessed.
 echo '[]' > "${CASE_DIR}/issues.json"
 followup
+assert_eq "$RC" "1" "exit code (parent unreadable)"
+assert_grep "ERROR: could not read parent issue #1874" "${CASE_DIR}/followup.err"
+assert_no_grep "^issue create" "${CASE_DIR}/gh.log"
+# The follow-up takes its parent's importance (agent-spare only starts high or
+# medium ideas), or medium, with a warning, when the parent has none.
+set_issues <(issue_json 1874 "Salad topic" "list:research-ideas")
+followup
+assert_eq "$RC" "0" "exit code"
 assert_grep "issue create .*<!-- followup-key: [0-9a-f]{16} -->" <(tr '\n' ' ' < "${CASE_DIR}/gh.log")
 assert_grep "Created follow-up issue" "${CASE_DIR}/followup.out"
-# The follow-up takes its parent's importance (agent-spare only starts high or
-# medium ideas), or medium when the parent has none or cannot be read.
-assert_grep "--label importance:medium --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+assert_grep "^issue create .*--label list:research-ideas --label type:follow-up --label source:claude --label importance:medium --body" \
+    <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+assert_grep "WARN: parent issue #1874 has no importance label; the follow-up gets importance:medium" "${CASE_DIR}/followup.err"
 for imp in high low; do
     set_issues <(issue_json 1874 "Salad topic" "list:research-ideas,importance:${imp}")
     followup
     assert_grep "--label importance:${imp} --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
 done
-set_issues <(issue_json 1874 "Salad topic" "list:research-ideas")
-followup
-assert_grep "--label importance:medium --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+# A link comment on the parent that fails: the issue exists, unlinked, and it says so.
+followup MOCK_GH_COMMENT_FAIL=true
+assert_eq "$RC" "1" "exit code (parent not linked)"
+assert_grep "HTTP 502: mock comment outage" "${CASE_DIR}/followup.err"
+assert_grep "ERROR: follow-up https://github.com/tbuckworth/tasks/issues/999 was created, but the link comment on parent issue #1874 failed" \
+    "${CASE_DIR}/followup.err"
+# --source is required: which backend files the follow-up is not guessed.
+set +e
+env PATH="${MOCK_BIN}:${PATH}" MOCK_GH_LOG="${CASE_DIR}/gh.log" MOCK_ISSUES="${CASE_DIR}/issues.json" \
+    "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1874 --repo-url https://github.com/tbuckworth/research-salad \
+    --run-id 2026-04-03-salad --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out" 2> "${CASE_DIR}/followup.err"
+RC=$?
+set -e
+assert_eq "$RC" "1" "exit code (no --source)"
+assert_grep "ERROR: --source is required" "${CASE_DIR}/followup.err"
 
 # =============================================================================
 # 11. An EMPTY public repo left by the old master/main bug is not reused:

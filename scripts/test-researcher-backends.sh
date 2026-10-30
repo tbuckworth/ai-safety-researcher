@@ -315,7 +315,7 @@ set -e
 test "$mismatch_status" = "2"
 grep -q "in-progress run uses backend 'claude'" "${TEST_ROOT}/mismatch.stdout"
 
-# Follow-up issues inherit the active backend's source label.
+# Follow-up issues carry the source label of the backend that files them.
 cat > "${MOCK_BIN}/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -329,18 +329,19 @@ chmod +x "${MOCK_BIN}/gh"
 printf '%s\n' "Re-run with a stricter held-out split." > "${TEST_ROOT}/feedback.txt"
 export MOCK_GH_LOG="${TEST_ROOT}/gh-calls.log"
 PATH="${MOCK_BIN}:${PATH}" \
-RESEARCHER_BACKEND=codex \
 "$REPO_DIR/scripts/create-followup-issue.sh" \
     --parent 42 \
     --repo-url https://github.com/tbuckworth/research-example \
     --run-id prior-run \
+    --source codex \
     --feedback-file "${TEST_ROOT}/feedback.txt" \
-    > "${TEST_ROOT}/followup.stdout"
+    > "${TEST_ROOT}/followup.stdout" 2> "${TEST_ROOT}/followup.stderr"
 grep -q -- '--label source:codex' "$MOCK_GH_LOG"
 followup_label=$(cd "${REPO_DIR}/scripts" && python3 -c 'import researcher_lib; print(researcher_lib.FOLLOWUP_LABEL)')
 grep -q -- "^issue create .*--label ${followup_label} " "$MOCK_GH_LOG"
 # The mock parent has no importance label, so the follow-up gets medium.
 grep -q -- '--label importance:medium' "$MOCK_GH_LOG"
+grep -q 'WARN: parent issue #42 has no importance label' "${TEST_ROOT}/followup.stderr"
 grep -q 'Created follow-up issue: https://github.com/tbuckworth/tasks/issues/123' \
     "${TEST_ROOT}/followup.stdout"
 

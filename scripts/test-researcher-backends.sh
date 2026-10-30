@@ -251,6 +251,10 @@ for kb_file in KB-SCHEMA.md index.md log.md AGENTS.md CLAUDE.md \
     test -s "${KB_FIXTURE}/${kb_file}" \
         || { echo "FAIL: kb-init did not write ${kb_file}" >&2; exit 1; }
 done
+# index.md lists exactly the lessons pages kb-init seeded.
+diff <(cd "${KB_FIXTURE}/lessons" && ls *.md | sed 's/\.md$//') \
+     <(sed -n 's/^- \[\[\([^]]*\)\]\] — .*/\1/p' "${KB_FIXTURE}/index.md" | sort) \
+    || { echo "FAIL: index.md does not list the lessons pages kb-init seeded" >&2; exit 1; }
 test -d "${KB_FIXTURE}/.git"
 bash "$REPO_DIR/scripts/kb-init.sh" "$KB_FIXTURE" > /dev/null   # idempotent
 

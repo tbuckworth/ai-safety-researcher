@@ -27,6 +27,15 @@ done
 KB_DIR="${KB_DIR:-${RESEARCHER_KB_DIR:-${HOME}/pyg/research-wiki}}"
 SCHEMA_TEMPLATE="${PLUGIN_DIR}/templates/kb-schema.md"
 
+# The lessons pages, one "slug|title|blurb" line each. The workflow reads them
+# before designing experiments, so they are seeded (empty is fine) rather than
+# 404 at Step 5. The blurb opens the page, and its first sentence is the page's
+# line in index.md.
+LESSONS="common-failures|Common Failures|Failure modes that have actually bitten a research run. Read before Step 5 (decomposition) and Step 6 (challenge).
+experiment-design|Experiment Design Lessons|Constructs that turned out to be strawmen, controls that proved load-bearing, and criteria that drifted between design and write-up.
+compute|Compute Lessons|What each compute profile can really do, what jobs actually cost in wall-clock and money, and where runs have hit ceilings.
+tooling|Tooling Lessons|Library and API traps, version pins that matter, and environment gotchas that cost a run time."
+
 if [ ! -f "$SCHEMA_TEMPLATE" ]; then
     echo "ERROR: schema template missing at ${SCHEMA_TEMPLATE}" >&2
     exit 1
@@ -57,7 +66,8 @@ INSTREOF
 done
 
 if [ ! -f "${KB_DIR}/index.md" ]; then
-    cat > "${KB_DIR}/index.md" <<'INDEXEOF'
+    {
+        cat <<'INDEXEOF'
 # Index
 
 Catalog of every page in this wiki. Read this first when answering a question,
@@ -77,15 +87,18 @@ then drill into the pages it points at. Updated on every ingest.
 
 ## Lessons
 
-- [[common-failures]] — failure modes that have actually bitten a run
-- [[experiment-design]] — construct validity, controls, criteria drift
-- [[compute]] — what each compute profile can really do, and what it costs
-- [[tooling]] — library, API, and environment traps
+INDEXEOF
+        while IFS='|' read -r slug title blurb; do
+            summary="${blurb%%. *}"
+            printf -- '- [[%s]] — %s\n' "$slug" "${summary%.}"
+        done <<< "$LESSONS"
+        cat <<'INDEXEOF'
 
 ## Sources
 
 <!-- One line per source page: [[page]] — author/venue/year, one-line claim -->
 INDEXEOF
+    } > "${KB_DIR}/index.md"
     echo "Wrote ${KB_DIR}/index.md"
 fi
 
@@ -102,8 +115,6 @@ LOGEOF
     echo "Wrote ${KB_DIR}/log.md"
 fi
 
-# Seed the lessons pages — these are the ones the workflow reads before designing
-# experiments, so they must exist (empty is fine) rather than 404 at Step 5.
 seed_lesson() {
     local slug="$1" title="$2" blurb="$3"
     local path="${KB_DIR}/lessons/${slug}.md"
@@ -128,14 +139,9 @@ LESSONEOF
     echo "Wrote ${path}"
 }
 
-seed_lesson common-failures "Common Failures" \
-    "Failure modes that have actually bitten a research run. Read before Step 5 (decomposition) and Step 6 (challenge)."
-seed_lesson experiment-design "Experiment Design Lessons" \
-    "Constructs that turned out to be strawmen, controls that proved load-bearing, and criteria that drifted between design and write-up."
-seed_lesson compute "Compute Lessons" \
-    "What each compute profile can really do, what jobs actually cost in wall-clock and money, and where runs have hit ceilings."
-seed_lesson tooling "Tooling Lessons" \
-    "Library and API traps, version pins that matter, and environment gotchas that cost a run time."
+while IFS='|' read -r slug title blurb; do
+    seed_lesson "$slug" "$title" "$blurb"
+done <<< "$LESSONS"
 
 if [ ! -d "${KB_DIR}/.git" ]; then
     git -C "$KB_DIR" init -q

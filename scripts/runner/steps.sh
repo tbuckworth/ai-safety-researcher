@@ -73,8 +73,10 @@ wait_for_jobs() {
     # polling every JOB_WAIT_POLL_SECONDS, until they finish, the run times out,
     # or the step's waits add up to JOB_WAIT_MAX_SECONDS (counted in
     # STEP_JOB_WAITED, which run_step resets for each step). A stop from the
-    # guard ("!") ends the wait at once: the jobs keep running, and the step is
-    # redone on resume. Sets JOB_WAIT_RESULT to none (no jobs were
+    # guard ("!") ends the wait at once through pause_for_guard, which logs the
+    # stop and records last_pause_reason in state.md (run_step relies on this and
+    # records nothing itself): the jobs keep running, and the step is redone on
+    # resume. Sets JOB_WAIT_RESULT to none (no jobs were
     # outstanding), finished, gave-up or stopped.
     local step="$1" outstanding hold waited=0
     outstanding=$(outstanding_jobs)

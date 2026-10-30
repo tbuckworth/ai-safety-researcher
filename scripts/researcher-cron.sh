@@ -206,6 +206,8 @@ case "${RESEARCHER_COMPUTE_PROFILE:-}" in
     mats|MATS|mats-cluster)
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
         # A queued/running job for THIS run means the step is waiting, not failing.
+        # Its own 90 s timeout must stay below JOB_WAIT_CMD_TIMEOUT_SECONDS (default 120),
+        # or run_hook cuts squeue off first and the step looks as if it had no jobs.
         : "${JOB_WAIT_CMD:=timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | grep -F '{run_id}' || true}"
         ;;
     *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;

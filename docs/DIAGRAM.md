@@ -37,6 +37,7 @@ flowchart TD
     S3 -.->|"ALREADY_DONE → refine"| S2
     S4 -.->|"disagree w/ SOTA"| S2
     S4 -.->|"disagree w/ benchmarks"| S3
+    S6 -.->|"construct-validity flaw → redesign construct"| S1
     S6 -.->|"revise decomposition"| S5
     S6 -.->|"revise criteria"| S4
     S6 -.->|"re-research"| S2

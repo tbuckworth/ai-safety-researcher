@@ -51,7 +51,7 @@ specialised leaf-node agents for focused work.
 │    ├─┤  decomposition   │                               │    │    │
 │    │ └─────────────────┘                               │    │    │
 │    ▼                                              loop │    │    │
-│  Step 6: Challenge ───────────────────────────────┘    │    │    │
+│  Step 6: Challenge ───────────────────────────────┴────┼────┤    │
 │    │ ┌──────────────────────┐  (parallel)              │    │    │
 │    ├─┤ assumption-challenger │                          │    │    │
 │    ├─┤ mentor-review         │                          │    │    │

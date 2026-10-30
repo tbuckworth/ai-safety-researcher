@@ -79,6 +79,9 @@ RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
 # anything, a step that did not advance is WAITING on external compute, not
 # failing — so the attempt is refunded instead of spent. Empty = old behaviour.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
+# Each call of JOB_WAIT_CMD is stopped after this long; it covers the `timeout 90`
+# inside the mats profile's command (and agent-board's).
+JOB_WAIT_CMD_TIMEOUT_SECONDS="${RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS:-120}"
 JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
 JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
 JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
@@ -90,6 +93,7 @@ JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
 # is redone on resume). agent-board's spare-capacity launcher uses it.
 # Empty = old behaviour.
 GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
+GUARD_CMD_TIMEOUT_SECONDS=300
 # A caller that owns one run (agent-board's spare launcher) pins it: with
 # RESEARCHER_RUN_DIR it resumes exactly that run or exits 2, and with
 # RESEARCHER_NO_RESUME=true a fresh start never picks up another unfinished run.

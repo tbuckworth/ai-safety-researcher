@@ -733,6 +733,14 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
 assert_grep "job\(s\) 4242 are still outstanding" "${CASE_DIR}/stdout.log"
+# The job-wait hook is time-limited like the guard: a hung one is stopped.
+new_case job-hook-timeout
+write_run 2026-01-17-job-hook 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
+    "RESEARCHER_JOB_WAIT_CMD=sleep 5; touch ${CASE_DIR}/hook-finished; echo 4242" \
+    RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS=1 -- "Ignored topic"
+[ ! -e "${CASE_DIR}/hook-finished" ] || fail "the job-wait hook ran past its time limit"; ok
+assert_grep "WARN: hook stopped at its 1s limit" "${CASE_DIR}/stdout.log"
 # ...except a hold marked "!" (a stop), which applies at once: before a step,
 # and while a stalled step waits for its jobs.
 new_case guard-stop-jobs

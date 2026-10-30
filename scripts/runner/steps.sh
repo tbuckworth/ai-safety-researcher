@@ -2,26 +2,34 @@
 # Running one workflow step: retries, waiting on external jobs, guard holds and pausing.
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
-outstanding_jobs() {
-    [ -n "$JOB_WAIT_CMD" ] || return 0
-    local cmd run_id
+run_hook() {
+    # run_hook CMD TIMEOUT: runs the hook command CMD (JOB_WAIT_CMD, GUARD_CMD)
+    # in bash with "{run_id}" replaced by this run's id, stops it after TIMEOUT
+    # seconds, and prints its output; an empty CMD prints nothing. The output
+    # decides, not the exit code: a hook that exits non-zero when it has nothing
+    # to report (a bare `squeue | grep`, the obvious thing to write) reports
+    # nothing, and one that is stopped reports what it printed by then. The
+    # hook's stderr is discarded; a stop is logged on stderr.
+    local cmd="$1" limit="$2" run_id rc=0
+    [ -n "$cmd" ] || return 0
     run_id=$(basename "$RUN_DIR")
-    cmd=${JOB_WAIT_CMD//\{run_id\}/$run_id}
-    # A hook that exits non-zero when there is nothing to report (a bare
-    # `squeue | grep`, the obvious thing to write) must mean "no jobs", not
-    # "abort the run" — which is what pipefail would otherwise do here.
-    ( set +e +o pipefail; eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' ) || true
+    cmd=${cmd//\{run_id\}/$run_id}
+    timeout "$limit" bash -c "$cmd" 2>/dev/null || rc=$?
+    if [ "$rc" -eq 124 ]; then
+        log "WARN: hook stopped at its ${limit}s limit: ${cmd}" >&2
+    fi
+}
+
+outstanding_jobs() {
+    # This run's outstanding external job ids (the first word of each line
+    # JOB_WAIT_CMD prints), space-separated.
+    run_hook "$JOB_WAIT_CMD" "$JOB_WAIT_CMD_TIMEOUT_SECONDS" | awk '{print $1}' | tr '\n' ' '
 }
 
 guard_hold() {
-    [ -n "$GUARD_CMD" ] || return 0
-    local cmd run_id
-    run_id=$(basename "$RUN_DIR")
-    cmd=${GUARD_CMD//\{run_id\}/$run_id}
-    # Output decides, not the exit code: a guard that fails silently holds nothing
-    # (a guard that must hold on failure says so itself). Bounded, so a hung
-    # guard cannot stall the run between steps for ever.
-    ( set +e +o pipefail; timeout 300 bash -c "$cmd" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1 ) || true
+    # The first non-blank line GUARD_CMD prints, or nothing. A guard that fails
+    # silently holds nothing (a guard that must hold on failure says so itself).
+    run_hook "$GUARD_CMD" "$GUARD_CMD_TIMEOUT_SECONDS" | grep -v '^[[:space:]]*$' | head -1 || true
 }
 
 hold_applies() {

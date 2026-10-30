@@ -72,10 +72,41 @@ class TrainingTest(unittest.TestCase):
         self.assertTrue(any("memorisation" in m for m in report["messages"]))
 
     def test_loss_parsing_from_log(self):
+        logs = {"python dicts": "\n".join(f"{{'loss': {3 - i * 0.1:.2f}, 'step': {i}}}" for i in range(10)),
+                "plain text": "\n".join(f"step {i} | loss={3 - i * 0.1:.2f}" for i in range(10))}
         with tempfile.TemporaryDirectory() as tmp:
-            log = Path(tmp) / "train.log"
-            log.write_text("\n".join(f"{{'loss': {3 - i * 0.1:.2f}, 'step': {i}}}" for i in range(10)))
-            self.assertEqual(len(pf.losses_from_file(log)), 10)
+            for name, text in logs.items():
+                with self.subTest(log=name):
+                    log = Path(tmp) / "train.log"
+                    log.write_text(text)
+                    losses, read_as = pf.losses_from_file(log)
+                    self.assertEqual(len(losses), 10)
+                    self.assertEqual(read_as, "text log")
+
+    def write_json(self, tmp, data):
+        path = Path(tmp) / "losses.json"
+        path.write_text(json.dumps(data))
+        return path
+
+    def test_losses_object_is_read_like_other_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            losses, read_as = pf.losses_from_file(self.write_json(tmp, {"losses": [3.0 - 0.1 * i for i in range(10)]}))
+        self.assertEqual(len(losses), 10)
+        self.assertEqual(read_as, "json")
+
+    def test_null_loss_in_json_counts_as_non_finite(self):
+        rows = [{"loss": 3.0 - 0.1 * i, "step": i} for i in range(10)]
+        rows[6]["loss"] = None
+        with tempfile.TemporaryDirectory() as tmp:
+            losses, _ = pf.losses_from_file(self.write_json(tmp, rows))
+        self.assertEqual(len(losses), 10)
+        self.assertEqual(pf.check_training(losses)["status"], pf.FAIL)
+
+    def test_json_entry_without_a_loss_is_bad_input(self):
+        rows = [{"loss": 3.0 - 0.1 * i, "step": i} for i in range(10)] + [{"eval_loss": 2.5, "step": 10}]
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ValueError, "item 10 has no 'loss' field"):
+                pf.losses_from_file(self.write_json(tmp, rows))
 
     def test_negative_losses(self):
         self.assertEqual(pf.check_training([-0.5 - 0.01 * i for i in range(40)])["status"], pf.PASS)
@@ -114,6 +145,20 @@ class SeparationTest(unittest.TestCase):
         self.assertAlmostEqual(pf.auroc([1, 2, 3], [1, 2, 3]), 0.5)
         self.assertAlmostEqual(pf.auroc([2, 3], [1]), 1.0)
         self.assertAlmostEqual(pf.auroc([1], [1]), 0.5)
+
+    def test_report_records_its_settings(self):
+        report = pf.check_separation([0.8, 0.7, 0.9], [0.1, 0.2, 0.15], min_auroc=0.9, lo=0, hi=1)
+        self.assertEqual(report["params"], {"min_auroc": 0.9, "lo": 0, "hi": 1, "saturation_checked": True,
+                                            "higher_is_positive": True, "bootstrap_iters": pf.BOOTSTRAP_ITERS,
+                                            "seed": pf.RESAMPLING_SEED})
+        self.assertEqual(report["design"], "independent")
+        report = pf.check_separation([0.982], [0.983])
+        self.assertFalse(report["params"]["saturation_checked"])
+
+    def test_one_saturation_bound_is_bad_input(self):
+        for bounds in ({"lo": 0}, {"hi": 1}, {"lo": 1, "hi": 0}):
+            with self.subTest(**bounds), self.assertRaisesRegex(ValueError, "saturation"):
+                pf.check_separation([0.8, 0.7, 0.9], [0.1, 0.2, 0.15], **bounds)
 
 
 class CompareTest(unittest.TestCase):
@@ -172,6 +217,40 @@ class CompareTest(unittest.TestCase):
                             cluster="prompt_id", n_comparisons=5)
         self.assertAlmostEqual(report["p_adjusted"], min(1.0, report["p_value"] * 5), places=4)
 
+    def test_family_size_not_given_leaves_p_unadjusted_and_warns(self):
+        records = self.records(seeds=(0, 1, 2))
+        self.assertEqual(pf.compare(records, a="control", b="treatment", cluster="prompt_id",
+                                    n_comparisons=1)["status"], pf.PASS)
+        report = pf.compare(records, a="control", b="treatment", cluster="prompt_id")
+        self.assertIsNone(report["p_adjusted"])
+        self.assertEqual(report["status"], pf.WARN)
+        self.assertTrue(any("--n-comparisons" in m for m in report["messages"]), report["messages"])
+        with self.assertRaisesRegex(ValueError, "n_comparisons"):
+            pf.compare(records, a="control", b="treatment", cluster="prompt_id", n_comparisons=0)
+
+    def test_missing_cluster_field_is_bad_input(self):
+        records = self.records(seeds=(0, 1, 2))
+        with self.assertRaisesRegex(ValueError, "'scenario_id'"):
+            pf.compare(records, a="control", b="treatment", cluster="scenario_id")
+        records[7]["prompt_id"] = None
+        with self.assertRaisesRegex(ValueError, "1 of 300 records have no 'prompt_id'"):
+            pf.compare(records, a="control", b="treatment", cluster="prompt_id")
+
+    def test_non_object_records_are_bad_input(self):
+        with self.assertRaisesRegex(ValueError, "not JSON objects"):
+            pf.compare(self.records() + [0.5], a="control", b="treatment")
+
+    def test_report_records_its_settings_and_design(self):
+        report = pf.compare(self.records(seeds=(0, 1, 2)), a="control", b="treatment",
+                            cluster="prompt_id", n_comparisons=4)
+        self.assertEqual(report["params"], {"a": "control", "b": "treatment", "condition": "condition",
+                                            "value": "value", "cluster": "prompt_id", "seed_field": "seed",
+                                            "n_comparisons": 4, "bootstrap_iters": pf.BOOTSTRAP_ITERS,
+                                            "permutation_iters": pf.PERMUTATION_ITERS,
+                                            "seed": pf.RESAMPLING_SEED})
+        self.assertEqual(report["design"], "paired")
+        self.assertEqual(pf.compare(self.records(), a="control", b="treatment")["design"], "independent")
+
 
 class StatusTest(unittest.TestCase):
     def test_worse_keeps_the_more_severe_status(self):
@@ -195,6 +274,52 @@ class CliTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(json.loads(result.stdout)["status"], "PASS")
             self.assertEqual(self.run_cli("degeneracy", str(Path(tmp) / "missing.json")).returncode, 2)
+
+    def test_named_field_missing_from_an_item_is_bad_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outputs, nulls, unclustered = (Path(tmp) / name for name in ("o.jsonl", "nulls.json", "unclustered.json"))
+            outputs.write_text("\n".join(json.dumps({"completion": t}) for t in FLUENT))
+            nulls.write_text(json.dumps([{"score": 0.9}, {"score": None}, {"score": 0.8}]))
+            unclustered.write_text(json.dumps([{"score": 0.9, "prompt_id": 1}, {"score": 0.8, "prompt_id": 2},
+                                               {"score": 0.7}]))
+            cases = {"text field": ("degeneracy", str(outputs), "--field", "text"),
+                     "null score": ("separation", "--positive", str(nulls), "--negative", str(nulls)),
+                     "cluster field": ("separation", "--positive", str(unclustered), "--negative", str(unclustered),
+                                       "--cluster", "prompt_id")}
+            for name, args in cases.items():
+                with self.subTest(name):
+                    result = self.run_cli(*args)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_compare_drops_no_records(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            records = Path(tmp) / "records.jsonl"
+            rows = [{"condition": c, "value": v, "prompt_id": i} for i in range(5) for c, v in (("a", 0), ("b", 1))]
+            records.write_text("\n".join(json.dumps(r) for r in rows) + "\n3\n")
+            result = self.run_cli("compare", str(records), "--a", "a", "--b", "b", "--cluster", "prompt_id")
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("not JSON objects", result.stderr)
+
+    def test_every_report_records_its_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outputs, log, pos, neg = (Path(tmp) / name for name in ("o.json", "train.log", "pos.json", "neg.json"))
+            outputs.write_text(json.dumps(FLUENT))
+            log.write_text("\n".join(f"loss={3 - i * 0.1:.2f}" for i in range(10)))
+            pos.write_text(json.dumps([0.8, 0.7, 0.9]))
+            neg.write_text(json.dumps([0.1, 0.2, 0.15]))
+            expected = {
+                ("degeneracy", str(outputs)): {"max_degenerate_frac": 0.1, "reference": False, "field": None},
+                ("training", str(log)): {"losses_read_as": "text log"},
+                ("separation", "--positive", str(pos), "--negative", str(neg), "--lo", "0", "--hi", "1"): {
+                    "min_auroc": 0.8, "lo": 0.0, "hi": 1.0, "saturation_checked": True, "higher_is_positive": True,
+                    "bootstrap_iters": pf.BOOTSTRAP_ITERS, "seed": pf.RESAMPLING_SEED, "value": None,
+                    "cluster": None},
+            }
+            for args, params in expected.items():
+                with self.subTest(args[0]):
+                    result = self.run_cli(*args)
+                    self.assertIn(result.returncode, (0, 1), result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["params"], params)
 
 
 if __name__ == "__main__":

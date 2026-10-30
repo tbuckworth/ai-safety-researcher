@@ -19,12 +19,34 @@ pipeline could not support:
 Usage (each prints a JSON report on stdout and a summary on stderr):
 
   preflight_checks.py degeneracy outputs.json [--field text] [--reference base_outputs.json]
+                                 [--max-degenerate-frac 0.1]
   preflight_checks.py training losses.json|train.log
-  preflight_checks.py separation --positive pos.json --negative neg.json [--lo 0 --hi 1]
+  preflight_checks.py separation --positive pos.json --negative neg.json [--value score]
+                                 [--cluster prompt_id] [--min-auroc 0.8] [--lo 0 --hi 1] [--lower-is-positive]
   preflight_checks.py compare records.jsonl --a control --b treatment [--cluster prompt_id]
+                              [--n-comparisons 3]
 
 Inputs are JSON lists, JSONL, or plain text (one item per line). Items may be
-objects; pick the field with --field (texts) or --value/--cluster (numbers).
+objects; name the field to read with --field (texts) or --value (numbers), or
+leave it out to read the first of the usual field names an object has. An
+object without that field is bad input. --cluster names the field holding each
+record's prompt, scenario or item id, and every record must have one.
+
+training reads a JSON list of losses (numbers, or objects with a "loss" field),
+an object holding one (such as {"losses": [...]}), or JSONL. A null loss counts
+as non-finite, so the check fails; an object without "loss" is bad input. A
+file that is not JSON is a text log, and every "loss: X" or "loss=X" in it is
+read.
+
+compare's p_adjusted is the Bonferroni-adjusted p for a family of
+--n-comparisons tests. Without that flag p_adjusted is null and the status is
+WARN.
+
+Every report has "params": the settings that decided its result, defaults
+included (thresholds, saturation bounds, the fields read, the family size, the
+resampling iterations and seed). separation and compare also give the "design":
+"paired" when both groups have exactly the same units, else "independent".
+
 Exit status: 0 PASS (or WARN), 1 FAIL, 2 bad input. Standard library only, so
 it runs in any experiment environment; it can also be imported.
 """
@@ -40,6 +62,7 @@ import statistics
 import sys
 import zlib
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from pathlib import Path
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -55,57 +78,84 @@ def worse(status: str, other: str) -> str:
 # Input loading
 # --------------------------------------------------------------------------
 
+# Keys under which a JSON object can hold the list of items.
+LIST_KEYS = ("outputs", "samples", "generations", "records", "values", "scores", "losses", "data")
+# The fields read from an object item when no field is named: the first one present.
+TEXT_FIELDS = ("text", "output", "completion", "response", "generation")
+NUMBER_FIELDS = ("value", "score", "loss")
+
+
 def load_items(path: str | Path) -> list:
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     stripped = text.strip()
     if not stripped:
         return []
     if stripped[0] in "[{":
-        try:
-            data = json.loads(stripped)
-            if isinstance(data, dict):
-                for key in ("outputs", "samples", "generations", "records", "values", "scores", "losses", "data"):
-                    if isinstance(data.get(key), list):
-                        return data[key]
-                return [data]
-            return data
-        except json.JSONDecodeError:
-            items = []
-            for line in stripped.splitlines():
-                if line.strip():
-                    items.append(json.loads(line))
-            return items
+        return json_items(stripped)
     return [line for line in text.splitlines() if line.strip()]
 
 
-def texts_from(items: list, field: str | None) -> list[str]:
-    out = []
-    for item in items:
-        if isinstance(item, dict):
-            key = field or next((k for k in ("text", "output", "completion", "response", "generation") if k in item), None)
-            if key is None:
-                raise ValueError(f"cannot find a text field in {sorted(item)}; pass --field")
-            out.append(str(item.get(key) or ""))
-        else:
-            out.append(str(item))
-    return out
+def json_items(text: str) -> list:
+    """The items of a JSON document or of JSONL; json.JSONDecodeError if the text is neither.
+
+    An object holding a list under one of LIST_KEYS gives that list; any other
+    single value is one item.
+    """
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return [json.loads(line) for line in text.splitlines() if line.strip()]
+    if isinstance(data, dict):
+        for key in LIST_KEYS:
+            if isinstance(data.get(key), list):
+                return data[key]
+    return data if isinstance(data, list) else [data]
 
 
-def numbers_from(items: list, value: str | None, cluster: str | None = None) -> tuple[list[float], list | None]:
-    values, clusters = [], ([] if cluster else None)
-    for item in items:
+def field_values(items: list, field: str | None, defaults: tuple[str, ...], convert: Callable) -> list:
+    """`convert` applied to each item, or to the field it reads from an object item.
+
+    That field is `field`, or with none named the first of `defaults` the object
+    has. An object without it is an error, and so is a value `convert` rejects.
+    """
+    values = []
+    for index, item in enumerate(items):
         if isinstance(item, dict):
-            key = value or next((k for k in ("value", "score", "loss") if k in item), None)
+            key = field or next((k for k in defaults if k in item), None)
             if key is None:
-                raise ValueError(f"cannot find a numeric field in {sorted(item)}; pass --value")
-            values.append(float(item[key]))
-            if clusters is not None:
-                clusters.append(item.get(cluster))
-        else:
-            values.append(float(item))
-            if clusters is not None:
-                clusters.append(None)
-    return values, clusters
+                raise ValueError(f"item {index} has none of the fields {', '.join(defaults)} "
+                                 f"(it has {sorted(item)}); name the one to read")
+            if key not in item:
+                raise ValueError(f"item {index} has no {key!r} field (it has {sorted(item)})")
+            item = item[key]
+        try:
+            values.append(convert(item))
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"item {index}: {error}") from error
+    return values
+
+
+def as_text(value: object) -> str:
+    """A generation as text; a null generation is empty, which the degeneracy check flags."""
+    return "" if value is None else str(value)
+
+
+def as_loss(value: object) -> float:
+    """A loss as a float. JSON has no NaN, so loggers write a NaN loss as null."""
+    return math.nan if value is None else float(value)
+
+
+def cluster_ids(records: list, cluster: str) -> list:
+    """Each record's `cluster` id.
+
+    A record without one is an error: counting it as its own unit would quietly
+    change the unit of analysis.
+    """
+    missing = [r for r in records if not isinstance(r, dict) or r.get(cluster) is None]
+    if missing:
+        raise ValueError(f"{len(missing)} of {len(records)} records have no {cluster!r} id, "
+                         f"e.g. {str(missing[0])[:120]}")
+    return [r[cluster] for r in records]
 
 
 # --------------------------------------------------------------------------
@@ -184,8 +234,9 @@ def sample_report(text: str) -> dict:
 
 def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
                      reference: list[str] | None = None) -> dict:
+    params = {"max_degenerate_frac": max_degenerate_frac, "reference": reference is not None}
     if not texts:
-        return {"check": "degeneracy", "status": FAIL, "messages": ["no samples to check"]}
+        return {"check": "degeneracy", "status": FAIL, "params": params, "messages": ["no samples to check"]}
     samples = [sample_report(t) for t in texts]
     degenerate = [i for i, s in enumerate(samples) if s["degenerate"]]
     frac = len(degenerate) / len(texts)
@@ -201,6 +252,7 @@ def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
             messages.append(f"mode collapse: {count}/{len(long_texts)} outputs are identical ({top[:60]!r}...)")
     report = {
         "check": "degeneracy",
+        "params": params,
         "n": len(texts),
         "degenerate_fraction": round(frac, 3),
         "examples": [{"index": i, "reasons": samples[i]["reasons"], "text": texts[i][:200]} for i in degenerate[:5]],
@@ -228,24 +280,29 @@ def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
 _LOSS_RE = re.compile(r"""['"]?\b(?:train_)?loss['"]?\s*[:=]\s*['"]?(-?[0-9.]+(?:[eE][-+]?\d+)?|nan|inf|-inf)""", re.IGNORECASE)
 
 
-def losses_from_file(path: str | Path) -> list[float]:
+def losses_from_file(path: str | Path) -> tuple[list[float], str]:
+    """The losses in a file, and how it was read: "json" or "text log".
+
+    JSON and JSONL are read by json_items, like every other input, and each
+    item is a loss or an object with a "loss" field. Only a file that is
+    neither is a text log, scraped with _LOSS_RE.
+    """
     text = Path(path).read_text(encoding="utf-8", errors="replace")
-    stripped = text.strip()
-    if stripped.startswith("["):
-        try:
-            return [float(x["loss"] if isinstance(x, dict) else x) for x in json.loads(stripped)]
-        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-            pass
-    return [float(m.group(1)) for m in _LOSS_RE.finditer(text)]
+    try:
+        items = json_items(text.strip())
+    except json.JSONDecodeError:
+        return [float(m.group(1)) for m in _LOSS_RE.finditer(text)], "text log"
+    return field_values(items, "loss", (), as_loss), "json"
 
 
 def check_training(losses: list[float]) -> dict:
-    status, messages = PASS, []
+    status, messages, params = PASS, [], {}
     if len(losses) < 4:
-        return {"check": "training", "status": FAIL, "n": len(losses),
+        return {"check": "training", "status": FAIL, "params": params, "n": len(losses),
                 "messages": [f"only {len(losses)} loss values found; log the loss every few steps"]}
     if any(not math.isfinite(x) for x in losses):
-        return {"check": "training", "status": FAIL, "n": len(losses), "messages": ["non-finite loss (nan/inf)"]}
+        return {"check": "training", "status": FAIL, "params": params, "n": len(losses),
+                "messages": ["non-finite loss (nan, inf, or null in JSON)"]}
     k = max(1, len(losses) // 10)
     start, end = statistics.mean(losses[:k]), statistics.mean(losses[-k:])
     scale = abs(start) or 1e-12  # sign-aware: some objectives are negative
@@ -265,7 +322,7 @@ def check_training(losses: list[float]) -> dict:
             status = worse(status, WARN)
             messages.append(f"loss spike at step index {i}: {losses[i]:.4g} vs running median {median:.4g}")
             break
-    return {"check": "training", "status": status, "n": len(losses),
+    return {"check": "training", "status": status, "params": params, "n": len(losses),
             "start": round(start, 6), "end": round(end, 6),
             "messages": messages or [f"loss decreased {start:.4g} -> {end:.4g}"]}
 
@@ -293,15 +350,21 @@ def auroc(positive: list[float], negative: list[float]) -> float:
 def cluster_means(values: list[float], clusters: list | None, group: str) -> dict:
     """Mean per independent unit, keyed by cluster id.
 
-    A value without a cluster id is its own unit, keyed uniquely to `group`, so
-    two groups are only ever paired on cluster ids they explicitly share —
-    never by row position (which made sorted inputs look hugely significant).
+    Without cluster ids (`clusters` is None) each value is its own unit, keyed
+    uniquely to `group`, so two groups are only ever paired on cluster ids they
+    explicitly share — never by row position (which made sorted inputs look
+    hugely significant). Callers take the ids from cluster_ids, which refuses
+    a record without one.
     """
     grouped = defaultdict(list)
     for index, value in enumerate(values):
         cid = clusters[index] if clusters is not None else None
         grouped[("_row", group, index) if cid is None else cid].append(value)
     return {c: statistics.mean(vs) for c, vs in grouped.items()}
+
+
+# Resampling settings for the bootstrap interval and the permutation p-value.
+BOOTSTRAP_ITERS, PERMUTATION_ITERS, RESAMPLING_SEED = 2000, 5000, 0
 
 
 def _paired_diffs(a: dict, b: dict) -> list[float] | None:
@@ -312,7 +375,13 @@ def _paired_diffs(a: dict, b: dict) -> list[float] | None:
     return None
 
 
-def bootstrap_diff_ci(a: dict, b: dict, *, iters: int = 2000, seed: int = 0, level: float = 0.95) -> tuple[float, float]:
+def design(a: dict, b: dict) -> str:
+    """How the two groups are compared: "paired" or "independent"."""
+    return "independent" if _paired_diffs(a, b) is None else "paired"
+
+
+def bootstrap_diff_ci(a: dict, b: dict, *, iters: int = BOOTSTRAP_ITERS, seed: int = RESAMPLING_SEED,
+                      level: float = 0.95) -> tuple[float, float]:
     """CI for mean(b) - mean(a), resampling clusters (paired when clusters are shared)."""
     rng = random.Random(seed)
     d = _paired_diffs(a, b)
@@ -330,7 +399,7 @@ def bootstrap_diff_ci(a: dict, b: dict, *, iters: int = 2000, seed: int = 0, lev
     return lo, hi
 
 
-def permutation_p(a: dict, b: dict, *, iters: int = 5000, seed: int = 0) -> float:
+def permutation_p(a: dict, b: dict, *, iters: int = PERMUTATION_ITERS, seed: int = RESAMPLING_SEED) -> float:
     rng = random.Random(seed)
     d = _paired_diffs(a, b)
     if d is not None:
@@ -357,13 +426,22 @@ def check_separation(positive: list[float], negative: list[float], *,
                      pos_clusters: list | None = None, neg_clusters: list | None = None,
                      min_auroc: float = 0.8, lo: float | None = None, hi: float | None = None,
                      higher_is_positive: bool = True) -> dict:
-    """Does the metric tell known positives from known negatives?"""
+    """Does the metric tell known positives from known negatives?
+
+    Given the metric's range (both lo and hi), it also fails a metric that has
+    both groups at its ceiling or its floor.
+    """
+    if (lo is None) != (hi is None) or (lo is not None and hi <= lo):
+        raise ValueError(f"the saturation check needs both bounds with lo < hi (got lo={lo}, hi={hi})")
+    params = {"min_auroc": min_auroc, "lo": lo, "hi": hi, "saturation_checked": lo is not None,
+              "higher_is_positive": higher_is_positive, "bootstrap_iters": BOOTSTRAP_ITERS, "seed": RESAMPLING_SEED}
     if not higher_is_positive:
         positive, negative = [-v for v in positive], [-v for v in negative]
         lo, hi = (-hi if hi is not None else None), (-lo if lo is not None else None)
     a = cluster_means(negative, neg_clusters, "negative")
     b = cluster_means(positive, pos_clusters, "positive")
-    report = {"check": "separation", "n_positive": len(positive), "n_negative": len(negative),
+    report = {"check": "separation", "params": params, "design": design(a, b),
+              "n_positive": len(positive), "n_negative": len(negative),
               "independent_positive": len(b), "independent_negative": len(a)}
     if len(a) < 3 or len(b) < 3:
         report.update(status=FAIL, messages=[
@@ -382,7 +460,7 @@ def check_separation(positive: list[float], negative: list[float], *,
     if ci[0] <= 0:
         status = FAIL
         messages.append(f"95% CI of the difference {ci[0]:.4g}..{ci[1]:.4g} includes zero or is negative")
-    if lo is not None and hi is not None and hi > lo:
+    if params["saturation_checked"]:
         span = hi - lo
         near_hi = all(m >= hi - 0.05 * span for m in (mean_pos, mean_neg))
         near_lo = all(m <= lo + 0.05 * span for m in (mean_pos, mean_neg))
@@ -404,7 +482,18 @@ ITEM_KEYS = ("prompt_id", "item_id", "scenario_id", "question_id", "prompt", "sc
 
 
 def compare(records: list[dict], *, a: str, b: str, condition: str = "condition", value: str = "value",
-            cluster: str | None = None, seed_field: str = "seed", n_comparisons: int = 1) -> dict:
+            cluster: str | None = None, seed_field: str = "seed", n_comparisons: int | None = None) -> dict:
+    """Treatment `b` against control `a`, over the independent units of each.
+
+    p_adjusted is Bonferroni over a family of `n_comparisons` tests; it is null,
+    with a warning, when the family size is not given.
+    """
+    not_objects = [r for r in records if not isinstance(r, dict)]
+    if not_objects:
+        raise ValueError(f"{len(not_objects)} of {len(records)} records are not JSON objects, "
+                         f"e.g. {str(not_objects[0])[:120]}")
+    if n_comparisons is not None and n_comparisons < 1:
+        raise ValueError(f"n_comparisons must be at least 1 (got {n_comparisons})")
     groups = {name: [r for r in records if str(r.get(condition)) == name] for name in (a, b)}
     for name, rows in groups.items():
         if not rows:
@@ -412,7 +501,7 @@ def compare(records: list[dict], *, a: str, b: str, condition: str = "condition"
     means, warnings, notes, detail = {}, [], [], {}
     for name, rows in groups.items():
         values = [float(r[value]) for r in rows]
-        clusters = [r.get(cluster) for r in rows] if cluster else None
+        clusters = cluster_ids(rows, cluster) if cluster else None
         means[name] = cluster_means(values, clusters, name)
         seeds = sorted({str(r[seed_field]) for r in rows if seed_field in r})
         detail[name] = {"n_records": len(rows), "n_independent": len(means[name]),
@@ -434,12 +523,21 @@ def compare(records: list[dict], *, a: str, b: str, condition: str = "condition"
                             "intervals and p-values use the clusters")
     lo, hi = bootstrap_diff_ci(means[a], means[b])
     p = permutation_p(means[a], means[b])
-    p_adj = min(1.0, p * max(1, n_comparisons))
-    return {"check": "compare", "status": WARN if warnings else PASS,
+    if n_comparisons is None:
+        p_adjusted = None
+        warnings.append("family size not given, so p_adjusted is null: pass --n-comparisons with the number of "
+                        "tests in the family (1 if this is the only one)")
+    else:
+        p_adjusted = round(min(1.0, p * n_comparisons), 5)
+    params = {"a": a, "b": b, "condition": condition, "value": value, "cluster": cluster, "seed_field": seed_field,
+              "n_comparisons": n_comparisons, "bootstrap_iters": BOOTSTRAP_ITERS,
+              "permutation_iters": PERMUTATION_ITERS, "seed": RESAMPLING_SEED}
+    return {"check": "compare", "status": WARN if warnings else PASS, "params": params,
+            "design": design(means[a], means[b]),
             "conditions": detail,
             "difference": round(statistics.mean(means[b].values()) - statistics.mean(means[a].values()), 6),
             "diff_ci95": [round(lo, 6), round(hi, 6)],
-            "p_value": round(p, 5), "p_adjusted": round(p_adj, 5), "n_comparisons": n_comparisons,
+            "p_value": round(p, 5), "p_adjusted": p_adjusted,
             "messages": warnings + notes or ["unit of analysis is explicit; interval and p-value reported"]}
 
 
@@ -484,28 +582,38 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--value", default="value")
     p.add_argument("--cluster", help="field naming the prompt/scenario/item a record came from")
     p.add_argument("--seed-field", default="seed")
-    p.add_argument("--n-comparisons", type=int, default=1, help="tests in the family, for Bonferroni")
+    p.add_argument("--n-comparisons", type=int,
+                   help="tests in the family, for the Bonferroni-adjusted p_adjusted (null without it)")
 
     args = parser.parse_args(argv)
     try:
         if args.command == "degeneracy":
-            reference = texts_from(load_items(args.reference), args.field) if args.reference else None
-            return emit(check_degeneracy(texts_from(load_items(args.outputs), args.field),
-                                         max_degenerate_frac=args.max_degenerate_frac, reference=reference))
-        if args.command == "training":
-            return emit(check_training(losses_from_file(args.losses)))
-        if args.command == "separation":
-            pos, pos_c = numbers_from(load_items(args.positive), args.value, args.cluster)
-            neg, neg_c = numbers_from(load_items(args.negative), args.value, args.cluster)
-            return emit(check_separation(pos, neg, pos_clusters=pos_c, neg_clusters=neg_c,
-                                         min_auroc=args.min_auroc, lo=args.lo, hi=args.hi,
-                                         higher_is_positive=not args.lower_is_positive))
-        records = [r for r in load_items(args.records) if isinstance(r, dict)]
-        return emit(compare(records, a=args.a, b=args.b, condition=args.condition, value=args.value,
-                            cluster=args.cluster, seed_field=args.seed_field, n_comparisons=args.n_comparisons))
+            reference = (field_values(load_items(args.reference), args.field, TEXT_FIELDS, as_text)
+                         if args.reference else None)
+            report = check_degeneracy(field_values(load_items(args.outputs), args.field, TEXT_FIELDS, as_text),
+                                      max_degenerate_frac=args.max_degenerate_frac, reference=reference)
+            report["params"]["field"] = args.field
+        elif args.command == "training":
+            losses, read_as = losses_from_file(args.losses)
+            report = check_training(losses)
+            report["params"]["losses_read_as"] = read_as
+        elif args.command == "separation":
+            pos_items, neg_items = load_items(args.positive), load_items(args.negative)
+            report = check_separation(field_values(pos_items, args.value, NUMBER_FIELDS, float),
+                                      field_values(neg_items, args.value, NUMBER_FIELDS, float),
+                                      pos_clusters=cluster_ids(pos_items, args.cluster) if args.cluster else None,
+                                      neg_clusters=cluster_ids(neg_items, args.cluster) if args.cluster else None,
+                                      min_auroc=args.min_auroc, lo=args.lo, hi=args.hi,
+                                      higher_is_positive=not args.lower_is_positive)
+            report["params"].update(value=args.value, cluster=args.cluster)
+        else:
+            report = compare(load_items(args.records), a=args.a, b=args.b, condition=args.condition,
+                             value=args.value, cluster=args.cluster, seed_field=args.seed_field,
+                             n_comparisons=args.n_comparisons)
     except (OSError, ValueError, KeyError) as error:
         print(f"preflight_checks: {error}", file=sys.stderr)
         return 2
+    return emit(report)
 
 
 if __name__ == "__main__":

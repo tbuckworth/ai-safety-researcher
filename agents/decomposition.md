@@ -140,7 +140,7 @@ When estimating P_success, think about it as a bet:
 - "If 10 research teams tried this component, how many would succeed?"
 
 Common mistakes to avoid:
-- **Estimate from evidence, not hope**: P_success tends to drift upward when estimated from intuition. Anchor it on what the literature actually shows; when in doubt, widen the interval downward.
+- **Estimate from evidence, not hope**: P_success tends to drift upward when estimated from intuition. Anchor it on what the literature actually shows; when in doubt, lower the estimate.
 - **Ignoring infrastructure**: Data cleaning, environment setup, and debugging often take longer than expected.
 - **Assuming linearity**: A technique working on a toy problem doesn't mean it works at scale.
 - **Anchoring on one success**: One paper succeeding doesn't mean P=0.9 — what about unpublished failures?

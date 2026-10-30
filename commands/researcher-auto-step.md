@@ -602,7 +602,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Write output to: <run-dir>/audit/results-audit.md
    """)
    ```
-   (On a follow-up, prior experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
+   (On a follow-up, this run's experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
 
 4. **Read `audit/results-audit.md` overall disposition and decide.** The auditor's report includes a **Limitation triage** table (WORKFLOW.md's Limitation Triage rubric). This table carries forward verbatim to Step 11 (it drives Limitations dispositions and Future Work) — do not drop it. A fix-now item that would flip a *claim* should already have been raised as a `FIXABLE-DEFECT` and handled by the loop below; the rest are write-up guidance for the report. Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
 

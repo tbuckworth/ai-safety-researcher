@@ -30,7 +30,9 @@ Inputs are JSON lists, JSONL, or plain text (one item per line). Items may be
 objects; name the field to read with --field (texts) or --value (numbers), or
 leave it out to read the first of the usual field names an object has. An
 object without that field is bad input. --cluster names the field holding each
-record's prompt, scenario or item id, and every record must have one.
+record's prompt, scenario or item id, and every record must have one. A JSONL
+file whose first line is JSON but a later line is not, such as a log cut off
+by a killed run, is bad input.
 
 training reads a JSON list of losses (numbers, or objects with a "loss" field),
 an object holding one (such as {"losses": [...]}, or a Hugging Face
@@ -38,16 +40,18 @@ trainer_state.json, whose list is "log_history"), or JSONL. Objects without a
 "loss" field, such as eval and summary entries, are skipped, and the report
 counts them; a file where no entry has one is bad input. A null loss counts as
 non-finite, so the check fails. A file that is not JSON is a text log, and
-every "loss: X" or "loss=X" in it is read.
+every "loss: X" or "loss=X" in it is read, with null, None and NaN read as NaN.
 
-compare's p_adjusted is the Bonferroni-adjusted p for a family of
---n-comparisons tests. Without that flag p_adjusted is null and the status is
-WARN.
+compare needs, in every record, the --condition field and a numeric --value
+(and the --cluster id, if given), whichever condition the record belongs to.
+Its p_adjusted is the Bonferroni-adjusted p for a family of --n-comparisons
+tests. Without that flag p_adjusted is null and the status is WARN.
 
 Every report has "params": the settings that decided its result, defaults
 included (thresholds, saturation bounds, the fields read, the family size, the
-resampling iterations and seed, how a loss file was read). separation and compare also give the "design":
-"paired" when both groups have exactly the same units, else "independent".
+resampling iterations and seed, how a loss file was read). separation and
+compare also give the "design": "paired" when both groups have exactly the
+same units, else "independent".
 
 Exit status: 0 PASS (or WARN), 1 FAIL, 2 bad input. Standard library only, so
 it runs in any experiment environment; it can also be imported.
@@ -93,7 +97,7 @@ def load_items(path: str | Path) -> list:
     if not stripped:
         return []
     if stripped[0] in "[{":
-        return json_items(stripped, LIST_KEYS)
+        return json_items(text, LIST_KEYS)
     return [line for line in text.splitlines() if line.strip()]
 
 
@@ -101,17 +105,39 @@ def json_items(text: str, list_keys: tuple[str, ...]) -> list:
     """The items of a JSON document or of JSONL; json.JSONDecodeError if the text is neither.
 
     An object holding a list under one of `list_keys` gives that list; any
-    other single value is one item.
+    other single value is one item. JSONL whose first line is JSON but a
+    later line is not raises ValueError naming that line.
     """
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
-        return [json.loads(line) for line in text.splitlines() if line.strip()]
+        return jsonl_items(text)
     if isinstance(data, dict):
         for key in list_keys:
             if isinstance(data.get(key), list):
                 return data[key]
     return data if isinstance(data, list) else [data]
+
+
+def jsonl_items(text: str) -> list:
+    """One item per non-blank line of JSONL.
+
+    json.JSONDecodeError when the first line is not JSON, so the text is not
+    JSONL at all. ValueError, naming the line, when a later line is not JSON,
+    as in a log cut off by a killed run: the file is JSONL but incomplete.
+    """
+    items = []
+    for number, line in enumerate(text.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            items.append(json.loads(line))
+        except json.JSONDecodeError as error:
+            if not items:
+                raise
+            raise ValueError(f"line {number} is not JSON ({error.msg}), but the lines before it are; "
+                             "the file may be truncated") from error
+    return items
 
 
 def field_values(items: list, field: str | None, defaults: tuple[str, ...], convert: Callable) -> list:
@@ -147,17 +173,17 @@ def as_loss(value: object) -> float:
     return math.nan if value is None else float(value)
 
 
-def cluster_ids(records: list, cluster: str) -> list:
-    """Each record's `cluster` id.
+def record_field(records: list, field: str) -> list:
+    """Each record's `field`, such as its condition or its cluster id.
 
-    A record without one is an error: counting it as its own unit would quietly
-    change the unit of analysis.
+    A record without it, or with null, is an error. Leaving such a record out,
+    or counting it as its own cluster, would quietly change what is compared.
     """
-    missing = [r for r in records if not isinstance(r, dict) or r.get(cluster) is None]
+    missing = [r for r in records if not isinstance(r, dict) or r.get(field) is None]
     if missing:
-        raise ValueError(f"{len(missing)} of {len(records)} records have no {cluster!r} id, "
+        raise ValueError(f"{len(missing)} of {len(records)} records have no {field!r} value, "
                          f"e.g. {str(missing[0])[:120]}")
-    return [r[cluster] for r in records]
+    return [r[field] for r in records]
 
 
 # --------------------------------------------------------------------------
@@ -279,25 +305,34 @@ def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
 # Training curve
 # --------------------------------------------------------------------------
 
-_LOSS_RE = re.compile(r"""['"]?\b(?:train_)?loss['"]?\s*[:=]\s*['"]?(-?[0-9.]+(?:[eE][-+]?\d+)?|nan|inf|-inf)""", re.IGNORECASE)
+_LOSS_RE = re.compile(r"""['"]?\b(?:train_)?loss['"]?\s*[:=]\s*['"]?(-?[0-9.]+(?:[eE][-+]?\d+)?|nan|inf|-inf|null|none)""",
+                      re.IGNORECASE)
 # A Hugging Face trainer_state.json keeps its training log under "log_history".
 LOSS_LIST_KEYS = ("log_history",) + LIST_KEYS
 
 
-def losses_from_file(path: str | Path) -> tuple[list[float], dict]:
-    """The losses in a file, and how it was read.
+def logged_loss(token: str) -> float:
+    """A loss as a text log writes it; null and None (a NaN loss) read as NaN."""
+    return as_loss(None if token.lower() in ("null", "none") else token)
 
-    JSON and JSONL are read by json_items, like every other input. Each entry
-    is a loss or an object; an object without a "loss" field (an eval or
-    summary entry) is skipped and counted in "entries_without_loss", and a file
-    where no entry has one is an error. Only a file that is neither JSON nor
-    JSONL is a text log, scraped with _LOSS_RE.
+
+def losses_from_file(path: str | Path) -> tuple[list[float], dict]:
+    """The losses in a training-loss file, and a dict saying how it was read.
+
+    A JSON or JSONL file is a list of losses or of entries with a "loss" field,
+    or an object holding such a list (including a Hugging Face
+    trainer_state.json). Every entry's loss is read, a null one as NaN; entries
+    without a "loss" field, such as eval and summary entries, are skipped and
+    counted in "entries_without_loss". A file where no entry has a loss, or a
+    JSONL file with a line that is not JSON, raises ValueError. Any other file
+    is a text log: every "loss: X" or "loss=X" in it is read, with null, None
+    and NaN read as NaN.
     """
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     try:
-        items = json_items(text.strip(), LOSS_LIST_KEYS)
+        items = json_items(text, LOSS_LIST_KEYS)
     except json.JSONDecodeError:
-        losses = [float(m.group(1)) for m in _LOSS_RE.finditer(text)]
+        losses = [logged_loss(m.group(1)) for m in _LOSS_RE.finditer(text)]
         return losses, {"losses_read_as": "text log", "entries_without_loss": None}
     entries = [item for item in items if not isinstance(item, dict) or "loss" in item]
     if items and not entries:
@@ -306,14 +341,30 @@ def losses_from_file(path: str | Path) -> tuple[list[float], dict]:
     return field_values(entries, "loss", (), as_loss), reading
 
 
-def check_training(losses: list[float]) -> dict:
-    status, messages, params = PASS, [], {}
+def check_training(losses: list[float], reading: dict | None = None) -> dict:
+    """Is the loss curve finite, and did it fall?
+
+    `reading` is the dict losses_from_file returns with the losses. The report
+    records it in params and says how many JSON entries had no loss, so
+    check_training(*losses_from_file(path)) gives the CLI's report.
+    """
+    report = _loss_curve_report(losses)
+    report["params"] = {} if reading is None else dict(reading)
+    if reading is not None and reading["entries_without_loss"]:
+        skipped = reading["entries_without_loss"]
+        report["messages"].append(f"{skipped} of {len(losses) + skipped} JSON entries have no \"loss\" field "
+                                  "(eval or summary entries) and were not read")
+    return report
+
+
+def _loss_curve_report(losses: list[float]) -> dict:
+    status, messages = PASS, []
     if len(losses) < 4:
-        return {"check": "training", "status": FAIL, "params": params, "n": len(losses),
+        return {"check": "training", "status": FAIL, "n": len(losses),
                 "messages": [f"only {len(losses)} loss values found; log the loss every few steps"]}
     if any(not math.isfinite(x) for x in losses):
-        return {"check": "training", "status": FAIL, "params": params, "n": len(losses),
-                "messages": ["non-finite loss (nan, inf, or null in JSON)"]}
+        return {"check": "training", "status": FAIL, "n": len(losses),
+                "messages": ["non-finite loss (nan, inf, or null)"]}
     k = max(1, len(losses) // 10)
     start, end = statistics.mean(losses[:k]), statistics.mean(losses[-k:])
     scale = abs(start) or 1e-12  # sign-aware: some objectives are negative
@@ -333,7 +384,7 @@ def check_training(losses: list[float]) -> dict:
             status = worse(status, WARN)
             messages.append(f"loss spike at step index {i}: {losses[i]:.4g} vs running median {median:.4g}")
             break
-    return {"check": "training", "status": status, "params": params, "n": len(losses),
+    return {"check": "training", "status": status, "n": len(losses),
             "start": round(start, 6), "end": round(end, 6),
             "messages": messages or [f"loss decreased {start:.4g} -> {end:.4g}"]}
 
@@ -363,9 +414,9 @@ def cluster_means(values: list[float], clusters: list | None, group: str) -> dic
 
     Without cluster ids (`clusters` is None) each value is its own unit, keyed
     uniquely to `group`, so two groups are only ever paired on cluster ids they
-    explicitly share — never by row position (which made sorted inputs look
-    hugely significant). Callers take the ids from cluster_ids, which refuses
-    a record without one.
+    explicitly share, never by row position, which would make sorted inputs
+    look significant. Callers take the ids from record_field, which refuses a
+    record without one.
     """
     grouped = defaultdict(list)
     for index, value in enumerate(values):
@@ -497,7 +548,9 @@ def compare(records: list[dict], *, a: str, b: str, condition: str = "condition"
     """Treatment `b` against control `a`, over the independent units of each.
 
     p_adjusted is Bonferroni over a family of `n_comparisons` tests; it is null,
-    with a warning, when the family size is not given.
+    with a warning, when the family size is not given. Every record needs a
+    condition and a numeric value, and a cluster id when `cluster` is given,
+    whichever condition it belongs to.
     """
     not_objects = [r for r in records if not isinstance(r, dict)]
     if not_objects:
@@ -505,20 +558,25 @@ def compare(records: list[dict], *, a: str, b: str, condition: str = "condition"
                          f"e.g. {str(not_objects[0])[:120]}")
     if n_comparisons is not None and n_comparisons < 1:
         raise ValueError(f"n_comparisons must be at least 1 (got {n_comparisons})")
-    groups = {name: [r for r in records if str(r.get(condition)) == name] for name in (a, b)}
-    for name, rows in groups.items():
-        if not rows:
+    conditions = [str(c) for c in record_field(records, condition)]
+    values = field_values(records, value, (), float)
+    unit_ids = record_field(records, cluster) if cluster else None
+    groups = {name: [i for i, c in enumerate(conditions) if c == name] for name in (a, b)}
+    for name, indices in groups.items():
+        if not indices:
             raise ValueError(f"no records with {condition}={name!r}")
     means, warnings, notes, detail = {}, [], [], {}
-    for name, rows in groups.items():
-        values = [float(r[value]) for r in rows]
-        clusters = cluster_ids(rows, cluster) if cluster else None
-        means[name] = cluster_means(values, clusters, name)
+    for name, indices in groups.items():
+        rows = [records[i] for i in indices]
+        group_values = [values[i] for i in indices]
+        clusters = [unit_ids[i] for i in indices] if unit_ids is not None else None
+        means[name] = cluster_means(group_values, clusters, name)
         seeds = sorted({str(r[seed_field]) for r in rows if seed_field in r})
         detail[name] = {"n_records": len(rows), "n_independent": len(means[name]),
-                        "n_seeds": len(seeds) or None, "mean": round(statistics.mean(values), 6)}
+                        "n_seeds": len(seeds) or None, "mean": round(statistics.mean(group_values), 6)}
         if seeds:
-            per_seed = [statistics.mean(float(r[value]) for r in rows if str(r.get(seed_field)) == s) for s in seeds]
+            per_seed = [statistics.mean(v for v, r in zip(group_values, rows) if str(r.get(seed_field)) == s)
+                        for s in seeds]
             detail[name]["seed_means"] = [round(x, 6) for x in per_seed]
             if len(seeds) < 3:
                 warnings.append(f"{name}: {len(seeds)} seed(s); report as preliminary, a seed change may flip it")
@@ -605,19 +663,13 @@ def main(argv: list[str] | None = None) -> int:
                                       max_degenerate_frac=args.max_degenerate_frac, reference=reference)
             report["params"]["field"] = args.field
         elif args.command == "training":
-            losses, reading = losses_from_file(args.losses)
-            report = check_training(losses)
-            report["params"].update(reading)
-            skipped = reading["entries_without_loss"]
-            if skipped:
-                report["messages"].append(f"{skipped} of {len(losses) + skipped} JSON entries have no \"loss\" field "
-                                          "(eval or summary entries) and were not read")
+            report = check_training(*losses_from_file(args.losses))
         elif args.command == "separation":
             pos_items, neg_items = load_items(args.positive), load_items(args.negative)
             report = check_separation(field_values(pos_items, args.value, NUMBER_FIELDS, float),
                                       field_values(neg_items, args.value, NUMBER_FIELDS, float),
-                                      pos_clusters=cluster_ids(pos_items, args.cluster) if args.cluster else None,
-                                      neg_clusters=cluster_ids(neg_items, args.cluster) if args.cluster else None,
+                                      pos_clusters=record_field(pos_items, args.cluster) if args.cluster else None,
+                                      neg_clusters=record_field(neg_items, args.cluster) if args.cluster else None,
                                       min_auroc=args.min_auroc, lo=args.lo, hi=args.hi,
                                       higher_is_positive=not args.lower_is_positive)
             report["params"].update(value=args.value, cluster=args.cluster)
@@ -625,7 +677,7 @@ def main(argv: list[str] | None = None) -> int:
             report = compare(load_items(args.records), a=args.a, b=args.b, condition=args.condition,
                              value=args.value, cluster=args.cluster, seed_field=args.seed_field,
                              n_comparisons=args.n_comparisons)
-    except (OSError, ValueError, KeyError) as error:
+    except (OSError, ValueError) as error:
         print(f"preflight_checks: {error}", file=sys.stderr)
         return 2
     return emit(report)

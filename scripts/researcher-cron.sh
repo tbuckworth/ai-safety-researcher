@@ -329,7 +329,7 @@ FOLLOWUP_KEY=""
 
 is_terminal_status() {
     case "$1" in
-        complete|failed|aborted_rethink|timed_out) return 0 ;;
+        complete|failed|timed_out) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -975,19 +975,12 @@ EOF
 }
 
 invoke_provider() {
-    local purpose="$1"
     case "$BACKEND" in
         claude)
-            local allowed_tools
-            if [ "$purpose" = "step" ]; then
-                allowed_tools="Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
-            else
-                allowed_tools="Read,Write,Glob,Grep,Bash"
-            fi
             "$PROVIDER_BIN" --print \
                 --dangerously-skip-permissions \
                 --model "$MODEL" \
-                --allowedTools "$allowed_tools"
+                --allowedTools "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
             ;;
         codex)
             local codex_args=(
@@ -1026,11 +1019,11 @@ invoke_provider() {
 
 run_step_provider() {
     local step="$1"
-    build_step_prompt "$step" | invoke_provider step
+    build_step_prompt "$step" | invoke_provider
 }
 
 run_email_provider() {
-    build_email_prompt compose | invoke_provider email
+    build_email_prompt compose | invoke_provider
 }
 
 run_email_claude() {

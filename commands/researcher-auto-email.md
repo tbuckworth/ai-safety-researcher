@@ -244,7 +244,7 @@ The run directory is: **{{argument}}**
          <!-- Fill these from the "Autonomous Email Handoff" block in your prompt,
               which gives the run host, its SSH alias, the run directory, and the
               plugin directory. Use the REAL absolute paths — never a placeholder.
-              OMIT the ssh step entirely when the handoff says the run host is local. -->
+              OMIT the ssh step entirely when the handoff's SSH alias is `local`. -->
          <li style="margin-bottom: 6px;">Open a terminal on your laptop.</li>
          <li style="margin-bottom: 6px;">Connect to the machine the run lives on: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">ssh &lt;alias&gt;</code></li>
          <li style="margin-bottom: 6px;">Go to the plugin: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">cd &lt;plugin dir&gt;</code></li>
@@ -284,7 +284,7 @@ The run directory is: **{{argument}}**
    - For negative results / RETHINK, the "What We Investigated" section should still explain the idea, and add a prominent "What the Result Shows" section after the results
    - **"Proposed Next Steps" and "How to Continue This Research" are mandatory in every email**, whatever the outcome — complete, negative, aborted, or crashed. An email without them is incomplete. A failed run gets *more* next-steps detail, not less.
    - **Next steps must be specific and resourced.** "Try a bigger model" is not a next step; "re-run exp-002 on a 7B model, which needs a 40GB+ GPU and ~2 GPU-hours" is. Every item states what it would test and what it would cost.
-   - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block — never `<run-dir>`, `/path/to/...`, or a guessed hostname. If the handoff says the run host is local, drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.
+   - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block — never `<run-dir>`, `/path/to/...`, or a guessed hostname. If the handoff's SSH alias is `local`, the reader is already on the run machine: drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.
    - **The results audit is an automated self-check by the same model family — frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
    - **GitHub repo names**: Keep the repo slug under 40 characters to avoid URL truncation. If the `.repo_url` file contains a truncated URL, read the actual URL from the file and use it as-is.

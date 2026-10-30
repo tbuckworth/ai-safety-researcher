@@ -153,6 +153,10 @@ class FollowupIssueTest(unittest.TestCase):
                                   "labels": [{"name": lib.FOLLOWUP_LABEL}]})
         self.assertEqual((meta["prior_repo"], meta["feedback"]), ("", "Just feedback."))
 
+    def test_label_comes_from_the_lib(self):
+        # create-followup-issue.sh files follow-ups, and lists them for duplicates, under this label.
+        self.assertEqual(self.build()["label"], lib.FOLLOWUP_LABEL)
+
     def test_title_is_cut_at_70_characters(self):
         self.assertEqual(self.build("x" * 100)["title"], "[Follow-up] " + "x" * 70)
 

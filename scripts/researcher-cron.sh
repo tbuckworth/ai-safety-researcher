@@ -28,9 +28,8 @@ case ":${PATH}:" in
     *) export PATH="${HOME}/.local/bin:${PATH}" ;;
 esac
 
-# Research output goes on the HDD (2.7TB) to avoid filling the SSD
-HDD="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
-OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${HDD}/researcher-output}"
+STORAGE_ROOT="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
+OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
 LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
@@ -61,6 +60,15 @@ if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
     echo "ERROR: python3 and ${LIB} are required. Exiting." >&2
     exit 1
 fi
+# The workflow steps the runner treats specially (commands/researcher-auto-step.md
+# defines them all): it re-enters the audit while its status is
+# audit_remediating, and the report is the last step. A run that times out at
+# or after FAST_TRACK_MIN_STEP skips the audit and compiles the report from what
+# exists; an earlier one ends timed_out.
+AUDIT_STEP=10
+REPORT_STEP=11
+LAST_STEP=$REPORT_STEP
+FAST_TRACK_MIN_STEP=5
 # Per-step retry: a connection drop mid-step
 # leaves state.md un-advanced; re-running the step from current state recovers it.
 # Bounded so a genuinely stuck step still fails instead of looping forever.
@@ -71,6 +79,9 @@ RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
 # anything, a step that did not advance is WAITING on external compute, not
 # failing — so the attempt is refunded instead of spent. Empty = old behaviour.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
+# Each call of JOB_WAIT_CMD is stopped after this long; it covers the `timeout 90`
+# inside the mats profile's command (and agent-board's).
+JOB_WAIT_CMD_TIMEOUT_SECONDS="${RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS:-120}"
 JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
 JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
 JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
@@ -82,6 +93,7 @@ JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
 # is redone on resume). agent-board's spare-capacity launcher uses it.
 # Empty = old behaviour.
 GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
+GUARD_CMD_TIMEOUT_SECONDS=300
 # A caller that owns one run (agent-board's spare launcher) pins it: with
 # RESEARCHER_RUN_DIR it resumes exactly that run or exits 2, and with
 # RESEARCHER_NO_RESUME=true a fresh start never picks up another unfinished run.
@@ -194,6 +206,8 @@ case "${RESEARCHER_COMPUTE_PROFILE:-}" in
     mats|MATS|mats-cluster)
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
         # A queued/running job for THIS run means the step is waiting, not failing.
+        # Its own 90 s timeout must stay below JOB_WAIT_CMD_TIMEOUT_SECONDS (default 120),
+        # or run_hook cuts squeue off first and the step looks as if it had no jobs.
         : "${JOB_WAIT_CMD:=timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | grep -F '{run_id}' || true}"
         ;;
     *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;
@@ -226,8 +240,8 @@ source "${SCRIPT_DIR}/runner/publish.sh"
 # shellcheck source=runner/notify.sh
 source "${SCRIPT_DIR}/runner/notify.sh"
 
-if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$HDD" ]; then
-    echo "ERROR: storage root not mounted at ${HDD}." >&2
+if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$STORAGE_ROOT" ]; then
+    echo "ERROR: storage root not mounted at ${STORAGE_ROOT}." >&2
     echo "Set RESEARCHER_OUTPUT_DIR to use a different location." >&2
     exit 1
 fi
@@ -407,18 +421,18 @@ while true; do
         upsert_frontmatter_field "timed_out" "true" || true
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
         STEP_RC=0
-        if [ "$CURRENT_STEP" -ge 5 ]; then
-            # Bypass the audit (Step 10) on a timed-out run — never re-enter a
-            # multi-hour remediation re-run — and compile whatever exists (Step 11).
+        if [ "$CURRENT_STEP" -ge "$FAST_TRACK_MIN_STEP" ]; then
+            # Bypass the audit on a timed-out run — never re-enter a
+            # multi-hour remediation re-run — and compile whatever exists.
             log "Skipping the results audit and compiling the report from what exists."
-            # current_step too, so a pause inside Step 11 resumes at Step 11
+            # current_step too, so a pause inside the report resumes at the report
             # rather than re-running the remaining steps and the audit.
-            upsert_frontmatter_field "current_step" "10" || true
+            upsert_frontmatter_field "current_step" "$AUDIT_STEP" || true
             set_status audit_complete
-            run_step 11 || STEP_RC=$?
+            run_step "$REPORT_STEP" || STEP_RC=$?
         fi
         if [ "$STEP_RC" -eq 2 ]; then
-            pause_run 11
+            pause_run "$REPORT_STEP"
         elif [ "$(get_status)" != "complete" ]; then
             # Only a run whose report did NOT complete is marked timed out. A
             # finished report keeps status complete: the timeout used to
@@ -428,9 +442,9 @@ while true; do
         break
     fi
 
-    # Audit-remediation re-entry: stay on Step 10 while the auditor asks for another
+    # Audit-remediation re-entry: stay on the audit while the auditor asks for another
     # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
-    if [ "$CURRENT_STEP" -eq 10 ] && [ "$STATUS" = "audit_remediating" ]; then
+    if [ "$CURRENT_STEP" -eq "$AUDIT_STEP" ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
         if [ "$AUDIT_ROUNDS" -ge 4 ]; then
             # Hand over to the report like any other audit exit; the report's
@@ -440,33 +454,23 @@ while true; do
             set_status audit_complete
             continue
         fi
-        NEXT_STEP=10
+        NEXT_STEP=$AUDIT_STEP
     else
         AUDIT_ROUNDS=0
         NEXT_STEP=$((CURRENT_STEP + 1))
         [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
     fi
 
-    if [ "$NEXT_STEP" -gt 11 ]; then
+    if [ "$NEXT_STEP" -gt "$LAST_STEP" ]; then
         log "All steps completed."
-        # Step 11 advanced current_step but left a non-terminal status.
+        # The last step advanced current_step but left a non-terminal status.
         set_status complete
         break
     fi
 
-    HOLD=$(guard_hold)
-    if [ -n "$HOLD" ]; then
-        if hold_applies "$HOLD"; then
-            HOLD=$(hold_text "$HOLD")
-            log "Guard: ${HOLD}"
-            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$HOLD")" || true
-            pause_run "$NEXT_STEP"
-            break
-        fi
-        # Pausing now would leave this run's cluster jobs unwatched; the step
-        # that collects them goes ahead.
-        OUTSTANDING=$(outstanding_jobs)
-        log "Guard asked to hold (${HOLD}), but job(s) ${OUTSTANDING% } are still outstanding; carrying on."
+    if guard_holds_run; then
+        pause_run "$NEXT_STEP"
+        break
     fi
 
     STEP_RC=0

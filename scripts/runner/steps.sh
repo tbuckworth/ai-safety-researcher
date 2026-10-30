@@ -2,26 +2,34 @@
 # Running one workflow step: retries, waiting on external jobs, guard holds and pausing.
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
-outstanding_jobs() {
-    [ -n "$JOB_WAIT_CMD" ] || return 0
-    local cmd run_id
+run_hook() {
+    # run_hook CMD TIMEOUT: runs the hook command CMD (JOB_WAIT_CMD, GUARD_CMD)
+    # in bash with "{run_id}" replaced by this run's id, stops it after TIMEOUT
+    # seconds, and prints its output; an empty CMD prints nothing. The output
+    # decides, not the exit code: a hook that exits non-zero when it has nothing
+    # to report (a bare `squeue | grep`, the obvious thing to write) reports
+    # nothing, and one that is stopped reports what it printed by then. The
+    # hook's stderr is discarded; a stop is logged on stderr.
+    local cmd="$1" limit="$2" run_id rc=0
+    [ -n "$cmd" ] || return 0
     run_id=$(basename "$RUN_DIR")
-    cmd=${JOB_WAIT_CMD//\{run_id\}/$run_id}
-    # A hook that exits non-zero when there is nothing to report (a bare
-    # `squeue | grep`, the obvious thing to write) must mean "no jobs", not
-    # "abort the run" — which is what pipefail would otherwise do here.
-    ( set +e +o pipefail; eval "$cmd" 2>/dev/null | awk '{print $1}' | tr '\n' ' ' ) || true
+    cmd=${cmd//\{run_id\}/$run_id}
+    timeout "$limit" bash -c "$cmd" 2>/dev/null || rc=$?
+    if [ "$rc" -eq 124 ]; then
+        log "WARN: hook stopped at its ${limit}s limit: ${cmd}" >&2
+    fi
+}
+
+outstanding_jobs() {
+    # This run's outstanding external job ids (the first word of each line
+    # JOB_WAIT_CMD prints), space-separated.
+    run_hook "$JOB_WAIT_CMD" "$JOB_WAIT_CMD_TIMEOUT_SECONDS" | awk '{print $1}' | tr '\n' ' '
 }
 
 guard_hold() {
-    [ -n "$GUARD_CMD" ] || return 0
-    local cmd run_id
-    run_id=$(basename "$RUN_DIR")
-    cmd=${GUARD_CMD//\{run_id\}/$run_id}
-    # Output decides, not the exit code: a guard that fails silently holds nothing
-    # (a guard that must hold on failure says so itself). Bounded, so a hung
-    # guard cannot stall the run between steps for ever.
-    ( set +e +o pipefail; timeout 300 bash -c "$cmd" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1 ) || true
+    # The first non-blank line GUARD_CMD prints, or nothing. A guard that fails
+    # silently holds nothing (a guard that must hold on failure says so itself).
+    run_hook "$GUARD_CMD" "$GUARD_CMD_TIMEOUT_SECONDS" | grep -v '^[[:space:]]*$' | head -1 || true
 }
 
 hold_applies() {
@@ -34,9 +42,70 @@ hold_applies() {
     [ -z "$(outstanding_jobs | tr -d ' ')" ]
 }
 
-hold_text() {
-    local text="${1#!}"
-    printf '%s\n' "${text# }"
+pause_for_guard() {
+    # pause_for_guard HOLD [DETAIL]: logs the guard's hold, without its leading
+    # "!", and records it in state.md as last_pause_reason. The caller pauses.
+    local reason="${1#!}"
+    reason="${reason# }"
+    log "Guard: ${reason}${2:+ ($2)}"
+    upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$reason")" || true
+}
+
+guard_holds_run() {
+    # True when the guard holds the run now (see hold_applies), after
+    # pause_for_guard has recorded why. A hold that waits for outstanding jobs
+    # is logged, and the run carries on: pausing now would leave this run's
+    # cluster jobs unwatched, so the step that collects them goes ahead.
+    local hold outstanding
+    hold=$(guard_hold)
+    [ -n "$hold" ] || return 1
+    if hold_applies "$hold"; then
+        pause_for_guard "$hold"
+        return 0
+    fi
+    outstanding=$(outstanding_jobs)
+    log "Guard asked to hold (${hold}), but job(s) ${outstanding% } are still outstanding; carrying on."
+    return 1
+}
+
+wait_for_jobs() {
+    # wait_for_jobs STEP: waits while this run's external jobs are outstanding,
+    # polling every JOB_WAIT_POLL_SECONDS, until they finish, the run times out,
+    # or the step's waits add up to JOB_WAIT_MAX_SECONDS (counted in
+    # STEP_JOB_WAITED, which run_step resets for each step). A stop from the
+    # guard ("!") ends the wait at once through pause_for_guard, which logs the
+    # stop and records last_pause_reason in state.md (run_step relies on this and
+    # records nothing itself): the jobs keep running, and the step is redone on
+    # resume. Sets JOB_WAIT_RESULT to none (no jobs were
+    # outstanding), finished, gave-up or stopped.
+    local step="$1" outstanding hold waited=0
+    outstanding=$(outstanding_jobs)
+    if [ -z "${outstanding// /}" ]; then
+        JOB_WAIT_RESULT=none
+        return 0
+    fi
+    log "Step ${step}: external job(s) still outstanding (${outstanding% }); waiting rather than spending an attempt."
+    while [ -n "${outstanding// /}" ] \
+        && [ "$STEP_JOB_WAITED" -lt "$JOB_WAIT_MAX_SECONDS" ] \
+        && [ $(( $(date +%s) - START_TIME )) -lt "$TIMEOUT_SECONDS" ]; do
+        sleep "$JOB_WAIT_POLL_SECONDS"
+        waited=$((waited + JOB_WAIT_POLL_SECONDS))
+        STEP_JOB_WAITED=$((STEP_JOB_WAITED + JOB_WAIT_POLL_SECONDS))
+        hold=$(guard_hold)
+        if [ "${hold#!}" != "$hold" ]; then
+            pause_for_guard "$hold" "job(s) ${outstanding% } keep running; this step is redone on resume"
+            JOB_WAIT_RESULT=stopped
+            return 0
+        fi
+        outstanding=$(outstanding_jobs)
+    done
+    if [ -n "${outstanding// /}" ]; then
+        log "Step ${step}: job(s) still outstanding after ${waited}s (cumulative ${STEP_JOB_WAITED}s of ${JOB_WAIT_MAX_SECONDS}s, run timeout ${TIMEOUT_SECONDS}s); giving up on waiting."
+        JOB_WAIT_RESULT=gave-up
+    else
+        log "Step ${step}: external job(s) finished after ~${waited}s."
+        JOB_WAIT_RESULT=finished
+    fi
 }
 
 run_step() {
@@ -44,10 +113,14 @@ run_step() {
     local prev_step
     prev_step=$(get_current_step)
 
-    local attempt=0 refunds=0 total_waited=0
-    local exit_code new_step new_status run_log hold
-    while [ "$attempt" -lt "$STEP_MAX_ATTEMPTS" ]; do
-        attempt=$((attempt + 1))
+    # An attempt is spent when the step ends without advancing, unless it ended
+    # while this run's external jobs were running and they have since finished
+    # (at most JOB_WAIT_MAX_REFUNDS times): then the attempt is made again.
+    local spent=0 refunds=0 attempt
+    local exit_code new_step new_status run_log
+    STEP_JOB_WAITED=0
+    while [ "$spent" -lt "$STEP_MAX_ATTEMPTS" ]; do
+        attempt=$((spent + 1))
         run_log="${LOG_DIR}/step-${step}-attempt-${attempt}-$(date +%Y%m%d-%H%M%S).log"
         if [ "$attempt" -eq 1 ]; then
             log "Starting step ${step}..."
@@ -83,7 +156,7 @@ run_step() {
         # Transient "rate limit exceeded" errors are deliberately excluded:
         # those are retryable, and the retry loop is the right response.
         # Detected BEFORE the success gate: a notice with exit 0 must never
-        # pass for a completed audit round (Step 10 keeps current_step at 10).
+        # pass for a completed audit round (the audit keeps current_step at AUDIT_STEP).
         local last_line limit_hit=false
         last_line=$({ grep -v '^[[:space:]]*$' "$run_log" || true; } | tail -1)
         if printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit\b|(Claude )?(AI )?[Uu]sage limit reached\b)"; then
@@ -91,16 +164,16 @@ run_step() {
         fi
 
         # Success = the step advanced, reached a terminal status, OR (for the
-        # audit step, which by design keeps current_step at 10 across rounds) the round
+        # audit step, which by design keeps current_step at AUDIT_STEP across rounds) the round
         # actually completed. We proxy "completed" with a clean provider exit and no
         # limit notice: a dropped connection exits non-zero AND leaves the status
-        # unchanged, so without this gate a drop during Step 10 would return success
+        # unchanged, so without this gate a drop during the audit would return success
         # here and silently burn an AUDIT_ROUNDS increment upstream instead of retrying.
         if [ "$new_step" != "$prev_step" ] \
             || is_terminal_status "$new_status" \
             || { [ "$limit_hit" = false ] \
                  && [ "$exit_code" -eq 0 ] \
-                 && [ "$step" -eq 10 ] \
+                 && [ "$step" -eq "$AUDIT_STEP" ] \
                  && { [ "$new_status" = "audit_remediating" ] || [ "$new_status" = "audit_complete" ]; }; }; then
             log "Step ${step} completed. State now at step ${new_step}, status: ${new_status}"
             return 0
@@ -117,57 +190,25 @@ run_step() {
         # is still queued or running has not failed — it is waiting. Spending
         # attempts here is how a run gets marked failed while its results are
         # still being computed (or, worse, an hour after they landed).
-        if [ -n "$JOB_WAIT_CMD" ] && [ "$refunds" -lt "$JOB_WAIT_MAX_REFUNDS" ]; then
-            local outstanding waited
-            outstanding=$(outstanding_jobs)
-            if [ -n "${outstanding// /}" ]; then
-                log "Step ${step}: external job(s) still outstanding (${outstanding% }); waiting rather than spending an attempt."
-                waited=0
-                # The cap is the step's CUMULATIVE wait budget across refunds,
-                # not per wait, so waiting can never outrun the run timeout.
-                while [ -n "${outstanding// /}" ] \
-                    && [ "$total_waited" -lt "$JOB_WAIT_MAX_SECONDS" ] \
-                    && [ $(( $(date +%s) - START_TIME )) -lt "$TIMEOUT_SECONDS" ]; do
-                    sleep "$JOB_WAIT_POLL_SECONDS"
-                    waited=$((waited + JOB_WAIT_POLL_SECONDS))
-                    total_waited=$((total_waited + JOB_WAIT_POLL_SECONDS))
-                    # a stop ("!") doesn't wait for the jobs
-                    hold=$(guard_hold)
-                    if [ "${hold#!}" != "$hold" ]; then
-                        hold=$(hold_text "$hold")
-                        log "Guard: ${hold} (job(s) ${outstanding% } keep running; this step is redone on resume)"
-                        upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
-                        return 2
-                    fi
-                    outstanding=$(outstanding_jobs)
-                done
-                if [ -n "${outstanding// /}" ]; then
-                    log "Step ${step}: job(s) still outstanding after ${waited}s (cumulative ${total_waited}s of ${JOB_WAIT_MAX_SECONDS}s, run timeout ${TIMEOUT_SECONDS}s); giving up on waiting."
-                else
-                    refunds=$((refunds + 1))
-                    attempt=$((attempt - 1))
-                    log "Step ${step}: external job(s) finished after ~${waited}s; retrying without spending an attempt (refund ${refunds}/${JOB_WAIT_MAX_REFUNDS})."
-                    hold=$(guard_hold)
-                    if [ -n "$hold" ] && hold_applies "$hold"; then
-                        hold=$(hold_text "$hold")
-                        log "Guard: ${hold}"
-                        upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
-                        return 2
-                    fi
-                    continue
-                fi
-            fi
+        JOB_WAIT_RESULT=none
+        if [ "$refunds" -lt "$JOB_WAIT_MAX_REFUNDS" ]; then
+            wait_for_jobs "$step"
         fi
-
-        log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
+        case "$JOB_WAIT_RESULT" in
+            stopped) return 2 ;;
+            finished)
+                refunds=$((refunds + 1))
+                log "Step ${step}: retrying without spending an attempt (refund ${refunds}/${JOB_WAIT_MAX_REFUNDS})."
+                ;;
+            *)
+                spent=$attempt
+                log "Step ${step} did not advance state (still at step ${prev_step}, exit ${exit_code}, attempt ${attempt}/${STEP_MAX_ATTEMPTS})."
+                ;;
+        esac
 
         # A step may end on purpose without advancing because the guard now
         # holds the run (e.g. it asked for more budget): pause, don't retry.
-        hold=$(guard_hold)
-        if [ -n "$hold" ] && hold_applies "$hold"; then
-            hold=$(hold_text "$hold")
-            log "Guard: ${hold}"
-            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$hold")" || true
+        if guard_holds_run; then
             return 2
         fi
     done

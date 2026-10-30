@@ -53,90 +53,82 @@ strip_frontmatter() {
     ' "$1"
 }
 
+# render_command FILE ARGUMENT: the command file FILE as a prompt, with its
+# frontmatter stripped, {{argument}} replaced by ARGUMENT and
+# ${CLAUDE_PLUGIN_ROOT} by the plugin root.
+render_command() {
+    strip_frontmatter "$1" | sed "s|{{argument}}|$2|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+}
+
 build_step_prompt() {
     local step="$1"
-    local cmd_file="${REPO_DIR}/commands/researcher-auto-step.md"
-    local cmd_body
-    cmd_body=$(strip_frontmatter "$cmd_file")
     build_runtime_header
     if [ "$BACKEND" = "codex" ]; then
         build_codex_preamble
     fi
-    echo "$cmd_body" | sed "s|{{argument}}|${step} ${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+    render_command "${REPO_DIR}/commands/researcher-auto-step.md" "${step} ${RUN_DIR}"
 }
 
 build_email_prompt() {
     # $1: "send" (this session sends it with the helper, and handles the review)
-    # or "compose" (write the files only; the wrapper sends them).
-    local cmd_file="${REPO_DIR}/commands/researcher-auto-email.md"
-    local cmd_body
-    cmd_body=$(strip_frontmatter "$cmd_file")
+    # or "compose" (write the files only; the wrapper sends them). The handoff
+    # gives facts only; commands/researcher-auto-email.md holds the rules.
+    local delivery published
+    case "$1" in
+        send) delivery="- Send it yourself, to ${EMAIL_TO}, with:
+      ${SEND_EMAIL} ${RUN_DIR}" ;;
+        compose) delivery="- Compose only; the wrapper sends it to ${EMAIL_TO}." ;;
+    esac
+    case "${PUBLISH_STATE:-}" in
+        pushed) published="yes, verified on GitHub (${PUBLISHED_VISIBILITY:-unknown visibility} repo): $(cat "${RUN_DIR}/.repo_url" 2>/dev/null)" ;;
+        failed) published="NO - ${PUBLISH_ERROR}" ;;
+        *) published="no (publishing skipped for this run)" ;;
+    esac
     build_runtime_header
     cat <<EOF
 
 # Autonomous Email Handoff
 
-- Write the HTML to: ${RUN_DIR}/email-draft.html
-- Write the single-line subject to: ${RUN_DIR}/email-subject.txt
-- Inline plots (optional, recommended for results): one NAME=relative/path.png
-  per line in ${RUN_DIR}/email-images.txt, each placed as <img src="cid:NAME" alt="...">
+- HTML draft: ${RUN_DIR}/email-draft.html
+- Subject file: ${RUN_DIR}/email-subject.txt
+- Inline plot list: ${RUN_DIR}/email-images.txt
 - Footer agent label: ${AGENT_LABEL}
-EOF
-    if [ "${1:-send}" = "send" ]; then
-        cat <<EOF
-- Send it yourself, once both files are written, with exactly:
-      ${SEND_EMAIL} ${RUN_DIR}
-  It sends to ${EMAIL_TO} from the agents' mail account. Never send it any other
-  way or to anyone else.
-- Mail to Titus is reviewed before it leaves. If that command prints
-  "agent-mail: NOT SENT" (exit 3), nothing was sent: fix what it lists in
-  email-draft.html (and email-subject.txt), then run the same command once more.
-  That second send goes out whatever the review says. Never pass --no-review,
-  and never run it a third time.
-EOF
-    else
-        cat <<EOF
-- Compose only; do not send the email yourself. The wrapper sends it to ${EMAIL_TO}.
-EOF
-    fi
-    cat <<EOF
+${delivery}
 
-## Continuation facts (use these verbatim in "How to Continue This Research")
+## Continuation facts
 
 - Run host SSH alias: ${HOST_ALIAS}
-  (If this is exactly \`local\`, the reader is already on the run machine: OMIT the
-  ssh step and renumber. Otherwise the step is literally \`ssh ${HOST_ALIAS}\`.)
 - Plugin directory on the run host: ${REPO_DIR}
 - Run directory on the run host: ${RUN_DIR}
 - Continue command: ${CONTINUE_COMMAND} ${RUN_DIR}
 - Agent to start in the plugin directory: ${PROVIDER_BIN}
 
-These are the real paths on the machine that produced this run. Use them exactly;
-never substitute a placeholder, a guessed path, or a different hostname.
-
-## Wrapper-verified outcome (authoritative; state it, never contradict it)
+## Wrapper-verified outcome
 
 - Final outcome: ${FINAL_OUTCOME:-unknown}
 - Workflow status: ${STATUS:-unknown}
-- Published: $(if [ "${PUBLISH_STATE:-}" = "pushed" ]; then echo "yes, verified on GitHub (${PUBLISHED_VISIBILITY:-unknown visibility} repo): $(cat "${RUN_DIR}/.repo_url" 2>/dev/null)"; elif [ "${PUBLISH_STATE:-}" = "failed" ]; then echo "NO - ${PUBLISH_ERROR}. Say so near the top of the email and give no repo link."; else echo "no (publishing skipped for this run); give no repo link."; fi)
+- Published: ${published}
 - Caveats:
 ${OUTCOME_REASONS:-  - none}
-
-The full machine-readable outcome is in ${RUN_DIR}/run-outcome.json. If the
-final outcome is anything other than \`complete\`, the email's first line must
-say so plainly (e.g. "This run finished but its results are NOT on GitHub").
+- Machine-readable outcome: ${RUN_DIR}/run-outcome.json
 EOF
-    echo "$cmd_body" | sed "s|{{argument}}|${RUN_DIR}|g" | sed "s|\${CLAUDE_PLUGIN_ROOT}|${REPO_DIR}|g"
+    render_command "${REPO_DIR}/commands/researcher-auto-email.md" "$RUN_DIR"
+}
+
+# invoke_claude BIN MODEL TOOLS [ARG...]: runs the Claude CLI BIN headless on the
+# prompt on stdin, without permission prompts, with model MODEL, only the tools
+# TOOLS (comma-separated), and any further ARGs.
+invoke_claude() {
+    local bin="$1" model="$2" tools="$3"
+    shift 3
+    "$bin" --print --dangerously-skip-permissions --model "$model" "$@" --allowedTools "$tools"
 }
 
 invoke_provider() {
     # One branch per backend in researcher_lib.py BACKENDS.
     case "$BACKEND" in
         claude)
-            "$PROVIDER_BIN" --print \
-                --dangerously-skip-permissions \
-                --model "$MODEL" \
-                --allowedTools "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
+            invoke_claude "$PROVIDER_BIN" "$MODEL" "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task"
             ;;
         codex)
             local codex_args=(
@@ -185,10 +177,11 @@ run_email_provider() {
 run_email_claude() {
     # A Claude session with a known id writes and sends the email, so Titus's
     # reply resumes this session (the mailroom routes by session id).
-    build_email_prompt send | "$EMAIL_CLAUDE_BIN" --print \
-        --dangerously-skip-permissions \
-        --model "$EMAIL_CLAUDE_MODEL" \
-        --session-id "$EMAIL_SESSION" \
-        --name "$(case "${ISSUE_NUMBER:-none}" in none) echo researcher ;; *) echo "researcher #${ISSUE_NUMBER}" ;; esac)" \
-        --allowedTools "Read,Write,Glob,Grep,Bash"
+    local name
+    case "${ISSUE_NUMBER:-none}" in
+        none) name="researcher" ;;
+        *) name="researcher #${ISSUE_NUMBER}" ;;
+    esac
+    build_email_prompt send | invoke_claude "$EMAIL_CLAUDE_BIN" "$EMAIL_CLAUDE_MODEL" "Read,Write,Glob,Grep,Bash" \
+        --session-id "$EMAIL_SESSION" --name "$name"
 }

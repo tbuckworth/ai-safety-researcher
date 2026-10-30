@@ -162,6 +162,15 @@ if [ "${MOCK_STALL_AT_STEP:-}" = "$step" ]; then
     exit 0
 fi
 
+if [ "${MOCK_SUBMIT_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_JOB_FILE}.submitted" ]; then
+    # The step submits a cluster job and ends its turn while the job runs; its
+    # next attempt finds the results and advances.
+    touch "${MOCK_JOB_FILE}.submitted"
+    echo 4242 > "$MOCK_JOB_FILE"
+    echo "Submitted job 4242; ending step ${step} while it runs."
+    exit 0
+fi
+
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -373,6 +382,8 @@ if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" ls-tree -r --name-only main
     fail "nested git repo was published"
 fi; ok
 assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p "main:experiments/exp-001/results.md" | grep -c Verdict)" "1" "experiment results published"
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p main:README.md | head -1)" \
+    "# Gradient routing persistence" "run README published"
 assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
 assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
 assert_eq "$(jq -r .outcome "${RUN}/run-outcome.json")" "complete" "run-outcome.json"
@@ -526,6 +537,7 @@ for path in prior-only.txt followup-context.md topic.txt experiments/exp-001/res
     ok
 done
 if printf '%s\n' "$TREE" | grep -q '^prior/'; then fail "prior/ was published"; fi; ok
+assert_eq "$(git --git-dir="$BARE" cat-file -p "${BRANCH}:README.md")" "prior readme" "the prior repo's README kept"
 assert_eq "$(git --git-dir="$BARE" rev-parse "${BRANCH}^")" "$(git --git-dir="$BARE" rev-parse main)" "branch parent is prior main"
 assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-prior/tree/${BRANCH}" ".repo_url"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/400-*.md)"
@@ -647,7 +659,7 @@ assert_eq "$RC" "4" "exit code"
 RUN=$(run_dir_for_issue 402)
 assert_eq "$(field final_outcome "$RUN")" "unpublished" "final_outcome"
 [ -z "$(git --git-dir="${REMOTES}/tbuckworth/research-public-prior.git" for-each-ref 'refs/heads/followup-*')" ] || fail "pushed into a public prior repo"; ok
-assert_grep "is public but RESEARCHER_REPO_VISIBILITY is private" "$(ls "${CASE_DIR}"/comments/402-*.md)"
+assert_grep "research-public-prior is public, not private, so nothing was pushed there" "$(ls "${CASE_DIR}"/comments/402-*.md)"
 
 # =============================================================================
 # 15. A usage-limit notice during Step 11 pauses the run; it is not counted as
@@ -733,6 +745,14 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
 assert_grep "job\(s\) 4242 are still outstanding" "${CASE_DIR}/stdout.log"
+# The job-wait hook is time-limited like the guard: a hung one is stopped.
+new_case job-hook-timeout
+write_run 2026-01-17-job-hook 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
+    "RESEARCHER_JOB_WAIT_CMD=sleep 5; touch ${CASE_DIR}/hook-finished; echo 4242" \
+    RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS=1 -- "Ignored topic"
+[ ! -e "${CASE_DIR}/hook-finished" ] || fail "the job-wait hook ran past its time limit"; ok
+assert_grep "WARN: hook stopped at its 1s limit" "${CASE_DIR}/stdout.log"
 # ...except a hold marked "!" (a stop), which applies at once: before a step,
 # and while a stalled step waits for its jobs.
 new_case guard-stop-jobs
@@ -752,6 +772,26 @@ assert_eq "$RC" "3" "exit code (stopped while waiting)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "no retry after the stop"
 assert_eq "$(field current_step "${OUT}/2026-01-13-guard-wait")" "8" "current_step kept"
 assert_grep "Guard: stopped by Titus \(job\(s\) 4242 keep running" "${CASE_DIR}/stdout.log"
+# A step that ends while its job runs is retried, once the job has left the
+# queue (the mock squeue below reports it once), without spending an attempt...
+new_case job-wait-refund
+write_run 2026-01-18-job-refund 8 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_SUBMIT_AT_STEP=9 "MOCK_JOB_FILE=${CASE_DIR}/job" \
+    "RESEARCHER_JOB_WAIT_CMD=cat ${CASE_DIR}/job 2>/dev/null; rm -f ${CASE_DIR}/job" \
+    RESEARCHER_JOB_WAIT_POLL_SECONDS=1 -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 9 10 11 " "step 9 retried after its job"
+assert_grep "retrying without spending an attempt \(refund 1/10\)" "${CASE_DIR}/stdout.log"
+# ...but a job that outlasts the step's wait budget spends the attempt.
+new_case job-wait-gave-up
+write_run 2026-01-19-job-gave-up 8 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_STALL_AT_STEP=9 \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" RESEARCHER_JOB_WAIT_POLL_SECONDS=1 RESEARCHER_JOB_WAIT_MAX_SECONDS=1 \
+    -- "Ignored topic"
+assert_eq "$RC" "4" "exit code (failed)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "one attempt"
+assert_grep "giving up on waiting" "${CASE_DIR}/stdout.log"
+assert_eq "$(field status "${OUT}/2026-01-19-job-gave-up")" "failed" "status"
 
 # 15f. A run with an owner (RESEARCHER_OWNER) is never resumed by a plain run,
 #      and keeps its owner through the steps.

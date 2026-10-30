@@ -60,11 +60,7 @@ Read ALL artefact files before beginning compilation. The audit (`audit/results-
    - Create `paper.tex` using the template, with `\input{sections/*}` for each section. The template inputs `limitations` and `future-work` between `discussion` and `conclusion` — **every `\input` file must exist or the build breaks**, so write all of them (a section with little to say still gets a short real section, never an empty file).
    - Copy `Makefile` from templates to `paper/`
 
-6. **Compile if possible**:
-   - Check: `which pdflatex`
-   - If available: run `cd paper && make` (pdflatex -> bibtex -> pdflatex -> pdflatex)
-   - If not available: inform the user that .tex files are ready for manual compilation
-   - If compilation fails: report the error but still deliver the .tex files
+6. **Compile**: run `cd paper && make`. The Makefile picks the LaTeX toolchain. If the build fails, including because no LaTeX toolchain is installed, report the error and still deliver the .tex files.
 
 ## Output Structure
 

@@ -437,11 +437,7 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
    - arXiv API
    - Semantic Scholar API
 
-4. **LaTeX compilation**: If `pdflatex` is available, compile the paper:
-   ```
-   pdflatex paper && bibtex paper && pdflatex paper && pdflatex paper
-   ```
-   If `pdflatex` is not available, inform the user and leave the .tex files for manual compilation.
+4. **LaTeX compilation**: run `make` in `paper/`; `templates/Makefile` chooses the LaTeX toolchain. If the build fails because no toolchain is installed, inform the user and leave the .tex files for manual compilation.
 
 5. Present the final paper location to the user.
 

@@ -657,10 +657,6 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Frame the paper around why the approach doesn't work and what was learned.
    The theoretical argument from the challenge agents is the core contribution.
    If experiments were run (disproof experiments), include them as evidence.
-
-   For LaTeX compilation, use tectonic instead of pdflatex:
-     tectonic paper.tex
-   (tectonic handles bibliography in a single pass)
    """)
    ```
 
@@ -668,7 +664,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 3. If the report agent didn't compile the PDF, try:
    ```bash
-   cd <run-dir>/paper && tectonic paper.tex
+   cd <run-dir>/paper && make
    ```
 
 4. **Generate `briefing.md`** — a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:

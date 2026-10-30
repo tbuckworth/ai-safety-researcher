@@ -114,7 +114,18 @@ case "${1:-} ${2:-}" in
         [ -n "$obj" ] || { echo "GraphQL: Could not resolve to an issue" >&2; exit 1; }
         if [ -n "$jq_expr" ]; then echo "$obj" | jq -r "$jq_expr"; else echo "$obj"; fi
         ;;
+    "issue edit")
+        if [ -n "${MOCK_GH_EDIT_FAIL_LABEL:-}" ]; then
+            case " $* " in
+                *" ${MOCK_GH_EDIT_FAIL_LABEL} "*) echo "HTTP 502: mock edit outage" >&2; exit 1 ;;
+            esac
+        fi
+        ;;
     "issue comment")
+        if [ "${MOCK_GH_COMMENT_FAIL:-false}" = "true" ]; then
+            echo "HTTP 502: mock comment outage" >&2
+            exit 1
+        fi
         n=$(ls "$MOCK_COMMENTS" | wc -l | tr -d ' ')
         for ((i = 0; i < ${#args[@]}; i++)); do
             case "${args[$i]}" in
@@ -1089,5 +1100,52 @@ assert_eq "$RC" "4" "exit code"
 RUN=$(run_dir_for_issue 1003)
 jq -e '.reasons | any(test("HTTP 502: mock repo outage"))' "${RUN}/run-outcome.json" > /dev/null || fail "gh's reason missing"; ok
 assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
+
+# =============================================================================
+# 24. A deliverable that fails (the email, the issue comment, the issue labels)
+#     is logged, the others are still attempted, and the run exits 5.
+# =============================================================================
+new_case deliverables-fail
+set_issues <(issue_json 1101 "Deliverables fail" "list:research-ideas")
+# With no usable TMPDIR, the email helper, the issue comment and the secret
+# scan cannot make their temporary files.
+run_researcher "TMPDIR=${CASE_DIR}/no-such-dir"
+assert_eq "$RC" "5" "exit code"
+RUN=$(run_dir_for_issue 1101)
+assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
+assert_grep "WARN: secret scan skipped: could not create a temporary file for its report" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: the email session failed \(exit 1" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: could not create a temporary file for the issue comment" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a comment was posted"; ok
+assert_grep "issue edit 1101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
+assert_grep "Updated issue #1101" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: not delivered in full: email, issue comment\.$" "${CASE_DIR}/stdout.log"
+
+new_case labels-fail
+set_issues <(issue_json 1102 "Labels fail" "list:research-ideas")
+run_researcher MOCK_GH_COMMENT_FAIL=true MOCK_GH_EDIT_FAIL_LABEL=status:claude-processed
+assert_eq "$RC" "5" "exit code"
+assert_grep "HTTP 502: mock comment outage" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: could not comment on issue #1102" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 1102 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+assert_grep "issue edit 1102 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
+assert_grep "HTTP 502: mock edit outage" "${CASE_DIR}/stdout.log"
+assert_no_grep "Updated issue #1102" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: not delivered in full: issue comment, issue labels\.$" "${CASE_DIR}/stdout.log"
+
+# A machine without gitleaks publishes, and says the secret scan was skipped.
+new_case no-gitleaks
+mkdir -p "${CASE_DIR}/bin" "${CASE_DIR}/home"
+for tool in "${MOCK_BIN}"/*; do
+    [ "$(basename "$tool")" = gitleaks ] || ln -s "$tool" "${CASE_DIR}/bin/"
+done
+SYSTEM_PATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | grep -vxF -e "${HOME}/.local/bin" -e "$MOCK_BIN" | paste -sd: -)
+if env PATH="${CASE_DIR}/bin:${SYSTEM_PATH}" bash -c 'command -v gitleaks' > /dev/null; then
+    fail "gitleaks is installed outside ~/.local/bin; this case needs a PATH without it"
+fi; ok
+set_issues <(issue_json 1103 "No secret scanner" "list:research-ideas")
+run_researcher "PATH=${CASE_DIR}/bin:${SYSTEM_PATH}" "HOME=${CASE_DIR}/home"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "WARN: secret scan skipped: gitleaks is not installed" "${CASE_DIR}/stdout.log"
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

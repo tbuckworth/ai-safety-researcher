@@ -279,7 +279,7 @@ never fails a step.
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
 - **Repos**: Created as `tbuckworth/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
-- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0:
+- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0 (5 when a deliverable failed; see [Exit codes](#exit-codes)):
 
   | Outcome | Meaning | Exit |
   |---------|---------|------|
@@ -311,6 +311,7 @@ never fails a step.
 | 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not an integer, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |
+| 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then |
 
 ## Troubleshooting
 
@@ -321,7 +322,7 @@ never fails a step.
 
 **Results email not sent**:
 - The run log says why (`Writing and sending the results email ...`, then
-  `Email sent ...` or a `Note:`); the composer's own output is in
+  `Email sent ...` or an `ERROR:`); the composer's own output is in
   `logs/email-*.log`, and `email-draft.html` stays in the run directory.
 - `agent-mail sent` lists what went out; `agent-mail status` checks the mailroom.
 - A draft the pre-send review held and nobody revised is sent unchanged by the
@@ -464,8 +465,9 @@ step). So:
   `<img src="cid:NAME">`; the helper checks each one (an image inside the run
   directory, placed in the HTML) before attaching it.
 - **Fallbacks.** A session that stops without sending has its draft sent by the
-  wrapper as that session. If no Claude session can run at all (no CLI, usage
-  limits), a Codex run writes the email with Codex and the wrapper sends it
+  wrapper as that session; a session that fails (a usage limit too) sends
+  nothing, and the run exits 5. Only if the Claude CLI is not installed does a
+  Codex run write the email with Codex, and the wrapper sends it
   `--unrouted`: not reviewed, and replies go to the orchestrator.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
   is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is

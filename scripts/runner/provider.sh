@@ -71,13 +71,18 @@ build_step_prompt() {
 
 build_email_prompt() {
     # $1: "send" (this session sends it with the helper, and handles the review)
-    # or "compose" (write the files only; the wrapper sends them). The handoff
-    # gives facts only; commands/researcher-auto-email.md holds the rules.
+    # or "compose" (write the files only; the wrapper sends them); anything else
+    # is an error. The handoff gives facts only; commands/researcher-auto-email.md
+    # holds the rules.
     local delivery published
-    case "$1" in
+    case "${1:-}" in
         send) delivery="- Send it yourself, to ${EMAIL_TO}, with:
       ${SEND_EMAIL} ${RUN_DIR}" ;;
         compose) delivery="- Compose only; the wrapper sends it to ${EMAIL_TO}." ;;
+        *)
+            log "ERROR: build_email_prompt: the mode must be send or compose, got '${1:-}'." >&2
+            return 1
+            ;;
     esac
     case "${PUBLISH_STATE:-}" in
         pushed) published="yes, verified on GitHub (${PUBLISHED_VISIBILITY:-unknown visibility} repo): $(cat "${RUN_DIR}/.repo_url" 2>/dev/null)" ;;

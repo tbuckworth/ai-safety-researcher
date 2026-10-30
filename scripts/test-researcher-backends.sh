@@ -116,7 +116,7 @@ run_case() {
     fi
 
     RESEARCHER_BACKEND="$backend" \
-    RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+    RESEARCHER_CLAUDE_BIN="${CASE_CLAUDE_BIN:-${MOCK_BIN}/claude}" \
     RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
     RESEARCHER_CLAUDE_MODEL="mock-claude" \
     RESEARCHER_CODEX_MODEL="mock-codex" \
@@ -344,12 +344,49 @@ grep -q -- '--label importance:medium' "$MOCK_GH_LOG"
 grep -q 'Created follow-up issue: https://github.com/tbuckworth/tasks/issues/123' \
     "${TEST_ROOT}/followup.stdout"
 
-# With no Claude session to write it, a Codex run's own backend writes the
-# email and it goes unrouted (unreviewed; replies to the orchestrator).
+# With no Claude CLI installed, a Codex run's own backend writes the email and
+# it goes unrouted (unreviewed; replies to the orchestrator).
 : > "$MOCK_EMAIL_LOG"
-MOCK_CLAUDE_EMAIL_FAIL=true run_case codex "" none claudedown
+CASE_CLAUDE_BIN="${TEST_ROOT}/no-claude-here" run_case codex "" none noclaude
 test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
 grep -q 'from=unrouted .*--unrouted' "$MOCK_EMAIL_LOG"
-grep -q 'no Claude session wrote the email' "${TEST_ROOT}/codex-claudedown.stdout"
+grep -q 'WARN: no Claude CLI .*no-claude-here.* to write the email' "${TEST_ROOT}/codex-noclaude.stdout"
+
+# A Claude email session that fails is a failed deliverable, not a cue for
+# Codex: nothing is sent, and the run exits 5.
+: > "$MOCK_EMAIL_LOG"
+: > "$MOCK_PROMPT_LOG"
+set +e
+RESEARCHER_BACKEND=codex \
+RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/claudedown-output" \
+RESEARCHER_LOCKFILE="${TEST_ROOT}/claudedown.lock" \
+RESEARCHER_LINK_OUTPUT=false \
+RESEARCHER_SKIP_PUBLISH=true \
+RESEARCHER_SKIP_GPU_CHECK=true \
+RESEARCHER_RETRY_DELAY_SECONDS=0 \
+PATH="${MOCK_BIN}:${PATH}" \
+RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+MOCK_CLAUDE_EMAIL_FAIL=true \
+RESEARCHER_EMAIL_TO="self@example.test" \
+RESEARCHER_HOST_ALIAS="mock-host" \
+RESEARCHER_KB_DIR=none \
+"$REPO_DIR/scripts/researcher-cron.sh" "Claude email session fails" > "${TEST_ROOT}/claudedown.stdout" 2>&1
+claudedown_status=$?
+set -e
+test "$claudedown_status" = "5"
+test ! -s "$MOCK_EMAIL_LOG"
+grep -q 'ERROR: the email session failed (exit 1' "${TEST_ROOT}/claudedown.stdout"
+grep -q 'not delivered in full: email' "${TEST_ROOT}/claudedown.stdout"
+if grep -q 'Compose only; the wrapper sends it' "$MOCK_PROMPT_LOG"; then echo "FAIL: Codex wrote the email" >&2; exit 1; fi
+
+# build_email_prompt takes exactly send or compose.
+if bash -c 'source "$1/runner/common.sh"; source "$1/runner/provider.sh"; build_email_prompt sned' _ "$SCRIPT_DIR" \
+        > "${TEST_ROOT}/prompt-mode.out" 2>&1; then
+    echo "FAIL: build_email_prompt accepted 'sned'" >&2
+    exit 1
+fi
+grep -q "build_email_prompt: the mode must be send or compose, got 'sned'" "${TEST_ROOT}/prompt-mode.out"
 
 echo "Claude and Codex backend integration tests passed."

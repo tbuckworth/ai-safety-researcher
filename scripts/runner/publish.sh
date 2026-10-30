@@ -106,11 +106,19 @@ exclude_secret_findings() {
     # each flagged file out of the commit (it stays in the run directory), with
     # the reason. Never bypass or weaken the scan from here: if it was a real
     # secret it must not be published, and if not, Titus decides on an allowlist.
-    command -v gitleaks >/dev/null 2>&1 || return 0
+    # When the scan cannot run here, that is logged; a commit the hook then
+    # refuses fails publishing with the hook's reason (commit_all).
+    if ! command -v gitleaks >/dev/null 2>&1; then
+        log "WARN: secret scan skipped: gitleaks is not installed."
+        return 0
+    fi
     local report args=() rc findings file line rule
     [ -f .gitleaks.toml ] || { [ -f "$HOME/.gitleaks.toml" ] && args+=(--config "$HOME/.gitleaks.toml"); }
     [ -f .gitleaksignore ] || { [ -f "$HOME/.gitleaksignore" ] && args+=(--gitleaks-ignore-path "$HOME/.gitleaksignore"); }
-    report=$(mktemp "${TMPDIR:-/tmp}/researcher-gitleaks.XXXXXX") || return 0
+    if ! report=$(mktemp "${TMPDIR:-/tmp}/researcher-gitleaks.XXXXXX"); then
+        log "WARN: secret scan skipped: could not create a temporary file for its report (the global pre-commit hook still runs it on the commit)."
+        return 0
+    fi
     rc=0
     gitleaks git --pre-commit --staged --redact --no-banner --report-format json --report-path "$report" \
         ${args[@]+"${args[@]}"} >/dev/null 2>&1 || rc=$?

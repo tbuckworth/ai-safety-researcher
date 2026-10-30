@@ -176,9 +176,9 @@ export RESEARCHER_EMAIL_TO="$EMAIL_TO"
 # Titus's own Gmail, and through the mailroom's pre-send review like every
 # agent's mail to him. A Claude session writes and sends it, so his reply comes
 # back to that session, whichever backend ran the research; a Codex run uses
-# EMAIL_CLAUDE_MODEL for it. Only when no Claude session can run does the run's
-# own backend write it, and it then goes unrouted (no review, replies to the
-# orchestrator).
+# EMAIL_CLAUDE_MODEL for it. Only when the Claude CLI is not installed does the
+# run's own backend write it, and it then goes unrouted (no review, replies to
+# the orchestrator).
 SEND_EMAIL="${SCRIPT_DIR}/send-results-email.sh"
 EMAIL_CLAUDE_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
 if [ "$BACKEND" = "claude" ]; then
@@ -582,14 +582,16 @@ OUTCOME_JSON=$(python3 "$LIB" outcome \
     --paused "$PAUSED") \
     || OUTCOME_JSON=$(jq -n --arg s "$STATUS" --arg p "$PUBLISH_STATE" \
         '{outcome: "unknown", success: false, status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
-# On a full disk these writes fail; that must not stop the email and the
-# issue update that report it.
-printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json" \
-    || log "WARN: could not write ${RUN_DIR}/run-outcome.json"
+# The deliverables: run-outcome.json, the email, the issue comment and the issue
+# labels. Each is attempted whatever happened to the others; one that fails is
+# logged and listed here, and makes the run exit 5 (see the end).
+FAILED_DELIVERABLES=()
+if ! printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json"; then
+    log "ERROR: could not write ${RUN_DIR}/run-outcome.json."
+    FAILED_DELIVERABLES+=("run-outcome.json")
+fi
 FINAL_OUTCOME=$(echo "$OUTCOME_JSON" | jq -r '.outcome')
 OUTCOME_REASONS=$(echo "$OUTCOME_JSON" | jq -r '.reasons[]' | sed 's/^/  - /')
-upsert_frontmatter_field "final_outcome" "$FINAL_OUTCOME" || true
-upsert_frontmatter_field "publish_state" "$PUBLISH_STATE" || true
 log "Final outcome: ${FINAL_OUTCOME} (workflow status ${STATUS}, publish ${PUBLISH_STATE})"
 [ -n "$OUTCOME_REASONS" ] && printf '%s\n' "$OUTCOME_REASONS"
 
@@ -597,56 +599,31 @@ log "Final outcome: ${FINAL_OUTCOME} (workflow status ${STATUS}, publish ${PUBLI
 
 if is_true "$SKIP_EMAIL"; then
     log "Skipping email (RESEARCHER_SKIP_EMAIL=${SKIP_EMAIL})."
-else
-    send_email || log "Note: email did not send. Results remain in ${RUN_DIR}."
+elif ! send_email; then
+    log "ERROR: the results email was not sent. Results remain in ${RUN_DIR}."
+    FAILED_DELIVERABLES+=("email")
 fi
 
 # --- Post-completion: report back on the GitHub issue ---
 
 if ! is_true "$SKIP_PUBLISH" && [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
-    # The comment is best effort (a full disk can stop even mktemp); the label
-    # swap below must happen regardless, or the issue stays claimed forever.
-    COMMENT_FILE=$(mktemp "${TMPDIR:-/tmp}/researcher-comment.XXXXXX" 2>/dev/null) || COMMENT_FILE=""
-    if [ -n "$COMMENT_FILE" ]; then
-        python3 "$LIB" issue-comment \
-            ${NOTE_ARGS[@]+"${NOTE_ARGS[@]}"} \
-            --run-dir "$RUN_DIR" \
-            --status "$STATUS" \
-            --timed-out "$TIMED_OUT" \
-            --publish-state "$PUBLISH_STATE" \
-            --publish-error "$PUBLISH_ERROR" \
-            --paused "$PAUSED" \
-            --run-id "$RUN_ID" \
-            --repo-web "$REPO_WEB" \
-            --branch "$REPO_BRANCH" \
-            --agent-label "$AGENT_LABEL" \
-            --host "$HOST_ALIAS" \
-            --followup "$IS_FOLLOWUP" \
-            --visibility "$PUBLISHED_VISIBILITY" > "$COMMENT_FILE" \
-            || printf 'Autonomous research run `%s` finished with outcome `%s` (the findings summary could not be generated; see the cron log).\n' \
-                "$RUN_ID" "$FINAL_OUTCOME" > "$COMMENT_FILE" \
-            || true
-
-        post_issue_comment "$ISSUE_NUMBER" "$COMMENT_FILE"
-        if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
-            if { printf 'Follow-up #%s finished.\n\n' "$ISSUE_NUMBER"; cat "$COMMENT_FILE"; } > "${COMMENT_FILE}.parent"; then
-                post_issue_comment "$PARENT_ISSUE" "${COMMENT_FILE}.parent"
-            fi
-            rm -f "${COMMENT_FILE}.parent"
-        fi
-        rm -f "$COMMENT_FILE"
-    else
-        log "WARN: could not create a temporary file for the issue comment (disk full?); skipping the comment."
-    fi
-
-    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
-        --remove-label "$PROCESSING_LABEL" 2>/dev/null || true
-    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
-        --add-label "$PROCESSED_LABEL" 2>/dev/null || true
-
-    log "Updated issue #${ISSUE_NUMBER}"
+    comment_on_issues || FAILED_DELIVERABLES+=("issue comment")
+    # Attempted whatever happened above, or the issue stays claimed for ever.
+    mark_issue_processed || FAILED_DELIVERABLES+=("issue labels")
 fi
 
+# Recorded after the deliverables, so that a state.md the runner cannot write
+# (which stops it) does not also keep the results from Titus.
+set_state_field final_outcome "$FINAL_OUTCOME"
+set_state_field publish_state "$PUBLISH_STATE"
+
+if [ "${#FAILED_DELIVERABLES[@]}" -gt 0 ]; then
+    printf -v FAILED_LIST '%s, ' "${FAILED_DELIVERABLES[@]}"
+    log "ERROR: not delivered in full: ${FAILED_LIST%, }."
+fi
+
+# Exit 3 (paused) and 4 (no usable result) take precedence over 5: they say
+# more about the run, and the line above already names what was not delivered.
 if is_true "$PAUSED"; then
     # Distinct exit code: a paused run must not look like a completed one to
     # cron, `at`, or any wrapper checking the status.
@@ -659,6 +636,11 @@ if ! outcome_is_success; then
     # result, so it cannot pass for a completed one.
     log "Done, but the run is NOT complete (outcome: ${FINAL_OUTCOME}). Run directory: ${RUN_DIR}"
     exit 4
+fi
+
+if [ "${#FAILED_DELIVERABLES[@]}" -gt 0 ]; then
+    log "Done, but the results were not delivered in full (see above). Run directory: ${RUN_DIR}"
+    exit 5
 fi
 
 log "Done. Run directory: ${RUN_DIR}"

@@ -16,7 +16,7 @@
 # after its fallback wait. Exit 0: sent, recorded in RUN_DIR/.email-sent.
 #
 # --unrouted: no session, so no review, and replies go to the orchestrator.
-# Only the wrapper uses it, when no Claude session could write the email.
+# Only the wrapper uses it, when the Claude CLI is not installed.
 
 set -euo pipefail
 

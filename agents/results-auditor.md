@@ -81,6 +81,14 @@ Given the prior rounds' audits and the claim anchors: compare this round's *clai
 
 ## Output
 
+The overall disposition follows from the findings, taking the first that applies:
+
+- `NO-EXPERIMENTS`: there are no completed experiments to audit.
+- `UNSALVAGEABLE`: a finding is UNSALVAGEABLE; the framing itself is broken.
+- `NEEDS-REMEDIATION`: a finding is FIXABLE-DEFECT.
+- `HONEST-NEGATIVE`: a finding is TRUE-NULL, and the rest are SUPPORTED.
+- `CONVERGED-POSITIVE`: every finding is SUPPORTED.
+
 Write `audit/results-audit.md`:
 
 ```markdown

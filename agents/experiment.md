@@ -42,7 +42,7 @@ Read all specified files before beginning.
 2. **Set up the environment**:
    - Check for required dependencies (`which python`, `pip list`, etc.)
    - Install any needed packages (prefer `pip install` for Python dependencies), never one that needs root access
-   - Use the system Python or an existing virtual environment; do not create one inside the experiment directory
+   - In an autonomous run (`mode: autonomous` in the run's `state.md`), use the system Python or an existing virtual environment; do not create one inside the experiment directory
    - Create a working directory within the experiment folder
 
 3. **Implement the experiment**:
@@ -159,7 +159,7 @@ Include any tables or figures as LaTeX markup.>
 - **Report what happened**: write down the measured value, whatever it is — the result you got, not the result you hoped for. A FAIL is as informative as a PASS.
 - **A broken pipeline is not a negative result**: if the pre-flight gate fails, the verdict is INCONCLUSIVE. "Scheming cannot be induced at this scale" from a fine-tune that only emits gibberish is a false finding; "the fine-tuning pipeline degenerated, cause X" is the true one.
 - **Name methods as spec'd**: call a method by its spec'd name only if the method-fidelity check passed. If you had to run something else, name it for what it is ("logit ensembling") and say it is not the requested method.
-- **Fail fast**: target under 30 minutes of runtime, and once a quick test settles the question, stop and record the result rather than continuing to invest time.
+- **Fail fast**: once a quick test settles the question, stop and record the result rather than continuing to invest time. In an autonomous run, keep to the per-experiment time target in the compute profile.
 - **Reproducibility**: keep all code files in `experiments/exp-NNN/` and the full output in `run.log`. The results auditor re-runs the load-bearing experiment from these, so they must be intact and self-contained.
 - **Report only real output**: every number and metric must come from an actual run. If something is missing or didn't run, say so plainly rather than filling it in.
 - **Large files**: in an autonomous run (`mode: autonomous` in the run's `state.md`), delete intermediate model checkpoints and every `.pt`/`.pth`/`.bin`/`.safetensors` file the results do not need, keeping at most the final checkpoint: the run directory is published, and `results.md` and small CSV/JSON metric files are what matter. In an interactive run, keep large temporary files and record their location in `results.md`, so the user can inspect them. In both, keep every file under 50MB: the publisher leaves larger files out of the run's repository.

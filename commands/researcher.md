@@ -53,20 +53,7 @@ Do this yourself — no agent needed.
    mkdir -p output/<run-id>/literature
    mkdir -p output/<run-id>/experiments
    ```
-4. Write `state.md` with:
-   ```yaml
-   ---
-   run_id: <run-id>
-   topic: <topic>
-   current_step: 1
-   status: clarified
-   mode: interactive    # the autonomous cron runner never resumes an interactive run
-   clarifications:
-     - q: <question>
-       a: <answer>
-   decisions: []
-   ---
-   ```
+4. Write `state.md` with the Step 1 frontmatter in WORKFLOW.md (`mode: interactive`, plus `agent_backend`, `agent_model`, `compute_profile` and `knowledge_base`, filled as it says).
 5. Write `output/<run-id>/method-spec.md`: for every named method, condition, intervention and metric in the topic — the verbatim source wording, an operational definition, a *defining property* a small code test can assert, near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Experiments and the audit are checked against this file.
 6. Advance to Step 2.
 

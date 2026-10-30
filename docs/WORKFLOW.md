@@ -94,16 +94,23 @@ output/<run-id>/
 run_id: <run-id>
 topic: <user's topic>
 current_step: 1
-status: clarifying
+status: clarified
+mode: interactive    # the autonomous runner never resumes an interactive run
 agent_backend: <claude|codex>
-agent_model: <provider model>
-clarifications: []
+agent_model: <the model running the orchestrator>
+compute_profile: <$RESEARCHER_COMPUTE_PROFILE if set; else the compute the user named; else local>
+knowledge_base: <$RESEARCHER_KB_DIR (default ~/pyg/research-wiki) if it contains KB-SCHEMA.md; else none>
+clarifications:
+  - q: <question>
+    a: <answer>
 decisions: []
 ---
 ```
 
-5. After receiving answers, update `state.md` with clarifications.
-6. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
+   For a preset name such as `local`, write the matching `COMPUTE_PROFILE_*`
+   description from `scripts/researcher-cron.sh`, as the autonomous runner does:
+   the experiment, results-auditor and report agents read `compute_profile`.
+5. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
 
 ### Completion Criteria
 

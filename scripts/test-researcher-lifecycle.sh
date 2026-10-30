@@ -382,6 +382,8 @@ if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" ls-tree -r --name-only main
     fail "nested git repo was published"
 fi; ok
 assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p "main:experiments/exp-001/results.md" | grep -c Verdict)" "1" "experiment results published"
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p main:README.md | head -1)" \
+    "# Gradient routing persistence" "run README published"
 assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
 assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
 assert_eq "$(jq -r .outcome "${RUN}/run-outcome.json")" "complete" "run-outcome.json"
@@ -535,6 +537,7 @@ for path in prior-only.txt followup-context.md topic.txt experiments/exp-001/res
     ok
 done
 if printf '%s\n' "$TREE" | grep -q '^prior/'; then fail "prior/ was published"; fi; ok
+assert_eq "$(git --git-dir="$BARE" cat-file -p "${BRANCH}:README.md")" "prior readme" "the prior repo's README kept"
 assert_eq "$(git --git-dir="$BARE" rev-parse "${BRANCH}^")" "$(git --git-dir="$BARE" rev-parse main)" "branch parent is prior main"
 assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-prior/tree/${BRANCH}" ".repo_url"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/400-*.md)"
@@ -656,7 +659,7 @@ assert_eq "$RC" "4" "exit code"
 RUN=$(run_dir_for_issue 402)
 assert_eq "$(field final_outcome "$RUN")" "unpublished" "final_outcome"
 [ -z "$(git --git-dir="${REMOTES}/tbuckworth/research-public-prior.git" for-each-ref 'refs/heads/followup-*')" ] || fail "pushed into a public prior repo"; ok
-assert_grep "is public but RESEARCHER_REPO_VISIBILITY is private" "$(ls "${CASE_DIR}"/comments/402-*.md)"
+assert_grep "research-public-prior is public, not private, so nothing was pushed there" "$(ls "${CASE_DIR}"/comments/402-*.md)"
 
 # =============================================================================
 # 15. A usage-limit notice during Step 11 pauses the run; it is not counted as

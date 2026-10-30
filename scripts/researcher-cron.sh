@@ -349,14 +349,10 @@ if [ "$BACKEND" = "codex" ]; then
     esac
 fi
 
-# The same list as researcher_lib.py's REPO_VISIBILITIES.
-case "$REPO_VISIBILITY" in
-    private|internal|public) ;;
-    *)
-        log "ERROR: RESEARCHER_REPO_VISIBILITY must be private, internal or public, got '${REPO_VISIBILITY}'."
-        exit 2
-        ;;
-esac
+if ! python3 "$LIB" repo-visibilities | grep -qxF -- "$REPO_VISIBILITY"; then
+    log "ERROR: RESEARCHER_REPO_VISIBILITY must be one of: $(python3 "$LIB" repo-visibilities | paste -sd' '); got '${REPO_VISIBILITY}'."
+    exit 2
+fi
 
 log "Agent backend: ${BACKEND}; model: ${MODEL}; compute profile: ${COMPUTE_PROFILE_NAME}; knowledge base: ${KB_DIR:-none}; owner: ${RUN_OWNER:-none}; pinned run: ${PIN_RUN_DIR:-none}"
 

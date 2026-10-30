@@ -9,6 +9,7 @@ decisions that used to be made by ad-hoc grep/jq and got them wrong:
   backends           the agent backends a run can use
   status-label       a backend's researching / processed issue label
   research-ideas-label  the label that queues an issue as a research idea
+  repo-visibilities  the visibilities a published run repo may have
   pick               which queued issue to run, refusing duplicates
   claimed            whether a freshly read issue is claimed or closed
   find-followup      the oldest issue already filed with a follow-up key
@@ -752,6 +753,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("terminal-statuses", help="print the workflow statuses that end a run, space-separated")
     sub.add_parser("backends", help="print the agent backends, space-separated")
     sub.add_parser("research-ideas-label", help="print the label that queues an issue as a research idea")
+    sub.add_parser("repo-visibilities", help="print the visibilities a published run repo may have, one per line")
 
     p_label = sub.add_parser("status-label", help="print a backend's issue status label")
     p_label.add_argument("backend", choices=BACKENDS)
@@ -822,6 +824,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "backends":
         print(" ".join(BACKENDS))
+        return 0
+
+    if args.command == "repo-visibilities":
+        print("\n".join(REPO_VISIBILITIES))
         return 0
 
     if args.command == "research-ideas-label":

@@ -1219,7 +1219,7 @@ assert_eq "$RC" "5" "exit code"
 RUN=$(run_dir_for_issue 1101)
 assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
 assert_grep "WARN: secret scan skipped: could not create a temporary file for its report" "${CASE_DIR}/stdout.log"
-assert_grep "ERROR: the email session failed \(exit 1" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: the email writer \(session\) failed \(exit 1" "${CASE_DIR}/stdout.log"
 assert_grep "ERROR: could not create a temporary file for the issue comment" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a comment was posted"; ok
 assert_grep "issue edit 1101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"

@@ -38,8 +38,8 @@ send_email() {
         log "Email sent to ${EMAIL_TO} from the agents' account: $(cut -f2 "${RUN_DIR}/.email-sent")"
         return 0
     fi
-    if [ "$EMAIL_MODE" = "session" ] && [ "$compose_status" -ne 0 ]; then
-        log "ERROR: the email session failed (exit ${compose_status}; its output is in ${email_log}); nothing was sent."
+    if [ "$compose_status" -ne 0 ]; then
+        log "ERROR: the email writer (${EMAIL_MODE}) failed (exit ${compose_status}; its output is in ${email_log}); nothing was sent."
         return 1
     fi
     if [ ! -s "${RUN_DIR}/email-draft.html" ] || [ ! -s "${RUN_DIR}/email-subject.txt" ]; then

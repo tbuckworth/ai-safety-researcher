@@ -36,6 +36,11 @@ if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
         echo "Claude AI usage limit reached" >&2
         exit 1
     fi
+    if [ "${MOCK_CODEX_EMAIL_FAIL:-false}" = "true" ] && [ "$(basename "$0")" = "codex" ]; then
+        "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
+        echo "codex: stream disconnected after writing the draft" >&2
+        exit 1
+    fi
     exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
 fi
 
@@ -393,9 +398,35 @@ claudedown_status=$?
 set -e
 test "$claudedown_status" = "5"
 test ! -s "$MOCK_EMAIL_LOG"
-grep -q 'ERROR: the email session failed (exit 1' "${TEST_ROOT}/claudedown.stdout"
+grep -q 'ERROR: the email writer (session) failed (exit 1' "${TEST_ROOT}/claudedown.stdout"
 grep -q 'not delivered in full: email' "${TEST_ROOT}/claudedown.stdout"
 if grep -q 'Compose only; the wrapper sends it' "$MOCK_PROMPT_LOG"; then echo "FAIL: Codex wrote the email" >&2; exit 1; fi
+
+# A Codex email writer that fails after writing a draft is a failed deliverable
+# too: the draft is not sent unreviewed, and the run exits 5.
+: > "$MOCK_EMAIL_LOG"
+set +e
+RESEARCHER_BACKEND=codex \
+RESEARCHER_CLAUDE_BIN="${TEST_ROOT}/no-claude-here" \
+RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/codexfail-output" \
+RESEARCHER_LOCKFILE="${TEST_ROOT}/codexfail.lock" \
+RESEARCHER_LINK_OUTPUT=false \
+RESEARCHER_SKIP_PUBLISH=true \
+RESEARCHER_SKIP_GPU_CHECK=true \
+RESEARCHER_RETRY_DELAY_SECONDS=0 \
+PATH="${MOCK_BIN}:${PATH}" \
+RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+MOCK_CODEX_EMAIL_FAIL=true \
+RESEARCHER_EMAIL_TO="self@example.test" \
+RESEARCHER_HOST_ALIAS="mock-host" \
+RESEARCHER_KB_DIR=none \
+"$REPO_DIR/scripts/researcher-cron.sh" "Codex email writer fails" > "${TEST_ROOT}/codexfail.stdout" 2>&1
+codexfail_status=$?
+set -e
+test "$codexfail_status" = "5"
+test ! -s "$MOCK_EMAIL_LOG"
+grep -q 'ERROR: the email writer (unrouted) failed (exit 1' "${TEST_ROOT}/codexfail.stdout"
 
 # build_email_prompt takes exactly send or compose.
 if bash -c 'source "$1/runner/common.sh"; source "$1/runner/provider.sh"; build_email_prompt sned' _ "$SCRIPT_DIR" \

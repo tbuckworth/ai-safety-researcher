@@ -1,0 +1,135 @@
+# claude-tooling configuration.
+# Sections: items, review_gate, backfit, checks, node_detection.
+
+# ── Quality check items ──────────────────────────────────────────────────────
+# The preset classifies every item the package ships, so an item added upstream
+# needs no decision here. `claude-tooling items list` shows what is on,
+# `items presets` the alternatives, `items status` how this repo diverges.
+#
+# Diverge with an override, which carries a reason so the next person knows why:
+#
+#   overrides:
+#     memory-hygiene:
+#       state: enabled
+#       reason: This repo runs on Isambard, where the shared scratch rules apply.
+
+items:
+  preset: non-research
+  overrides:
+    beartype-strong-types:
+      state: disabled
+      reason: "Titus's tools and services run on the system Python with the standard library only; a beartype dependency would change how they are deployed. Type hints are still expected."
+
+# ── Review gate ──────────────────────────────────────────────────────────────
+# Where the mandatory checklist review runs. Omit (or 'commit') to gate every
+# `git commit`. With 'pr', commits pass unreviewed (sizeable ones get a
+# review-early note at the `nudge` thresholds) and the review gates
+# `gh pr create` AND `gh pr merge` on the branch-vs-base diff instead;
+# commands containing an `experiment_patterns` substring get a one-time
+# review-early reminder while the branch is unreviewed.
+#
+# Under 'pr', a merge also requires the PR's checks to be green—a review says
+# the diff was read, not that it works—and waits when a repo whose workflows
+# run on pull_request reports no checks yet. On by default; a repo with no such
+# workflow needs no opt-out, so set it false only to merge red deliberately.
+#
+# `claude_reviewer_model` is the model the Claude Code checklist-reviewer
+# subagent runs on (default opus): an alias (opus, sonnet, haiku, fable),
+# inherit, or a full id such as claude-sonnet-5-5. `codex_reviewer_model` and
+# `codex_reviewer_effort` pin the Codex reviewer role (defaults gpt-6-astra and
+# high; the model may be inherit, for the session's own). `claude-tooling
+# init` writes them into .claude/agents/checklist-reviewer.md and
+# .codex/agents/checklist-reviewer.toml, so re-run init after changing them.
+#
+# `precommit_timeout_s` is how long the gate lets `pre-commit run` take before
+# it blocks the commit or PR action (default 300 seconds). `claude-tooling init`
+# writes the gate hook's own timeout as this limit plus 300 seconds, so re-run
+# init after changing it.
+#
+# `setup_command` is the one-line command, run from the repo root, that
+# installs the hooks into .venv; a hook whose binary is missing names it. Set it,
+# or pass `init --setup-command`, only where init cannot work the command out,
+# and re-run init after changing it. A command that mentions commit,
+# .claude/reviews, or gh pr create or merge is refused, since the gates would
+# block it: put it in a script.
+#
+# `reviewer_instructions` lists this repo's own rules for the reviewer, which
+# `claude-tooling init` writes into both reviewer definitions.
+
+# review_gate:
+#   trigger: pr
+#   nudge:
+#     lines: 100
+#     files: 8
+#   experiment_patterns:
+#     - sbatch
+#   require_green_checks: true
+#   claude_reviewer_model: opus
+#   codex_reviewer_model: gpt-6-astra
+#   codex_reviewer_effort: high
+#   precommit_timeout_s: 300
+#   setup_command: bash scripts/setup.sh
+#   reviewer_instructions:
+#     - Run GPU tests only through sbatch.
+
+# ── Backfit ──────────────────────────────────────────────────────────────────
+# Files /backfit neither audits nor edits: append-only records, such as
+# journals and logs, whose old entries stay as written. Each list item is a
+# path glob, matched as `git ls-files -- '<glob>'` matches it.
+
+# backfit:
+#   append_only:
+#     - docs/journal.md
+#     - logs/**
+
+# ── Mechanical checks ────────────────────────────────────────────────────────
+# Each check maps to a built-in type with parameters.
+# The claude-tooling README's check-type table lists the types and their params.
+
+checks:
+  no_user_paths:
+    type: builtin:user_paths
+    description: "No hardcoded user-specific paths"
+    params:
+      exclude_files:
+        - CHANGELOG.md
+      message: "Replace with relative path, env var, or placeholder."
+
+  # Uncomment and configure checks relevant to your repo:
+
+  # no_new_scripts:
+  #   type: builtin:new_scripts
+  #   description: "No new top-level scripts outside allowed directories"
+  #   params:
+  #     scan_dir: scripts/
+  #     allowed_dirs:
+  #       - scripts/claude/
+
+  # checklist_item_format:
+  #   type: builtin:checklist_item_format
+  #   description: "Checklist item files have valid frontmatter and structure"
+  #   params:
+  #     item_dirs:
+  #       - .claude/items
+
+# ── Node detection (HPC / SLURM) ─────────────────────────────────────────────
+# Uncomment on a SLURM cluster to report, at session start, whether this is a
+# GPU compute node (is_gpu_compute_node) and the SLURM allocation. Also enable
+# the hook with `claude-tooling init --node-detect`. Hostname patterns are
+# optional and only enrich the explanation; they vary per cluster.
+
+# node_detection:
+#   enabled: true
+#   gpu_detection: true        # probe GPUs with `nvidia-smi` (the headline signal)
+#   gpu_timeout_s: 5
+#   login_patterns:
+#     - "^login\\d+$"
+#   compute_patterns:
+#     - "^nid\\d+$"
+
+review_gate:
+  trigger: pr
+  claude_reviewer_model: opus
+  codex_reviewer_model: gpt-6.1-sol
+  codex_reviewer_effort: high
+  setup_command: agent-gate setup . --kind software

@@ -1,0 +1,73 @@
+{
+  "description": "claude-tooling: the shared checklist review gate, wired for Codex. Managed by `claude-tooling init --codex`; re-trust in /hooks after a re-render.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=$(git rev-parse --show-toplevel 2>/dev/null); G=\"$R/.venv/bin/codex-guidance-inject\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$R\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/codex-guidance-inject\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"codex-guidance-inject: there is no .venv/bin/codex-guidance-inject in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"codex-guidance-inject: there is no .venv/bin/codex-guidance-inject in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\"}}'; exit 0",
+            "timeout": 60,
+            "statusMessage": "Loading checklist guidance",
+            "additionalContextLimit": 12000
+          },
+          {
+            "type": "command",
+            "command": "R=$(git rev-parse --show-toplevel 2>/dev/null); G=\"$R/.venv/bin/codex-freshness-check\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$R\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/codex-freshness-check\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"codex-freshness-check: there is no .venv/bin/codex-freshness-check in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"codex-freshness-check: there is no .venv/bin/codex-freshness-check in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\"}}'; exit 0",
+            "timeout": 60,
+            "statusMessage": "Checking claude-tooling freshness",
+            "additionalContextLimit": 2000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=$(git rev-parse --show-toplevel 2>/dev/null); G=\"$R/.venv/bin/codex-review-gate\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$R\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/codex-review-gate\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; P=$(sed -E 's/\"(cwd|transcript_path|description)\": *\"([^\"\\\\]|\\\\.)*\"//g'); case \"$P\" in *commit*|*gh*pr*create*|*gh*pr*merge*|*.claude/reviews*) printf '%s\\n' 'codex-review-gate: there is no .venv/bin/codex-review-gate in this repository or in its main checkout, so this command is blocked: it mentions commit, .claude/reviews, or gh with pr create or pr merge, which need the gate. Other commands still run. To repair, run `agent-gate setup . --kind software` from the repository root. Then retry.' >&2; exit 2;; esac; exit 0",
+            "timeout": 600,
+            "statusMessage": "Checking checklist review gate"
+          }
+        ]
+      },
+      {
+        "matcher": "^apply_patch$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=$(git rev-parse --show-toplevel 2>/dev/null); G=\"$R/.venv/bin/codex-protect-verdict\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$R\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/codex-protect-verdict\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; P=$(grep -oE '\"(file_path|notebook_path|path)\": *\"([^\"\\\\]|\\\\.)*\"|\\*\\*\\* (Add File|Update File|Delete File|Move to): ([^\"\\\\]|\\\\[^n])*'); case \"$P\" in *.claude/reviews*) printf '%s\\n' 'codex-protect-verdict: there is no .venv/bin/codex-protect-verdict in this repository or in its main checkout, so this write into .claude/reviews, which the verdict guard protects, is blocked. Other writes still go through. To repair, run `agent-gate setup . --kind software` from the repository root. Then retry.' >&2; exit 2;; esac; exit 0",
+            "timeout": 30,
+            "statusMessage": "Protecting the checklist verdict"
+          }
+        ]
+      },
+      {
+        "matcher": "^(spawn_agent|collaborationspawn_agent)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=$(git rev-parse --show-toplevel 2>/dev/null); G=\"$R/.venv/bin/codex-spawn-guard\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$R\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/codex-spawn-guard\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; P=$(sed -E 's/\"(cwd|transcript_path|description)\": *\"([^\"\\\\]|\\\\.)*\"//g'); case \"$P\" in *checklist-reviewer*) printf '%s\\n' 'codex-spawn-guard: there is no .venv/bin/codex-spawn-guard in this repository or in its main checkout, so this spawn of the checklist reviewer is blocked. Other spawns still go through. To repair, run `agent-gate setup . --kind software` from the repository root. Then retry.' >&2; exit 2;; esac; exit 0",
+            "timeout": 30,
+            "statusMessage": "Checking the checklist reviewer spawn"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "R=$(git rev-parse --show-toplevel 2>/dev/null); G=\"$R/.venv/bin/claude-mechanical-checks\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$R\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-mechanical-checks\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"claude-mechanical-checks: there is no .venv/bin/claude-mechanical-checks in this repository or in its main checkout, so this Stop check did not run. To repair, run `agent-gate setup . --kind software` from the repository root.\"}'; exit 0",
+            "timeout": 180,
+            "statusMessage": "Running repository checks"
+          }
+        ]
+      }
+    ]
+  }
+}

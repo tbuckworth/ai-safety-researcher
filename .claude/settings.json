@@ -1,0 +1,65 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "G=\"$CLAUDE_PROJECT_DIR/.venv/bin/claude-guidance-inject\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$CLAUDE_PROJECT_DIR\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-guidance-inject\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"claude-guidance-inject: there is no .venv/bin/claude-guidance-inject in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"claude-guidance-inject: there is no .venv/bin/claude-guidance-inject in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\"}}'; exit 0"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "G=\"$CLAUDE_PROJECT_DIR/.venv/bin/claude-freshness-check\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$CLAUDE_PROJECT_DIR\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-freshness-check\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"claude-freshness-check: there is no .venv/bin/claude-freshness-check in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"claude-freshness-check: there is no .venv/bin/claude-freshness-check in this repository or in its main checkout, so this session-start hook did not run. A gate whose binary is missing blocks only calls that may need it (commits, gh pr create or merge in any spelling, anything touching .claude/reviews), and a Stop check whose binary is missing is skipped. To repair, run `agent-gate setup . --kind software` from the repository root. Then start a new session to run this hook.\"}}'; exit 0"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "G=\"$CLAUDE_PROJECT_DIR/.venv/bin/claude-plan-exit-check\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$CLAUDE_PROJECT_DIR\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-plan-exit-check\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"claude-plan-exit-check: there is no .venv/bin/claude-plan-exit-check in this repository or in its main checkout, so the plan was not checked for its quality checklist; plan exit goes ahead. To repair, run `agent-gate setup . --kind software` from the repository root.\", \"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"claude-plan-exit-check: there is no .venv/bin/claude-plan-exit-check in this repository or in its main checkout, so the plan was not checked for its quality checklist; plan exit goes ahead. To repair, run `agent-gate setup . --kind software` from the repository root.\"}}'; exit 0",
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "G=\"$CLAUDE_PROJECT_DIR/.venv/bin/claude-review-gate\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$CLAUDE_PROJECT_DIR\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-review-gate\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; P=$(sed -E 's/\"(cwd|transcript_path|description)\": *\"([^\"\\\\]|\\\\.)*\"//g'); case \"$P\" in *commit*|*gh*pr*create*|*gh*pr*merge*|*.claude/reviews*) printf '%s\\n' 'claude-review-gate: there is no .venv/bin/claude-review-gate in this repository or in its main checkout, so this command is blocked: it mentions commit, .claude/reviews, or gh with pr create or pr merge, which need the gate. Other commands still run. To repair, run `agent-gate setup . --kind software` from the repository root. Then retry.' >&2; exit 2;; esac; exit 0",
+            "timeout": 600,
+            "onFailure": "block"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "G=\"$CLAUDE_PROJECT_DIR/.venv/bin/claude-protect-verdict\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$CLAUDE_PROJECT_DIR\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-protect-verdict\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; P=$(grep -oE '\"(file_path|notebook_path|path)\": *\"([^\"\\\\]|\\\\.)*\"|\\*\\*\\* (Add File|Update File|Delete File|Move to): ([^\"\\\\]|\\\\[^n])*'); case \"$P\" in *.claude/reviews*) printf '%s\\n' 'claude-protect-verdict: there is no .venv/bin/claude-protect-verdict in this repository or in its main checkout, so this write into .claude/reviews, which the verdict guard protects, is blocked. Other writes still go through. To repair, run `agent-gate setup . --kind software` from the repository root. Then retry.' >&2; exit 2;; esac; exit 0",
+            "onFailure": "block"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "G=\"$CLAUDE_PROJECT_DIR/.venv/bin/claude-mechanical-checks\"; if [ ! -x \"$G\" ]; then M=$(git -C \"$CLAUDE_PROJECT_DIR\" rev-parse --git-common-dir 2>/dev/null); case \"$M\" in /*) G=\"${M%/.git}/.venv/bin/claude-mechanical-checks\";; esac; fi; if [ -x \"$G\" ]; then exec \"$G\"; fi; printf '%s\\n' '{\"systemMessage\": \"claude-mechanical-checks: there is no .venv/bin/claude-mechanical-checks in this repository or in its main checkout, so this Stop check did not run. To repair, run `agent-gate setup . --kind software` from the repository root.\"}'; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -18,3 +18,6 @@ logs/
 
 # Python bytecode
 __pycache__/
+.venv/
+.claude/reviews/
+.claude/worktrees/

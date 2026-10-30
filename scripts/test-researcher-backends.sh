@@ -200,6 +200,16 @@ diff <(cd "${KB_FIXTURE}/lessons" && ls *.md | sed 's/\.md$//') \
     || { echo "FAIL: index.md does not list the lessons pages kb-init seeded" >&2; exit 1; }
 test -d "${KB_FIXTURE}/.git"
 bash "$REPO_DIR/scripts/kb-init.sh" "$KB_FIXTURE" > /dev/null   # idempotent
+# A bootstrap commit that is refused (here by a pre-commit hook) fails kb-init.
+mkdir -p "${TEST_ROOT}/refusing-hooks"
+printf '#!/usr/bin/env bash\necho "mock hook refuses the commit" >&2\nexit 1\n' > "${TEST_ROOT}/refusing-hooks/pre-commit"
+chmod +x "${TEST_ROOT}/refusing-hooks/pre-commit"
+if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="${TEST_ROOT}/refusing-hooks" \
+        bash "$REPO_DIR/scripts/kb-init.sh" "${TEST_ROOT}/wiki-refused" > "${TEST_ROOT}/kb-refused.out" 2>&1; then
+    echo "FAIL: kb-init succeeded although its bootstrap commit was refused" >&2
+    exit 1
+fi
+grep -q "mock hook refuses the commit" "${TEST_ROOT}/kb-refused.out"
 
 run_case claude "" "$KB_FIXTURE" kb
 grep -qF -- "- Global knowledge base: ${KB_FIXTURE}" "$MOCK_PROMPT_LOG"

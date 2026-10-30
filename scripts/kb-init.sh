@@ -152,7 +152,7 @@ if [ ! -d "${KB_DIR}/.git" ]; then
 *.bak
 GIEOF
     git -C "$KB_DIR" add -A
-    git -C "$KB_DIR" commit -qm "Bootstrap research knowledge base" || true
+    git -C "$KB_DIR" commit -qm "Bootstrap research knowledge base"
     echo "Initialised git repository in ${KB_DIR}"
 fi
 

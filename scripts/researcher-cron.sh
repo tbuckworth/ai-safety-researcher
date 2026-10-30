@@ -466,19 +466,9 @@ while true; do
         break
     fi
 
-    HOLD=$(guard_hold)
-    if [ -n "$HOLD" ]; then
-        if hold_applies "$HOLD"; then
-            HOLD=$(hold_text "$HOLD")
-            log "Guard: ${HOLD}"
-            upsert_frontmatter_field "last_pause_reason" "$(yaml_quote "$HOLD")" || true
-            pause_run "$NEXT_STEP"
-            break
-        fi
-        # Pausing now would leave this run's cluster jobs unwatched; the step
-        # that collects them goes ahead.
-        OUTSTANDING=$(outstanding_jobs)
-        log "Guard asked to hold (${HOLD}), but job(s) ${OUTSTANDING% } are still outstanding; carrying on."
+    if guard_holds_run; then
+        pause_run "$NEXT_STEP"
+        break
     fi
 
     STEP_RC=0

@@ -162,6 +162,15 @@ if [ "${MOCK_STALL_AT_STEP:-}" = "$step" ]; then
     exit 0
 fi
 
+if [ "${MOCK_SUBMIT_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_JOB_FILE}.submitted" ]; then
+    # The step submits a cluster job and ends its turn while the job runs; its
+    # next attempt finds the results and advances.
+    touch "${MOCK_JOB_FILE}.submitted"
+    echo 4242 > "$MOCK_JOB_FILE"
+    echo "Submitted job 4242; ending step ${step} while it runs."
+    exit 0
+fi
+
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -760,6 +769,26 @@ assert_eq "$RC" "3" "exit code (stopped while waiting)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "no retry after the stop"
 assert_eq "$(field current_step "${OUT}/2026-01-13-guard-wait")" "8" "current_step kept"
 assert_grep "Guard: stopped by Titus \(job\(s\) 4242 keep running" "${CASE_DIR}/stdout.log"
+# A step that ends while its job runs is retried, once the job has left the
+# queue (the mock squeue below reports it once), without spending an attempt...
+new_case job-wait-refund
+write_run 2026-01-18-job-refund 8 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_SUBMIT_AT_STEP=9 "MOCK_JOB_FILE=${CASE_DIR}/job" \
+    "RESEARCHER_JOB_WAIT_CMD=cat ${CASE_DIR}/job 2>/dev/null; rm -f ${CASE_DIR}/job" \
+    RESEARCHER_JOB_WAIT_POLL_SECONDS=1 -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 9 10 11 " "step 9 retried after its job"
+assert_grep "retrying without spending an attempt \(refund 1/10\)" "${CASE_DIR}/stdout.log"
+# ...but a job that outlasts the step's wait budget spends the attempt.
+new_case job-wait-gave-up
+write_run 2026-01-19-job-gave-up 8 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_STALL_AT_STEP=9 \
+    "RESEARCHER_JOB_WAIT_CMD=echo 4242" RESEARCHER_JOB_WAIT_POLL_SECONDS=1 RESEARCHER_JOB_WAIT_MAX_SECONDS=1 \
+    -- "Ignored topic"
+assert_eq "$RC" "4" "exit code (failed)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 " "one attempt"
+assert_grep "giving up on waiting" "${CASE_DIR}/stdout.log"
+assert_eq "$(field status "${OUT}/2026-01-19-job-gave-up")" "failed" "status"
 
 # 15f. A run with an owner (RESEARCHER_OWNER) is never resumed by a plain run,
 #      and keeps its owner through the steps.

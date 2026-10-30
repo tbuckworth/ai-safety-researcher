@@ -37,8 +37,9 @@ the user wants to understand; reach for this when they want to proceed.
 
 3. **Read `state.md`** for `run_id`, `issue_number`, `compute_profile`, and
    status, and `.repo_url` for the prior repo. A follow-up pushes to the existing
-   repo on a branch, so a missing `.repo_url` is worth flagging — the follow-up
-   still works, it just starts a fresh repo.
+   repo on a branch, so a missing `.repo_url` is worth flagging: the follow-up
+   then copies this run's artifacts from its run directory, so it must run on
+   this machine, and starts a fresh repo.
 
 ## Present and Decide
 

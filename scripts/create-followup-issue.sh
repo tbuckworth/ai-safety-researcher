@@ -2,17 +2,21 @@
 # create-followup-issue.sh — Create a follow-up research issue on GitHub
 #
 # Usage:
-#   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> [--source <backend>] [--force]
+#   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> --source <backend> [--force]
 #
 # Creates an issue on tbuckworth/tasks with labels:
 # list:research-ideas, type:follow-up, source:<backend>, importance:<parent's>
 # researcher_lib.py's followup-issue writes the title and body (the feedback,
 # then a footer line with the metadata) and gives the follow-up label, its
-# FOLLOWUP_LABEL; the runner reads them back with its followup-meta.
+# FOLLOWUP_LABEL; its research-ideas-label gives the queue label. The runner
+# reads them back with its followup-meta.
 #
-# The follow-up takes its parent's importance label, or importance:medium when
-# the parent has none (or cannot be read). agent-spare only starts ideas rated
-# high or medium, so a follow-up filed without one was never run on its own.
+# The follow-up takes its parent's importance label, or importance:medium, with
+# a warning, when the parent has none. agent-spare only starts ideas rated high
+# or medium, so a follow-up filed without one was never run on its own. A parent
+# that cannot be read stops it (exit 1, nothing filed). The new issue is linked
+# from the parent with a comment; when that fails, it exits 1 saying the issue
+# was created but not linked.
 #
 # Idempotent: the body carries a follow-up key (a hash of the request). If an
 # issue with the same key already exists, open or closed, it is reported and
@@ -26,7 +30,7 @@ PARENT=""
 REPO_URL=""
 RUN_ID=""
 FEEDBACK_FILE=""
-SOURCE_AGENT="${RESEARCHER_BACKEND:-claude}"
+SOURCE_AGENT=""
 FORCE=false
 TASKS_REPO="${RESEARCHER_TASKS_REPO:-tbuckworth/tasks}"
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/researcher_lib.py"
@@ -44,6 +48,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 BACKENDS=$(python3 "$LIB" backends)
+if [ -z "$SOURCE_AGENT" ]; then
+    echo "ERROR: --source is required (the backend filing the follow-up: one of ${BACKENDS})" >&2
+    exit 1
+fi
 case " ${BACKENDS} " in
     *" ${SOURCE_AGENT} "*) ;;
     *)
@@ -97,11 +105,14 @@ fi
 
 IMPORTANCE="importance:medium"
 if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
-    PARENT_IMPORTANCE=$(gh issue view "$PARENT" --repo "$TASKS_REPO" --json labels \
-        --jq '[.labels[].name | select(startswith("importance:"))][0] // ""' 2>/dev/null) \
-        || PARENT_IMPORTANCE=""
+    if ! PARENT_IMPORTANCE=$(gh issue view "$PARENT" --repo "$TASKS_REPO" --json labels \
+            --jq '[.labels[].name | select(startswith("importance:"))][0] // ""'); then
+        echo "ERROR: could not read parent issue #${PARENT} for its importance label (gh's error is above); nothing was filed" >&2
+        exit 1
+    fi
     case "$PARENT_IMPORTANCE" in
         importance:high|importance:medium|importance:low) IMPORTANCE="$PARENT_IMPORTANCE" ;;
+        *) echo "WARN: parent issue #${PARENT} has no importance label; the follow-up gets ${IMPORTANCE}" >&2 ;;
     esac
 fi
 
@@ -113,9 +124,10 @@ gh label create "$FOLLOWUP_LABEL" \
     2>/dev/null || true
 
 # Create the issue
+RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
 ISSUE_URL=$(gh issue create --repo "$TASKS_REPO" \
     --title "$TITLE" \
-    --label "list:research-ideas" \
+    --label "$RESEARCH_IDEAS_LABEL" \
     --label "$FOLLOWUP_LABEL" \
     --label "source:${SOURCE_AGENT}" \
     --label "$IMPORTANCE" \
@@ -124,9 +136,10 @@ ISSUE_URL=$(gh issue create --repo "$TASKS_REPO" \
 ISSUE_NUMBER=$(echo "$ISSUE_URL" | sed 's/.*\///')
 
 # Comment on the parent issue linking to the follow-up
-if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
-    gh issue comment "$PARENT" --repo "$TASKS_REPO" \
-        --body "Follow-up created: #${ISSUE_NUMBER}" 2>/dev/null || true
+if [ -n "$PARENT" ] && [ "$PARENT" != "none" ] \
+        && ! gh issue comment "$PARENT" --repo "$TASKS_REPO" --body "Follow-up created: #${ISSUE_NUMBER}"; then
+    echo "ERROR: follow-up ${ISSUE_URL} was created, but the link comment on parent issue #${PARENT} failed (gh's error is above). Link it by hand: gh issue comment ${PARENT} --repo ${TASKS_REPO} --body 'Follow-up created: #${ISSUE_NUMBER}'" >&2
+    exit 1
 fi
 
 # Validate: read back the issue to confirm

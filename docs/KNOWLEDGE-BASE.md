@@ -47,9 +47,9 @@ that makes an agent a disciplined wiki maintainer rather than a chatbot). It als
 writes `AGENTS.md` and `CLAUDE.md` in the wiki root pointing at the schema, so
 any agent opened in the wiki behaves as its maintainer.
 
-`RESEARCHER_KB_DIR=none` disables the knowledge base for a run. So does pointing
-at a path with no `KB-SCHEMA.md` — a run never writes pages into an unstructured
-directory it happens to have been handed.
+`RESEARCHER_KB_DIR=none` disables the knowledge base for a run. A path with no
+`KB-SCHEMA.md` is never written to: an interactive run treats it as no knowledge
+base, and an autonomous run exits 2.
 
 **The knowledge base is an accelerant, never a dependency.** A run with no KB
 executes identically. Every KB action in the workflow is skipped silently when

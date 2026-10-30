@@ -139,7 +139,7 @@ required.
 | `RESEARCHER_OUTPUT_DIR` | Override `/media/titus/big/researcher-output` |
 | `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues (outcome `complete-local`) |
 | `RESEARCHER_REPO_VISIBILITY` | Visibility of new run repos: `private` (default), `internal`, or `public` |
-| `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024) and reports why |
+| `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024), or when `df` cannot measure it, and reports why |
 | `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (default 50; GitHub rejects >100 MB, failing the whole push) |
 | `RESEARCHER_ALLOW_RERUN=true` | Let the queue pick an issue that already has a run directory here (default: skip it; `RESEARCHER_ISSUE=<n>` also re-runs one deliberately) |
 | `RESEARCHER_RESUME_MAX_AGE_DAYS` | An unfinished autonomous run untouched for longer is not auto-resumed (default 14; 0 disables). Interactive runs (`mode: interactive`) are never resumed |
@@ -151,18 +151,19 @@ required.
 | `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
 | `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (default `sonnet`; a Claude run uses its own model) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
+| `RESEARCHER_SKIP_GPU_CHECK=true` | Skip the start-up GPU check, which exits 0 when a process uses over 500 MiB of GPU memory and exits 1 when `nvidia-smi` fails or reports a non-numeric value |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
-| `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). While it prints anything, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
+| `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). It exits 0 with its answer (no output: no jobs); a non-zero exit is an error, logged with its stderr, and the answer is unknown. While it prints anything or cannot answer, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
 | `RESEARCHER_RUN_DIR` | Resume exactly this run directory, or exit 2 if it is finished, missing or interactive; never another unfinished run or the queue |
 | `RESEARCHER_NO_RESUME=true` | Start fresh (with `RESEARCHER_ISSUE` or the queue) without resuming any unfinished run |
 | `RESEARCHER_OWNER` | Mark the runs this caller creates (`owner:` in `state.md`, kept through every step). A run with an owner is resumed only by a caller with the same `RESEARCHER_OWNER` or through `RESEARCHER_RUN_DIR`, never by a plain cron run. agent-board's spare launcher sets `agent-spare` |
-| `RESEARCHER_GUARD_CMD` | Command run before each step (`{run_id}` substituted). If it prints anything, the first line is the reason and the run pauses there like a provider limit (exit 3, resumable, nothing published; recorded as `last_pause_reason`). It never interrupts a step; a step that ends without advancing while the guard holds (e.g. it asked for more budget) also pauses instead of retrying. While `RESEARCHER_JOB_WAIT_CMD` still reports jobs it waits for them, unless the line starts with `!` (a stop): that applies at once, also during a job wait, and the jobs keep running for the step that is redone on resume. The call is limited to 300 s. agent-board's spare-capacity launcher (`agent-spare guard`) uses it |
-| `RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS` | Each call of `RESEARCHER_JOB_WAIT_CMD` is stopped after this long and reports what it printed by then (default 120) |
+| `RESEARCHER_GUARD_CMD` | Command run before each step (`{run_id}` substituted). If it prints anything, the first line is the reason and the run pauses there like a provider limit (exit 3, resumable, nothing published; recorded as `last_pause_reason`); if it exits non-zero or times out, the reason is `guard failed: ` and its first stderr line (or `timed out`). It never interrupts a step; a step that ends without advancing while the guard holds (e.g. it asked for more budget) also pauses instead of retrying. While `RESEARCHER_JOB_WAIT_CMD` still reports jobs or cannot answer it waits for them, unless the line starts with `!` (a stop): that applies at once, also during a job wait, and the jobs keep running for the step that is redone on resume. The call is limited to 300 s. agent-board's spare-capacity launcher (`agent-spare guard`) uses it |
+| `RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS` | Each call of `RESEARCHER_JOB_WAIT_CMD` is stopped after this long, which counts as no answer (default 120) |
 | `RESEARCHER_JOB_WAIT_POLL_SECONDS` | Poll interval while waiting (default 120) |
 | `RESEARCHER_JOB_WAIT_MAX_SECONDS` | Cap on a step's waiting, summed over its waits (default 14400) |
 | `RESEARCHER_JOB_WAIT_MAX_REFUNDS` | Cap on refunded attempts (default 10) |
-| `RESEARCHER_KB_DIR` | Global knowledge base (default `~/pyg/research-wiki`). `none`, or a path without `KB-SCHEMA.md`, disables it. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
-| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps. Defaults to `desktop` on the desktop, `local` elsewhere (which drops the ssh step) |
+| `RESEARCHER_KB_DIR` | Global knowledge base (default `~/pyg/research-wiki`, used only when it holds `KB-SCHEMA.md`). `none` disables it; a path set here without `KB-SCHEMA.md` exits 2. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
+| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps; `local` drops the ssh step. Defaults to `desktop` on the desktop; any other machine must set it, or the run exits 2 |
 
 ## Decision Heuristics
 
@@ -278,7 +279,7 @@ never fails a step.
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
 - **Repos**: Created as `tbuckworth/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
-- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0:
+- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0 (5 when a deliverable failed; see [Exit codes](#exit-codes)):
 
   | Outcome | Meaning | Exit |
   |---------|---------|------|
@@ -292,7 +293,7 @@ never fails a step.
 
   A timeout no longer overwrites a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
 - **Issue comments**: on completion the issue gets a findings comment: the outcome and its caveats, repo / paper / next-steps links (or the local path when nothing was published), the per-experiment verdict table, the audit disposition, and the ranked next steps. A follow-up's parent issue gets the same comment.
-- **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming.
+- **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming; if that read fails, the runner exits 1 without running the issue.
 
 ## Logs
 
@@ -300,6 +301,17 @@ never fails a step.
 - `logs/step-N-attempt-N-*.log` — per-step provider output
 - `logs/email-*.log` — email sending output
 - `output/<run-id>/state.md` — workflow state (authoritative)
+
+## Exit codes
+
+| Exit | Meaning |
+|------|---------|
+| 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
+| 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written, the picked issue could not be re-read before claiming it, `nvidia-smi` failed) |
+| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
+| 3 | Paused (provider limit or guard); resumable, nothing published |
+| 4 | Finished without a usable result; the outcome table above says which |
+| 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then |
 
 ## Troubleshooting
 
@@ -310,7 +322,7 @@ never fails a step.
 
 **Results email not sent**:
 - The run log says why (`Writing and sending the results email ...`, then
-  `Email sent ...` or a `Note:`); the composer's own output is in
+  `Email sent ...` or an `ERROR:`); the composer's own output is in
   `logs/email-*.log`, and `email-draft.html` stays in the run directory.
 - `agent-mail sent` lists what went out; `agent-mail status` checks the mailroom.
 - A draft the pre-send review held and nobody revised is sent unchanged by the
@@ -376,7 +388,7 @@ since a redesign would answer a question that was never actually asked.
 1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas`, `type:follow-up` and the parent's `importance:` label (`importance:medium` when the parent has none), since agent-spare only starts ideas rated high or medium.
 
 2. **Autonomous pickup**: The cron wrapper picks the follow-up issue like any other research idea. When it detects the `type:follow-up` label, it:
-   - Clones the prior repo (on the output volume, never `/tmp`) to copy key artifacts into a `prior/` subdirectory
+   - Copies key artifacts into a `prior/` subdirectory from a clone of the prior repo (on the output volume, never `/tmp`), or, when the issue names no repo, from the prior run's directory here (`<output dir>/<Run: id>`). If neither can be read, the run does not start: the runner takes the issue's researching label off, so a later run retries it, and exits 1
    - Creates a `followup-context.md` with the feedback
    - Creates a fresh run directory (not inside the prior repo)
 
@@ -385,9 +397,9 @@ since a redesign would answer a question that was never actually asked.
    - "Redesign the approach" → skips to Step 5 (copies prior literature)
    - "Wrong framing, needs new literature" → runs full workflow from Step 2
 
-4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo, published in place: the branch starts from the branch being continued (the prior repo's default branch, or the `/tree/<branch>` in the issue's `Repo:` link for a follow-up of a follow-up) and the run directory is laid over it (`prior/` excluded), so nothing is copied. **A follow-up is not pushed into a prior repo whose visibility differs from `RESEARCHER_REPO_VISIBILITY`** (e.g. an older public repo while the default is private): the run ends `unpublished` with that reason, so making results public stays a deliberate choice. Both the follow-up issue and the parent issue get the findings comment.
+4. **Results**: Follow-up artifacts push to a new branch on the existing GitHub repo (a follow-up that names no repo gets a repo of its own), published in place: the branch starts from the branch being continued (the prior repo's default branch, or the `/tree/<branch>` in the issue's `Repo:` link for a follow-up of a follow-up) and the run directory is laid over it (`prior/` excluded), so nothing is copied. **A follow-up is not pushed into a prior repo whose visibility differs from `RESEARCHER_REPO_VISIBILITY`** (e.g. an older public repo while the default is private): the run ends `unpublished` with that reason, so making results public stays a deliberate choice. Both the follow-up issue and the parent issue get the findings comment.
 
-`create-followup-issue.sh` is idempotent: it embeds a follow-up key (a hash of the request) in the issue body and reports an existing issue with the same key instead of filing a second one. `--force` files anyway.
+`create-followup-issue.sh` is idempotent: it embeds a follow-up key (a hash of the request) in the issue body and reports an existing issue with the same key instead of filing a second one. `--force` files anyway. `--source <backend>` is required. It exits 1 without filing when the parent issue cannot be read, and exits 1 naming the new issue when the link comment on the parent fails.
 
 ### Issue Labels
 
@@ -415,7 +427,7 @@ Parent: #42 | Repo: https://github.com/tbuckworth/research-foo | Run: 2026-04-03
 
 ```
 output/<date>-followup-<slug>/
-├── prior/                      # Copied from the prior run's GitHub repo
+├── prior/                      # Copied from the prior run's repo (or its run directory)
 │   ├── state.md
 │   ├── briefing.md
 │   ├── literature/synthesis.md
@@ -451,11 +463,14 @@ step). So:
 - **Inline plots**: the composer lists them in `<run>/email-images.txt`
   (`NAME=relative/path.png` per line) and places each as
   `<img src="cid:NAME">`; the helper checks each one (an image inside the run
-  directory, placed in the HTML) before attaching it.
+  directory, placed in the HTML) and sends nothing (exit 2) until all pass, as
+  it does when `run-outcome.json` exists but cannot be read.
 - **Fallbacks.** A session that stops without sending has its draft sent by the
-  wrapper as that session. If no Claude session can run at all (no CLI, usage
-  limits), a Codex run writes the email with Codex and the wrapper sends it
-  `--unrouted`: not reviewed, and replies go to the orchestrator.
+  wrapper as that session; a session that fails (a usage limit too) sends
+  nothing, and the run exits 5. Only if the Claude CLI is not installed does a
+  Codex run write the email with Codex, and the wrapper sends it
+  `--unrouted`: not reviewed, and replies go to the orchestrator. If that Codex
+  writer fails, nothing is sent either, and the run exits 5.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
   is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is
   gone: the agents' account cannot label Titus's mailbox.

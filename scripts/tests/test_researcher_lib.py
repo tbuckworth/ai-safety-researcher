@@ -1,5 +1,7 @@
 """Unit tests for scripts/researcher_lib.py (stdlib unittest; no network)."""
 
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -88,6 +90,25 @@ class FrontmatterTest(unittest.TestCase):
     def test_terminal_statuses_cli(self):
         self.assertEqual(run_lib("terminal-statuses").stdout.split(), list(lib.TERMINAL_STATUSES))
 
+    def test_unreadable_file_raises(self):
+        # A state.md that cannot be read is an error, not a run with no fields.
+        self.state.mkdir()
+        with self.assertRaises(OSError):
+            lib.read_frontmatter(self.state)
+
+    def test_run_without_frontmatter_is_reported(self):
+        # Such a run is not counted when picking checks for duplicates; say so.
+        root = Path(self.tmp.name)
+        write(root / "2026-01-01-bare" / "state.md", "status: complete\n")
+        make_run(root, "2026-01-02-ok", status="complete", issue_number="7")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            runs = lib.local_runs(root)
+        self.assertEqual([run["_dir"] for run in runs],
+                         [str(root / "2026-01-01-bare"), str(root / "2026-01-02-ok")])
+        self.assertIn(f"WARN: {root / '2026-01-01-bare' / 'state.md'} has no frontmatter", stderr.getvalue())
+        self.assertNotIn("2026-01-02-ok", stderr.getvalue())
+
 
 class BackendLabelTest(unittest.TestCase):
     def test_labels_come_from_the_backend_list(self):
@@ -97,6 +118,12 @@ class BackendLabelTest(unittest.TestCase):
         self.assertEqual(run_lib("status-label", "codex", "researching").stdout, "status:codex-researching\n")
         self.assertEqual(run_lib("backends").stdout.split(), list(lib.BACKENDS))
         self.assertNotEqual(run_lib("status-label", "gemini", "researching").returncode, 0)
+
+    def test_research_ideas_label_cli(self):
+        self.assertEqual(run_lib("research-ideas-label").stdout, f"{lib.RESEARCH_IDEAS_LABEL}\n")
+
+    def test_repo_visibilities_cli(self):
+        self.assertEqual(run_lib("repo-visibilities").stdout.splitlines(), list(lib.REPO_VISIBILITIES))
 
     def test_claimed(self):
         free = {"state": "OPEN", "labels": [{"name": "list:research-ideas"}]}
@@ -373,6 +400,13 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(facts["experiments"][0]["preflight"], "unreadable")
         self.assertTrue(any("no readable check table for exp-001" in r for r in facts["reasons"]))
 
+    def test_preflight_that_cannot_be_read_raises(self):
+        # Not "no readable table": the outcome fails loudly instead.
+        self.add_exp("exp-001", "PASS", preflight=None)
+        (self.run / "experiments" / "exp-001" / "preflight.md").mkdir()
+        with self.assertRaises(OSError):
+            lib.parse_preflight(self.run / "experiments" / "exp-001" / "preflight.md")
+
     def test_wrapper_notes_are_reported(self):
         self.add_exp("exp-001", "PASS")
         facts = self.outcome(notes=["experiments/exp-001/big.dat not published"])
@@ -442,6 +476,20 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("git push of main failed", text)
         self.assertNotIn("github.com", text)
 
+    def test_cli_requires_branch_and_visibility(self):
+        args = ["issue-comment", "--run-dir", str(self.run), "--status", "complete", "--publish-state", "pushed",
+                "--run-id", "r", "--repo-web", "https://github.com/o/research-x"]
+        ok = run_lib(*args, "--branch", "main", "--visibility", "internal")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        self.assertIn("https://github.com/o/research-x/tree/main (internal)", ok.stdout)
+        for missing in ("--branch", "--visibility"):
+            given = ["--branch", "main", "--visibility", "private"]
+            del given[given.index(missing):given.index(missing) + 2]
+            result = run_lib(*args, *given)
+            self.assertEqual(result.returncode, 2)
+            self.assertIn(missing, result.stderr)
+        self.assertEqual(run_lib(*args, "--branch", "main", "--visibility", "secret").returncode, 2)
+
 
 class CliTest(unittest.TestCase):
     def test_pick_cli_round_trip(self):
@@ -486,10 +534,15 @@ class ResultsEmailTest(unittest.TestCase):
             self.assertEqual(images, [f"main={(run / 'figures/main.png').resolve()}"])
             self.assertEqual([p.split(":")[0] for p in problems],
                              ["main", "unplaced", "esc", "txt", "'bad name=figures/main.png'", "missing"])
-            out = subprocess.run([sys.executable, str(SCRIPTS / "researcher_lib.py"), "email-images", "--run-dir",
-                                  str(run)], capture_output=True, text=True, check=True)
-            self.assertEqual(out.stdout.strip(), images[0])
-            self.assertIn("image left out: unplaced", out.stderr)
+            # The CLI fails on any bad line, so the email is fixed rather than sent without it.
+            bad = run_lib("email-images", "--run-dir", str(run))
+            self.assertEqual(bad.returncode, 1)
+            self.assertEqual(bad.stdout, "")
+            self.assertIn("unplaced: email-draft.html does not place it", bad.stderr)
+            write(run / "email-images.txt", "# plots\nmain = figures/main.png\n")
+            good = run_lib("email-images", "--run-dir", str(run))
+            self.assertEqual(good.returncode, 0, good.stderr)
+            self.assertEqual(good.stdout.strip(), images[0])
 
 
 if __name__ == "__main__":

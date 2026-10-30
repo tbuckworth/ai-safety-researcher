@@ -8,6 +8,8 @@ decisions that used to be made by ad-hoc grep/jq and got them wrong:
   terminal-statuses  the workflow statuses that end a run
   backends           the agent backends a run can use
   status-label       a backend's researching / processed issue label
+  research-ideas-label  the label that queues an issue as a research idea
+  repo-visibilities  the visibilities a published run repo may have
   pick               which queued issue to run, refusing duplicates
   claimed            whether a freshly read issue is claimed or closed
   find-followup      the oldest issue already filed with a follow-up key
@@ -50,6 +52,8 @@ def status_label(backend: str, state: str) -> str:
     return f"status:{backend}-{state}"
 
 
+# The label that puts an issue in the queue of research ideas.
+RESEARCH_IDEAS_LABEL = "list:research-ideas"
 RESEARCHING_LABELS = tuple(status_label(backend, "researching") for backend in BACKENDS)
 BUSY_LABELS = RESEARCHING_LABELS + tuple(status_label(backend, "processed") for backend in BACKENDS)
 FOLLOWUP_LABEL = "type:follow-up"
@@ -62,6 +66,10 @@ FOLLOWUP_FOOTER_RE = re.compile(r"^Parent:\s*#?(?P<parent>\d*)\s*\|\s*Repo:\s*(?
 
 # Workflow statuses after which a run is finished and never auto-resumed.
 TERMINAL_STATUSES = ("complete", "failed", "timed_out")
+
+# GitHub repository visibilities; researcher-cron.sh checks RESEARCHER_REPO_VISIBILITY
+# against the same list.
+REPO_VISIBILITIES = ("private", "internal", "public")
 
 VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
 # Final outcomes that count as a finished, usable run (the wrapper exits 0).
@@ -101,13 +109,11 @@ def read_frontmatter(path: Path) -> dict[str, str]:
     key wins, and nothing after the closing `---` is read. Deliberately not a
     YAML parser: state.md is rewritten by models and is not always valid YAML,
     but the scalar keys the wrapper relies on always sit on their own line.
-    An unreadable file has no fields.
+    A file with no frontmatter has no fields; one that cannot be read raises
+    OSError.
     """
     fields: dict[str, str] = {}
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return fields
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     if not lines or lines[0].strip() != "---":
         return fields
     for line in lines[1:]:
@@ -120,11 +126,17 @@ def read_frontmatter(path: Path) -> dict[str, str]:
 
 
 def local_runs(output_dir: Path) -> list[dict[str, str]]:
+    """The frontmatter fields of each run under `output_dir` (each `*/state.md`),
+    plus `_dir`, the run directory. A state.md with no frontmatter fields is
+    reported on stderr: nothing ties it to an issue, so pick_issue cannot count
+    it as a duplicate. Raises OSError when a state.md cannot be read."""
     runs = []
     if not output_dir.is_dir():
         return runs
     for state in sorted(output_dir.glob("*/state.md")):
         fields = read_frontmatter(state)
+        if not fields:
+            log(f"WARN: {state} has no frontmatter; it is not counted when checking for duplicate runs")
         fields["_dir"] = str(state.parent)
         runs.append(fields)
     return runs
@@ -383,12 +395,10 @@ def parse_verdict(text: str) -> str:
 
 
 def parse_preflight(path: Path) -> dict[str, str]:
-    """Map check name -> PASS/FAIL/WARN/N/A from a preflight.md table."""
+    """Map check name -> PASS/FAIL/WARN/N/A from a preflight.md table. Raises
+    OSError when the file cannot be read."""
     checks: dict[str, str] = {}
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return checks
+    text = path.read_text(encoding="utf-8", errors="replace")
     for line in text.splitlines():
         cells = [cell.strip().strip("`*") for cell in line.strip().strip("|").split("|")]
         if len(cells) < 2:
@@ -742,6 +752,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("terminal-statuses", help="print the workflow statuses that end a run, space-separated")
     sub.add_parser("backends", help="print the agent backends, space-separated")
+    sub.add_parser("research-ideas-label", help="print the label that queues an issue as a research idea")
+    sub.add_parser("repo-visibilities", help="print the visibilities a published run repo may have, one per line")
 
     p_label = sub.add_parser("status-label", help="print a backend's issue status label")
     p_label.add_argument("backend", choices=BACKENDS)
@@ -775,7 +787,8 @@ def main(argv: list[str] | None = None) -> int:
     p_text = sub.add_parser("html-text", help="print the plain-text version of an HTML file")
     p_text.add_argument("file", type=Path)
 
-    p_img = sub.add_parser("email-images", help="print checked NAME=PATH lines from <run>/email-images.txt")
+    p_img = sub.add_parser("email-images", help="print checked NAME=PATH lines from <run>/email-images.txt; exit 1, listing "
+                           "the problems on stderr, when any line is invalid")
     p_img.add_argument("--run-dir", required=True, type=Path)
 
     for name in ("outcome", "issue-comment"):
@@ -790,11 +803,11 @@ def main(argv: list[str] | None = None) -> int:
         if name == "issue-comment":
             p.add_argument("--run-id", required=True)
             p.add_argument("--repo-web", default="")
-            p.add_argument("--branch", default="main")
+            p.add_argument("--branch", required=True, help="the branch the results were pushed to")
             p.add_argument("--agent-label", default="")
             p.add_argument("--host", default="")
             p.add_argument("--followup", default="false")
-            p.add_argument("--visibility", default="private")
+            p.add_argument("--visibility", required=True, choices=REPO_VISIBILITIES)
 
     args = parser.parse_args(argv)
     truthy = ("1", "true", "yes", "on")
@@ -811,6 +824,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "backends":
         print(" ".join(BACKENDS))
+        return 0
+
+    if args.command == "repo-visibilities":
+        print("\n".join(REPO_VISIBILITIES))
+        return 0
+
+    if args.command == "research-ideas-label":
+        print(RESEARCH_IDEAS_LABEL)
         return 0
 
     if args.command == "status-label":
@@ -860,8 +881,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "email-images":
         images, problems = email_images(args.run_dir)
-        for problem in problems:
-            print(f"warning: image left out: {problem}", file=sys.stderr)
+        if problems:
+            for problem in problems:
+                print(f"error: email-images.txt: {problem}", file=sys.stderr)
+            return 1
         for image in images:
             print(image)
         return 0

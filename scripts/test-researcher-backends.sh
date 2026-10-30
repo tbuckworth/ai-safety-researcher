@@ -36,6 +36,11 @@ if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
         echo "Claude AI usage limit reached" >&2
         exit 1
     fi
+    if [ "${MOCK_CODEX_EMAIL_FAIL:-false}" = "true" ] && [ "$(basename "$0")" = "codex" ]; then
+        "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
+        echo "codex: stream disconnected after writing the draft" >&2
+        exit 1
+    fi
     exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
 fi
 
@@ -116,7 +121,7 @@ run_case() {
     fi
 
     RESEARCHER_BACKEND="$backend" \
-    RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+    RESEARCHER_CLAUDE_BIN="${CASE_CLAUDE_BIN:-${MOCK_BIN}/claude}" \
     RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
     RESEARCHER_CLAUDE_MODEL="mock-claude" \
     RESEARCHER_CODEX_MODEL="mock-codex" \
@@ -167,13 +172,11 @@ run_case() {
     test -s "$(dirname "$state_file")/email-subject.txt"
 
     # The knowledge base is wrapper-owned state, restored after every step just
-    # like the compute profile. Only a directory that actually holds a
-    # KB-SCHEMA.md counts — anything else resolves to "none".
-    local expected_kb="none"
-    if [ -f "${kb_dir}/KB-SCHEMA.md" ]; then
-        expected_kb="$kb_dir"
-    fi
-    grep -q "^knowledge_base: \"${expected_kb}\"$" "$state_file"
+    # like the compute profile.
+    grep -q "^knowledge_base: \"${kb_dir}\"$" "$state_file"
+    # The startup line names what this run uses.
+    grep -q "Agent backend: ${backend}; model: mock-${backend}; compute profile: ${profile:-local}; knowledge base: ${kb_dir}; owner: none; pinned run: none" \
+        "$stdout_log"
 
     if [ "$backend" = "codex" ]; then
         grep -q 'Mock transient provider failure' "$stdout_log"
@@ -186,8 +189,8 @@ run_case codex
 run_case claude mats
 
 # A bootstrapped knowledge base reaches state.md and the runtime header; a path
-# with no KB-SCHEMA.md is treated as "no knowledge base" rather than being handed
-# to agents as somewhere to write pages.
+# with no KB-SCHEMA.md stops the run (exit 2) rather than being handed to agents
+# as somewhere to write pages, or silently dropped.
 KB_FIXTURE="${TEST_ROOT}/wiki"
 bash "$REPO_DIR/scripts/kb-init.sh" "$KB_FIXTURE" > "${TEST_ROOT}/kb-init.stdout"
 for kb_file in KB-SCHEMA.md index.md log.md AGENTS.md CLAUDE.md \
@@ -202,13 +205,37 @@ diff <(cd "${KB_FIXTURE}/lessons" && ls *.md | sed 's/\.md$//') \
     || { echo "FAIL: index.md does not list the lessons pages kb-init seeded" >&2; exit 1; }
 test -d "${KB_FIXTURE}/.git"
 bash "$REPO_DIR/scripts/kb-init.sh" "$KB_FIXTURE" > /dev/null   # idempotent
+# A bootstrap commit that is refused (here by a pre-commit hook) fails kb-init.
+mkdir -p "${TEST_ROOT}/refusing-hooks"
+printf '#!/usr/bin/env bash\necho "mock hook refuses the commit" >&2\nexit 1\n' > "${TEST_ROOT}/refusing-hooks/pre-commit"
+chmod +x "${TEST_ROOT}/refusing-hooks/pre-commit"
+if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="${TEST_ROOT}/refusing-hooks" \
+        bash "$REPO_DIR/scripts/kb-init.sh" "${TEST_ROOT}/wiki-refused" > "${TEST_ROOT}/kb-refused.out" 2>&1; then
+    echo "FAIL: kb-init succeeded although its bootstrap commit was refused" >&2
+    exit 1
+fi
+grep -q "mock hook refuses the commit" "${TEST_ROOT}/kb-refused.out"
+# ...and a re-run, once the commit is allowed, makes it (the repository exists
+# by then, but has no commit).
+bash "$REPO_DIR/scripts/kb-init.sh" "${TEST_ROOT}/wiki-refused" > "${TEST_ROOT}/kb-retry.out" 2>&1
+git -C "${TEST_ROOT}/wiki-refused" rev-parse -q --verify HEAD > /dev/null \
+    || { echo "FAIL: a re-run of kb-init did not make the bootstrap commit" >&2; exit 1; }
 
 run_case claude "" "$KB_FIXTURE" kb
 grep -qF -- "- Global knowledge base: ${KB_FIXTURE}" "$MOCK_PROMPT_LOG"
 
 UNSTRUCTURED="${TEST_ROOT}/not-a-wiki"
 mkdir -p "$UNSTRUCTURED"
-run_case claude "" "$UNSTRUCTURED" nokb
+set +e
+RESEARCHER_KB_DIR="$UNSTRUCTURED" \
+RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/nokb-output" \
+RESEARCHER_LOCKFILE="${TEST_ROOT}/nokb.lock" \
+RESEARCHER_HOST_ALIAS="mock-host" \
+"$REPO_DIR/scripts/researcher-cron.sh" "No knowledge base" > "${TEST_ROOT}/nokb.stdout" 2>&1
+nokb_status=$?
+set -e
+test "$nokb_status" = "2"
+grep -q "RESEARCHER_KB_DIR=${UNSTRUCTURED} has no KB-SCHEMA.md" "${TEST_ROOT}/nokb.stdout"
 
 grep -q '^claude --print .*--model mock-claude' "$MOCK_CALL_LOG"
 grep -q '^codex --search --ask-for-approval never exec .*--model mock-codex' "$MOCK_CALL_LOG"
@@ -217,11 +244,11 @@ grep -q -- '--ask-for-approval never' "$MOCK_CALL_LOG"
 grep -q -- '--ignore-user-config' "$MOCK_CALL_LOG"
 grep -q '# Codex Runtime Adapter' "$MOCK_PROMPT_LOG"
 grep -q 'mock-codex-fast' "$MOCK_PROMPT_LOG"
-test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "5"
+test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "4"
 grep -q -- '--to self@example.test' "$MOCK_EMAIL_LOG"
 # Every results email is written and sent by a Claude session (its own id, so
 # the reply comes back to it), Codex runs included; none goes unrouted.
-test "$(grep -c '^claude --print .*--session-id [0-9a-f-]\{36\} ' "$MOCK_CALL_LOG")" = "5"
+test "$(grep -c '^claude --print .*--session-id [0-9a-f-]\{36\} ' "$MOCK_CALL_LOG")" = "4"
 grep -q '^claude --print .*--model sonnet .*--session-id ' "$MOCK_CALL_LOG"
 if grep -q -- 'unrouted' "$MOCK_EMAIL_LOG"; then echo "FAIL: an email went unrouted" >&2; exit 1; fi
 
@@ -300,6 +327,7 @@ RESEARCHER_LINK_OUTPUT="false" \
 RESEARCHER_SKIP_PUBLISH="true" \
 RESEARCHER_SKIP_EMAIL="true" \
 RESEARCHER_SKIP_GPU_CHECK="true" \
+RESEARCHER_HOST_ALIAS="mock-host" \
 "$REPO_DIR/scripts/researcher-cron.sh" "Resume mismatch" \
     > "${TEST_ROOT}/mismatch.stdout" 2>&1
 mismatch_status=$?
@@ -307,7 +335,7 @@ set -e
 test "$mismatch_status" = "2"
 grep -q "in-progress run uses backend 'claude'" "${TEST_ROOT}/mismatch.stdout"
 
-# Follow-up issues inherit the active backend's source label.
+# Follow-up issues carry the source label of the backend that files them.
 cat > "${MOCK_BIN}/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -321,27 +349,91 @@ chmod +x "${MOCK_BIN}/gh"
 printf '%s\n' "Re-run with a stricter held-out split." > "${TEST_ROOT}/feedback.txt"
 export MOCK_GH_LOG="${TEST_ROOT}/gh-calls.log"
 PATH="${MOCK_BIN}:${PATH}" \
-RESEARCHER_BACKEND=codex \
 "$REPO_DIR/scripts/create-followup-issue.sh" \
     --parent 42 \
     --repo-url https://github.com/tbuckworth/research-example \
     --run-id prior-run \
+    --source codex \
     --feedback-file "${TEST_ROOT}/feedback.txt" \
-    > "${TEST_ROOT}/followup.stdout"
+    > "${TEST_ROOT}/followup.stdout" 2> "${TEST_ROOT}/followup.stderr"
 grep -q -- '--label source:codex' "$MOCK_GH_LOG"
 followup_label=$(cd "${REPO_DIR}/scripts" && python3 -c 'import researcher_lib; print(researcher_lib.FOLLOWUP_LABEL)')
 grep -q -- "^issue create .*--label ${followup_label} " "$MOCK_GH_LOG"
 # The mock parent has no importance label, so the follow-up gets medium.
 grep -q -- '--label importance:medium' "$MOCK_GH_LOG"
+grep -q 'WARN: parent issue #42 has no importance label' "${TEST_ROOT}/followup.stderr"
 grep -q 'Created follow-up issue: https://github.com/tbuckworth/tasks/issues/123' \
     "${TEST_ROOT}/followup.stdout"
 
-# With no Claude session to write it, a Codex run's own backend writes the
-# email and it goes unrouted (unreviewed; replies to the orchestrator).
+# With no Claude CLI installed, a Codex run's own backend writes the email and
+# it goes unrouted (unreviewed; replies to the orchestrator).
 : > "$MOCK_EMAIL_LOG"
-MOCK_CLAUDE_EMAIL_FAIL=true run_case codex "" none claudedown
+CASE_CLAUDE_BIN="${TEST_ROOT}/no-claude-here" run_case codex "" none noclaude
 test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
 grep -q 'from=unrouted .*--unrouted' "$MOCK_EMAIL_LOG"
-grep -q 'no Claude session wrote the email' "${TEST_ROOT}/codex-claudedown.stdout"
+grep -q 'WARN: no Claude CLI .*no-claude-here.* to write the email' "${TEST_ROOT}/codex-noclaude.stdout"
+
+# A Claude email session that fails is a failed deliverable, not a cue for
+# Codex: nothing is sent, and the run exits 5.
+: > "$MOCK_EMAIL_LOG"
+: > "$MOCK_PROMPT_LOG"
+set +e
+RESEARCHER_BACKEND=codex \
+RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/claudedown-output" \
+RESEARCHER_LOCKFILE="${TEST_ROOT}/claudedown.lock" \
+RESEARCHER_LINK_OUTPUT=false \
+RESEARCHER_SKIP_PUBLISH=true \
+RESEARCHER_SKIP_GPU_CHECK=true \
+RESEARCHER_RETRY_DELAY_SECONDS=0 \
+PATH="${MOCK_BIN}:${PATH}" \
+RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+MOCK_CLAUDE_EMAIL_FAIL=true \
+RESEARCHER_EMAIL_TO="self@example.test" \
+RESEARCHER_HOST_ALIAS="mock-host" \
+RESEARCHER_KB_DIR=none \
+"$REPO_DIR/scripts/researcher-cron.sh" "Claude email session fails" > "${TEST_ROOT}/claudedown.stdout" 2>&1
+claudedown_status=$?
+set -e
+test "$claudedown_status" = "5"
+test ! -s "$MOCK_EMAIL_LOG"
+grep -q 'ERROR: the email writer (session) failed (exit 1' "${TEST_ROOT}/claudedown.stdout"
+grep -q 'not delivered in full: email' "${TEST_ROOT}/claudedown.stdout"
+if grep -q 'Compose only; the wrapper sends it' "$MOCK_PROMPT_LOG"; then echo "FAIL: Codex wrote the email" >&2; exit 1; fi
+
+# A Codex email writer that fails after writing a draft is a failed deliverable
+# too: the draft is not sent unreviewed, and the run exits 5.
+: > "$MOCK_EMAIL_LOG"
+set +e
+RESEARCHER_BACKEND=codex \
+RESEARCHER_CLAUDE_BIN="${TEST_ROOT}/no-claude-here" \
+RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/codexfail-output" \
+RESEARCHER_LOCKFILE="${TEST_ROOT}/codexfail.lock" \
+RESEARCHER_LINK_OUTPUT=false \
+RESEARCHER_SKIP_PUBLISH=true \
+RESEARCHER_SKIP_GPU_CHECK=true \
+RESEARCHER_RETRY_DELAY_SECONDS=0 \
+PATH="${MOCK_BIN}:${PATH}" \
+RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+MOCK_CODEX_EMAIL_FAIL=true \
+RESEARCHER_EMAIL_TO="self@example.test" \
+RESEARCHER_HOST_ALIAS="mock-host" \
+RESEARCHER_KB_DIR=none \
+"$REPO_DIR/scripts/researcher-cron.sh" "Codex email writer fails" > "${TEST_ROOT}/codexfail.stdout" 2>&1
+codexfail_status=$?
+set -e
+test "$codexfail_status" = "5"
+test ! -s "$MOCK_EMAIL_LOG"
+grep -q 'ERROR: the email writer (unrouted) failed (exit 1' "${TEST_ROOT}/codexfail.stdout"
+
+# build_email_prompt takes exactly send or compose.
+if bash -c 'source "$1/runner/common.sh"; source "$1/runner/provider.sh"; build_email_prompt sned' _ "$SCRIPT_DIR" \
+        > "${TEST_ROOT}/prompt-mode.out" 2>&1; then
+    echo "FAIL: build_email_prompt accepted 'sned'" >&2
+    exit 1
+fi
+grep -q "build_email_prompt: the mode must be send or compose, got 'sned'" "${TEST_ROOT}/prompt-mode.out"
 
 echo "Claude and Codex backend integration tests passed."

@@ -11,9 +11,14 @@ is_terminal_status() {
 }
 
 is_followup_run() {
-    # A follow-up issue that names the prior run's repo: the run copies that
-    # run's artifacts and publishes as a branch of its repo.
-    [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]
+    # A follow-up issue: the run copies the prior run's artifacts into prior/
+    # and records the follow-up fields.
+    [ "$IS_FOLLOWUP" = true ]
+}
+
+continues_prior_repo() {
+    # A follow-up that names the prior run's repo publishes as a branch of it.
+    is_followup_run && [ -n "$PRIOR_REPO_URL" ]
 }
 
 find_in_progress_run() {
@@ -92,22 +97,22 @@ select_issue() {
             exit 1
         fi
         rm -f "$gh_err"
-        picked=$(echo "$target" | jq -c '
+        picked=$(echo "$target" | jq -c --arg queue "$RESEARCH_IDEAS_LABEL" '
             select(.state == "OPEN")
-            | select(.labels | map(.name) | index("list:research-ideas")) // empty')
+            | select(.labels | map(.name) | index($queue)) // empty')
         if [ -n "$picked" ]; then
             # Refuses an issue being researched right now or with a run already
             # in progress here; allows a deliberate re-run of a finished one.
             picked=$(echo "$picked" | python3 "$LIB" pick --explicit --output-dir "$OUTPUT_DIR")
         fi
         if [ -z "$picked" ] || [ "$picked" = "null" ]; then
-            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed list:research-ideas issue."
+            log "ERROR: issue #${RESEARCHER_ISSUE} is not an open, unclaimed ${RESEARCH_IDEAS_LABEL} issue."
             exit 1
         fi
     else
     local issues allow_rerun_flag=()
     issues=$(gh issue list --repo "$TASKS_REPO" \
-        --label "list:research-ideas" \
+        --label "$RESEARCH_IDEAS_LABEL" \
         --state open \
         --json number,title,body,labels \
         --limit 50)
@@ -129,14 +134,14 @@ select_issue() {
 claim_issue() {
     # Labels issue $1 as being researched by this backend. The issue is re-read
     # first: the listing may be minutes old, and another runner (the other
-    # backend, another machine) may have claimed it since. If it cannot be
-    # re-read, it counts as claimed: skipping a night is cheap, a duplicate run
-    # is not. Exits 0 without claiming when it is taken.
+    # backend, another machine) may have claimed it since. Exits 0 without
+    # claiming when it is taken, and 1 when it cannot be re-read (gh's error is
+    # in the log): it is never run unchecked.
     local number="$1" fresh reason explicit=()
     [ -z "${RESEARCHER_ISSUE:-}" ] || explicit=(--explicit)
-    if ! fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state 2>/dev/null); then
-        log "Issue #${number} could not be re-read before claiming it. Exiting."
-        exit 0
+    if ! fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state); then
+        log "ERROR: issue #${number} could not be re-read before claiming it (gh's error is above). Exiting without running it."
+        exit 1
     fi
     reason=$(printf '%s' "$fresh" | python3 "$LIB" claimed ${explicit[@]+"${explicit[@]}"})
     if [ -n "$reason" ]; then
@@ -179,7 +184,7 @@ ${body}"
         PARENT_ISSUE=$(jq -r '.parent_issue' <<< "$meta")
         PRIOR_RUN_ID=$(jq -r '.prior_run_id' <<< "$meta")
         FEEDBACK=$(jq -r '.feedback' <<< "$meta")
-        log "Follow-up detected. Parent: #${PARENT_ISSUE}, Prior repo: ${PRIOR_REPO_URL:-none}"
+        log "Follow-up detected. Parent: #${PARENT_ISSUE}, Prior repo: ${PRIOR_REPO_URL:-none}, Prior run: ${PRIOR_RUN_ID:-none}"
     fi
 }
 
@@ -252,8 +257,9 @@ create_run_dir() {
     # Creates RUN_DIR for TOPIC: <date>-<slug of the title>, or
     # <date>-followup-<slug> for a follow-up run, made unique, with the workflow's
     # subdirectories, topic.txt, a fresh state.md and .gitignore. A follow-up run
-    # also gets the prior run's artifacts in prior/ and its feedback in
-    # followup-context.md.
+    # first gets the prior run's artifacts in prior/ (copy_prior_artifacts; when
+    # they cannot be read, its issue is released and the runner exits 1), and
+    # its feedback in followup-context.md.
     local title stem topic_text body
     if is_followup_run; then
         title="$FOLLOWUP_TITLE"
@@ -268,12 +274,18 @@ create_run_dir() {
     fi
     RUN_DIR="${OUTPUT_DIR}/$(unique_run_id "$(date +%Y-%m-%d)-${stem}")"
 
+    # Before state.md exists, so a follow-up that cannot start leaves no run to
+    # resume: a later run picks its issue again. RUN_DIR is new (unique_run_id),
+    # so what a failed copy left in it is removed.
+    if is_followup_run && ! copy_prior_artifacts; then
+        rm -rf "$RUN_DIR"
+        release_issue
+        exit 1
+    fi
     mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge"
     printf '%s\n' "$topic_text" > "${RUN_DIR}/topic.txt"
     write_new_state "$title" "$body"
     if is_followup_run; then
-        mkdir -p "${RUN_DIR}/prior"
-        copy_prior_artifacts
         write_followup_context
     fi
     write_gitignore "$RUN_DIR"
@@ -281,11 +293,13 @@ create_run_dir() {
 }
 
 copy_prior_artifacts() {
-    # Clones the prior run's repo (on the output volume, never /tmp: /tmp is on
-    # the small root disk) and copies the artifacts later steps read into prior/.
-    # A clone that fails leaves prior/ empty, and the run goes on without it.
-    local tmp_clone prior_branch clone_args=(-q --depth 1) pattern path relative
-    # Paths in the prior repo, globs allowed. knowledge/ is the research line's
+    # Copies the artifacts later steps read into RUN_DIR/prior/: from a clone of
+    # the prior run's repo, PRIOR_REPO_URL (on the output volume, never /tmp:
+    # /tmp is on the small root disk), or, when the follow-up names no repo,
+    # from the prior run's directory here, OUTPUT_DIR/PRIOR_RUN_ID. Returns
+    # non-zero, after logging why, when neither can be read or the copy fails.
+    local src tmp_clone="" prior_branch clone_args=(-q --depth 1) pattern path relative rc=0
+    # Paths in the prior run, globs allowed. knowledge/ is the research line's
     # own knowledge base (what it has established, ruled out, and how to
     # reproduce it), carried forward and extended at Step 11. Of the
     # experiments, only the plans and results are copied, to keep it light.
@@ -295,27 +309,58 @@ copy_prior_artifacts() {
         literature challenge knowledge
         'experiments/exp-*/results.md' 'experiments/exp-*/plan.md' 'paper/sections/*.tex'
     )
-    mkdir -p "${OUTPUT_DIR}/.tmp"
-    tmp_clone=$(mktemp -d "${OUTPUT_DIR}/.tmp/prior-clone.XXXXXX")
-    log "Cloning prior repo ${PRIOR_REPO_URL} for context..."
-    prior_branch=$(repo_url_branch "$PRIOR_REPO_URL")
-    [ -z "$prior_branch" ] || clone_args+=(--branch "$prior_branch")
-    if git clone "${clone_args[@]}" "$(git_remote_for "$PRIOR_REPO_URL")" "$tmp_clone" 2>>"${LOG_DIR}/gh-push.log" \
-        && git -C "$tmp_clone" rev-parse -q --verify HEAD >/dev/null; then
-        for pattern in "${artifacts[@]}"; do
-            # The pattern is left unquoted so that it globs inside the clone.
-            for path in "$tmp_clone"/$pattern; do
-                [ -e "$path" ] || continue
-                relative="${path#"$tmp_clone"/}"
-                mkdir -p "$(dirname "${RUN_DIR}/prior/${relative}")"
-                cp -r "$path" "${RUN_DIR}/prior/${relative}"
-            done
-        done
-        log "Prior artifacts copied to ${RUN_DIR}/prior/"
+    if [ -n "$PRIOR_REPO_URL" ]; then
+        if ! mkdir -p "${OUTPUT_DIR}/.tmp" || ! tmp_clone=$(mktemp -d "${OUTPUT_DIR}/.tmp/prior-clone.XXXXXX"); then
+            log "ERROR: could not make a directory in ${OUTPUT_DIR}/.tmp to clone ${PRIOR_REPO_URL} into."
+            return 1
+        fi
+        log "Cloning prior repo ${PRIOR_REPO_URL} for context..."
+        prior_branch=$(repo_url_branch "$PRIOR_REPO_URL")
+        [ -z "$prior_branch" ] || clone_args+=(--branch "$prior_branch")
+        if ! git clone "${clone_args[@]}" "$(git_remote_for "$PRIOR_REPO_URL")" "$tmp_clone" 2>>"${LOG_DIR}/gh-push.log" \
+            || ! git -C "$tmp_clone" rev-parse -q --verify HEAD >/dev/null; then
+            log "ERROR: could not clone ${PRIOR_REPO_URL} (unreachable or empty; git's error is in ${LOG_DIR}/gh-push.log)."
+            rm -rf "$tmp_clone"
+            return 1
+        fi
+        src="$tmp_clone"
     else
-        log "WARN: Failed to clone ${PRIOR_REPO_URL} (unreachable or empty). Proceeding without prior context."
+        # A plain directory name only: the id comes from the issue body.
+        case "$PRIOR_RUN_ID" in
+            ""|.*|*/*) src="" ;;
+            *) src="${OUTPUT_DIR}/${PRIOR_RUN_ID}" ;;
+        esac
+        if [ -z "$src" ] || [ ! -d "$src" ]; then
+            log "ERROR: follow-up #${ISSUE_NUMBER} names no prior repo, and its prior run '${PRIOR_RUN_ID}' has no directory in ${OUTPUT_DIR}."
+            return 1
+        fi
+        log "Follow-up #${ISSUE_NUMBER} names no prior repo; copying the prior run's artifacts from ${src}."
     fi
-    rm -rf "$tmp_clone"
+    mkdir -p "${RUN_DIR}/prior" || rc=1
+    for pattern in "${artifacts[@]}"; do
+        # The pattern is left unquoted so that it globs inside the source.
+        for path in "$src"/$pattern; do
+            [ -e "$path" ] || continue
+            relative="${path#"$src"/}"
+            { mkdir -p "$(dirname "${RUN_DIR}/prior/${relative}")" && cp -r "$path" "${RUN_DIR}/prior/${relative}"; } || rc=1
+        done
+    done
+    [ -z "$tmp_clone" ] || rm -rf "$tmp_clone"
+    if [ "$rc" -ne 0 ]; then
+        log "ERROR: could not copy the prior run's artifacts into ${RUN_DIR}/prior/ (the error is above)."
+        return 1
+    fi
+    log "Prior artifacts copied to ${RUN_DIR}/prior/"
+}
+
+release_issue() {
+    # Takes this backend's researching label off ISSUE_NUMBER, so that a later
+    # run picks the issue again; a failure is logged with what to do by hand.
+    if gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" --remove-label "$PROCESSING_LABEL" >/dev/null; then
+        log "Released issue #${ISSUE_NUMBER} (removed ${PROCESSING_LABEL}); a later run can pick it again."
+    else
+        log "ERROR: could not remove ${PROCESSING_LABEL} from issue #${ISSUE_NUMBER} (gh's error is above); remove it by hand so that the issue is picked again."
+    fi
 }
 
 write_followup_context() {

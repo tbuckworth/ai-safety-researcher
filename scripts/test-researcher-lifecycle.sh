@@ -57,6 +57,10 @@ cat > "${MOCK_BIN}/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$MOCK_GH_LOG"
+if [ "${MOCK_GH_NOTICE:-false}" = "true" ]; then
+    # What gh prints on stderr, success or not, when an update is out.
+    echo "A new release of gh is available: 2.99.0" >&2
+fi
 
 label=""; jq_expr=""; json=""
 args=("$@")
@@ -88,6 +92,10 @@ case "${1:-} ${2:-}" in
         echo "https://github.com/$3"
         ;;
     "repo view")
+        if [ "${MOCK_GH_REPO_VIEW_FAIL:-false}" = "true" ]; then
+            echo "HTTP 502: mock repo outage" >&2
+            exit 1
+        fi
         bare="${MOCK_REMOTES}/$3.git"
         [ -d "$bare" ] || { echo "GraphQL: Could not resolve to a Repository" >&2; exit 1; }
         if [ "$json" = "visibility" ]; then
@@ -102,11 +110,26 @@ case "${1:-} ${2:-}" in
         fi
         ;;
     "issue view")
+        if [ "${MOCK_GH_ISSUE_VIEW_FAIL:-false}" = "true" ]; then
+            echo "HTTP 502: mock issue outage" >&2
+            exit 1
+        fi
         obj=$(jq --argjson n "$3" '.[] | select(.number == $n)' "$MOCK_ISSUES")
         [ -n "$obj" ] || { echo "GraphQL: Could not resolve to an issue" >&2; exit 1; }
         if [ -n "$jq_expr" ]; then echo "$obj" | jq -r "$jq_expr"; else echo "$obj"; fi
         ;;
+    "issue edit")
+        if [ -n "${MOCK_GH_EDIT_FAIL_LABEL:-}" ]; then
+            case " $* " in
+                *" ${MOCK_GH_EDIT_FAIL_LABEL} "*) echo "HTTP 502: mock edit outage" >&2; exit 1 ;;
+            esac
+        fi
+        ;;
     "issue comment")
+        if [ "${MOCK_GH_COMMENT_FAIL:-false}" = "true" ]; then
+            echo "HTTP 502: mock comment outage" >&2
+            exit 1
+        fi
         n=$(ls "$MOCK_COMMENTS" | wc -l | tr -d ' ')
         for ((i = 0; i < ${#args[@]}; i++)); do
             case "${args[$i]}" in
@@ -171,6 +194,20 @@ if [ "${MOCK_SUBMIT_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_JOB_FILE}.submitte
     exit 0
 fi
 
+if [ "${MOCK_INCOMPLETE_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_INCOMPLETE_ONCE:-/nonexistent}" ]; then
+    # An agent failed twice: the step records why in step_incomplete and ends
+    # without changing current_step or status (once, with MOCK_INCOMPLETE_ONCE).
+    [ -z "${MOCK_INCOMPLETE_ONCE:-}" ] || touch "$MOCK_INCOMPLETE_ONCE"
+    reason='step_incomplete: "results-auditor: no output twice"'
+    if grep -q '^step_incomplete:' "$state_file"; then
+        sed -i "s/^step_incomplete:.*/${reason}/" "$state_file"
+    else
+        sed -i "s/^status: .*/&\n${reason}/" "$state_file"
+    fi
+    echo "Ending step ${step} without progress."
+    exit 0
+fi
+
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -209,6 +246,14 @@ if [ "${MOCK_STRIP_FIELDS_AT_STEP:-}" = "$step" ]; then
     # A model rewrite that drops wrapper-owned keys.
     grep -v -E '^(run_id|topic|issue_number|mode):' "$state_file" > "${state_file}.stripped"
     mv "${state_file}.stripped" "$state_file"
+fi
+
+if [ "${MOCK_BREAK_STATE_AT_STEP:-}" = "$step" ]; then
+    # A model rewrite that loses the frontmatter's closing "---": the wrapper
+    # can no longer write any field.
+    sed -i '1!{/^---$/d}' "$state_file"
+    echo "Ending step ${step} with a broken state.md."
+    exit 0
 fi
 
 new_status="mock_step_complete"
@@ -450,7 +495,7 @@ write_run 2026-01-01-timeout 9 experiments_complete
 mkdir -p "${OUT}/2026-01-01-timeout/experiments/exp-001"
 printf '## Component Tested\nX\n\n## Verdict: FAIL\n' > "${OUT}/2026-01-01-timeout/experiments/exp-001/results.md"
 printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-01-timeout/experiments/exp-001/preflight.md"
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 RUN="${OUT}/2026-01-01-timeout"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "steps run (audit skipped, report compiled)"
@@ -464,7 +509,7 @@ jq -e '.reasons | any(test("audit was skipped"))' "${RUN}/run-outcome.json" > /d
 # =============================================================================
 new_case timeout-early
 write_run 2026-01-02-early 2 research_complete
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
 assert_eq "$RC" "4" "exit code"
 assert_eq "$(field status "${OUT}/2026-01-02-early")" "timed_out" "status"
 assert_eq "$(field final_outcome "${OUT}/2026-01-02-early")" "failed" "final_outcome"
@@ -541,6 +586,7 @@ assert_eq "$(git --git-dir="$BARE" cat-file -p "${BRANCH}:README.md")" "prior re
 assert_eq "$(git --git-dir="$BARE" rev-parse "${BRANCH}^")" "$(git --git-dir="$BARE" rev-parse main)" "branch parent is prior main"
 assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-prior/tree/${BRANCH}" ".repo_url"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/400-*.md)"
+assert_grep "^\| Branch \| https://github.com/tbuckworth/research-prior/tree/${BRANCH} \(private\) \|" "$(ls "${CASE_DIR}"/comments/400-*.md)"
 assert_grep "^Follow-up #400 finished" "$(ls "${CASE_DIR}"/comments/399-*.md)"
 [ -z "$(ls -A "${CASE_DIR}/tmp")" ] || fail "files left in TMPDIR: $(ls -A "${CASE_DIR}/tmp")"; ok
 [ -z "$(ls -A "${OUT}/.tmp" 2>/dev/null)" ] || fail "prior clone left behind"; ok
@@ -568,30 +614,57 @@ printf '%s\n' "Needs a more realistic model organism." > "${CASE_DIR}/feedback.t
 FILED_BODY=$'Needs a more realistic model organism.\n\n---\nParent: #1874 | Repo: https://github.com/tbuckworth/research-salad | Run: 2026-04-03-salad'
 set_issues <(issue_json 1919 "[Follow-up] Needs a more realistic model organism" "list:research-ideas,type:follow-up" "$FILED_BODY")
 followup() {
+    # followup [VAR=value ...]: files the follow-up of #1874; RC is its exit code.
+    set +e
     env PATH="${MOCK_BIN}:${PATH}" MOCK_GH_LOG="${CASE_DIR}/gh.log" MOCK_ISSUES="${CASE_DIR}/issues.json" \
-        MOCK_COMMENTS="${CASE_DIR}/comments" \
+        MOCK_COMMENTS="${CASE_DIR}/comments" "$@" \
         "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1874 \
         --repo-url https://github.com/tbuckworth/research-salad --run-id 2026-04-03-salad \
-        --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out"
+        --source claude --feedback-file "${CASE_DIR}/feedback.txt" \
+        > "${CASE_DIR}/followup.out" 2> "${CASE_DIR}/followup.err"
+    RC=$?
+    set -e
 }
 followup
+assert_eq "$RC" "0" "exit code (already filed)"
 assert_grep "Follow-up already exists \(same request\): https://github.com/tbuckworth/tasks/issues/1919" "${CASE_DIR}/followup.out"
 assert_no_grep "^issue create" "${CASE_DIR}/gh.log"
+# A parent that cannot be read stops it: its importance would be guessed.
 echo '[]' > "${CASE_DIR}/issues.json"
 followup
+assert_eq "$RC" "1" "exit code (parent unreadable)"
+assert_grep "ERROR: could not read parent issue #1874" "${CASE_DIR}/followup.err"
+assert_no_grep "^issue create" "${CASE_DIR}/gh.log"
+# The follow-up takes its parent's importance (agent-spare only starts high or
+# medium ideas), or medium, with a warning, when the parent has none.
+set_issues <(issue_json 1874 "Salad topic" "list:research-ideas")
+followup
+assert_eq "$RC" "0" "exit code"
 assert_grep "issue create .*<!-- followup-key: [0-9a-f]{16} -->" <(tr '\n' ' ' < "${CASE_DIR}/gh.log")
 assert_grep "Created follow-up issue" "${CASE_DIR}/followup.out"
-# The follow-up takes its parent's importance (agent-spare only starts high or
-# medium ideas), or medium when the parent has none or cannot be read.
-assert_grep "--label importance:medium --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+assert_grep "^issue create .*--label list:research-ideas --label type:follow-up --label source:claude --label importance:medium --body" \
+    <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+assert_grep "WARN: parent issue #1874 has no importance label; the follow-up gets importance:medium" "${CASE_DIR}/followup.err"
 for imp in high low; do
     set_issues <(issue_json 1874 "Salad topic" "list:research-ideas,importance:${imp}")
     followup
     assert_grep "--label importance:${imp} --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
 done
-set_issues <(issue_json 1874 "Salad topic" "list:research-ideas")
-followup
-assert_grep "--label importance:medium --body" <(grep '^issue create' "${CASE_DIR}/gh.log" | tail -1)
+# A link comment on the parent that fails: the issue exists, unlinked, and it says so.
+followup MOCK_GH_COMMENT_FAIL=true
+assert_eq "$RC" "1" "exit code (parent not linked)"
+assert_grep "HTTP 502: mock comment outage" "${CASE_DIR}/followup.err"
+assert_grep "ERROR: follow-up https://github.com/tbuckworth/tasks/issues/999 was created, but the link comment on parent issue #1874 failed" \
+    "${CASE_DIR}/followup.err"
+# --source is required: which backend files the follow-up is not guessed.
+set +e
+env PATH="${MOCK_BIN}:${PATH}" MOCK_GH_LOG="${CASE_DIR}/gh.log" MOCK_ISSUES="${CASE_DIR}/issues.json" \
+    "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1874 --repo-url https://github.com/tbuckworth/research-salad \
+    --run-id 2026-04-03-salad --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out" 2> "${CASE_DIR}/followup.err"
+RC=$?
+set -e
+assert_eq "$RC" "1" "exit code (no --source)"
+assert_grep "ERROR: --source is required" "${CASE_DIR}/followup.err"
 
 # =============================================================================
 # 11. An EMPTY public repo left by the old master/main bug is not reused:
@@ -682,6 +755,26 @@ assert_eq "$RC" "3" "exit code (paused)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "provider calls"
 assert_eq "$(field status "${OUT}/2026-01-05-audit-limit")" "audit_remediating" "status left resumable"
 
+# 15b'. ...nor does a round that stopped without progress (an agent failed
+#       twice, and the step said so in step_incomplete): it is a failed attempt,
+#       retried with the field cleared, and it fails the run when the retries
+#       run out.
+new_case audit-incomplete
+write_run 2026-01-26-audit-incomplete 10 audit_remediating
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_INCOMPLETE_AT_STEP=10 -- "Ignored topic"
+assert_eq "$RC" "4" "exit code (failed)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "one attempt, not another round"
+assert_eq "$(field status "${OUT}/2026-01-26-audit-incomplete")" "failed" "status"
+assert_eq "$(field step_incomplete "${OUT}/2026-01-26-audit-incomplete")" "results-auditor: no output twice" "reason kept"
+assert_grep "Step 10 stopped without progress: results-auditor: no output twice" "${CASE_DIR}/stdout.log"
+new_case audit-incomplete-retry
+write_run 2026-01-27-audit-retry 9 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_STEP_ATTEMPTS=2 MOCK_INCOMPLETE_AT_STEP=10 \
+    "MOCK_INCOMPLETE_ONCE=${CASE_DIR}/incomplete-once" -- "Ignored topic"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "the step retried, then the report"
+assert_grep "Retrying step 10 \(attempt 2/2\)" "${CASE_DIR}/stdout.log"
+assert_eq "$(field step_incomplete "${OUT}/2026-01-27-audit-retry")" "" "cleared on retry"
+
 # 15c. A guard (RESEARCHER_GUARD_CMD) holds the run between steps: it pauses
 #      before calling the provider, records why, and resumes once it is quiet.
 new_case guard-hold
@@ -723,6 +816,7 @@ touch "${OUT}/2026-01-11-someone-elses/state.md"
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "resumed the pinned run only"
+assert_grep "owner: none; pinned run: ${OUT}/2026-01-10-mine$" "${CASE_DIR}/stdout.log"
 assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "the other run untouched"
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_RUN_DIR=${OUT}/2026-01-10-mine" -- "Ignored topic"
 assert_eq "$RC" "2" "a finished pinned run is refused"
@@ -733,8 +827,8 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHE
 [ -n "$(run_dir_for_issue 301)" ] || fail "no fresh run for #301"; ok
 assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "still untouched"
 
-# 15d. ...but never while the run's cluster jobs are outstanding, and a guard
-#      that fails without printing anything holds nothing.
+# 15d. ...but never while the run's cluster jobs are outstanding, or while the
+#      job-wait hook cannot say whether they are.
 new_case guard-jobs
 write_run 2026-01-07-guard-jobs 10 audit_complete
 mkdir -p "${OUT}/2026-01-07-guard-jobs/experiments/exp-001"
@@ -753,6 +847,15 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
     RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS=1 -- "Ignored topic"
 [ ! -e "${CASE_DIR}/hook-finished" ] || fail "the job-wait hook ran past its time limit"; ok
 assert_grep "WARN: hook stopped at its 1s limit" "${CASE_DIR}/stdout.log"
+assert_grep "Guard asked to hold \(hold\), but this run's jobs could not be checked; carrying on" "${CASE_DIR}/stdout.log"
+# A job-wait hook that fails is an unknown answer, not "no jobs": the guard's
+# hold does not pause the run on it.
+new_case guard-jobs-unknown
+write_run 2026-01-22-guard-unknown 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 'squeue: mock outage' >&2; exit 1" -- "Ignored topic"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
+assert_grep "WARN: the job-wait hook failed \(exit 1\): squeue: mock outage" "${CASE_DIR}/stdout.log"
 # ...except a hold marked "!" (a stop), which applies at once: before a step,
 # and while a stalled step waits for its jobs.
 new_case guard-stop-jobs
@@ -782,6 +885,45 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_SUBMIT_AT_STEP=9 "MOCK_JOB_FILE
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 9 10 11 " "step 9 retried after its job"
 assert_grep "retrying without spending an attempt \(refund 1/10\)" "${CASE_DIR}/stdout.log"
+# ...and a job-wait hook that fails while the step waits is an unknown answer:
+# the step keeps waiting, without spending an attempt, until the hook answers.
+new_case job-wait-hook-error
+write_run 2026-01-23-job-error 8 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_SUBMIT_AT_STEP=9 "MOCK_JOB_FILE=${CASE_DIR}/job" \
+    "RESEARCHER_JOB_WAIT_CMD=[ -e ${CASE_DIR}/asked ] || { touch ${CASE_DIR}/asked; echo 'squeue: mock outage' >&2; exit 1; }" \
+    RESEARCHER_JOB_WAIT_POLL_SECONDS=1 -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 9 10 11 " "step 9 retried once the hook answered"
+assert_grep "WARN: the job-wait hook failed \(exit 1\): squeue: mock outage" "${CASE_DIR}/stdout.log"
+assert_grep "retrying without spending an attempt \(refund 1/10\)" "${CASE_DIR}/stdout.log"
+# The mats profile's own job-wait command: squeue listing no job of this run is
+# the answer "none" (the hold pauses the run); ssh failing is no answer (it
+# does not).
+new_case mats-job-wait
+write_run 2026-01-24-mats 10 audit_complete
+mkdir -p "${OUT}/2026-01-24-mats/experiments/exp-001" "${CASE_DIR}/bin"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-24-mats/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-24-mats/experiments/exp-001/preflight.md"
+# Stands in for `ssh mats squeue ...`, which a test must not reach: it prints
+# MOCK_SQUEUE, or fails as an unreachable host does when that is "down".
+cat > "${CASE_DIR}/bin/ssh" <<'MOCK_SSH'
+#!/usr/bin/env bash
+if [ "${MOCK_SQUEUE:-}" = down ]; then
+    echo "ssh: connect to host mats port 22: Connection refused" >&2
+    exit 255
+fi
+printf '%s\n' "${MOCK_SQUEUE:-}"
+MOCK_SSH
+chmod +x "${CASE_DIR}/bin/ssh"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_COMPUTE_PROFILE=mats RESEARCHER_SKIP_PUBLISH=true \
+    "RESEARCHER_GUARD_CMD=echo hold" "MOCK_SQUEUE=4242 /mnt/nw/home/t.buckworth/researcher-runs/other-run" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (no jobs of this run, so the hold applies)"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-24-mats")" "hold" "pause reason"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_COMPUTE_PROFILE=mats RESEARCHER_SKIP_PUBLISH=true \
+    "RESEARCHER_GUARD_CMD=echo hold" MOCK_SQUEUE=down -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran: squeue could not be asked"
+assert_grep "WARN: the job-wait hook failed \(exit 255\): ssh: connect to host mats" "${CASE_DIR}/stdout.log"
 # ...but a job that outlasts the step's wait budget spends the attempt.
 new_case job-wait-gave-up
 write_run 2026-01-19-job-gave-up 8 mock_step_complete
@@ -816,9 +958,15 @@ write_run 2026-01-08-guard-broken 10 audit_complete
 mkdir -p "${OUT}/2026-01-08-guard-broken/experiments/exp-001"
 printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/results.md"
 printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/preflight.md"
+# A guard that fails holds the run, saying why: its first stderr line, or its
+# exit status when it printed none.
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=false" -- "Ignored topic"
-[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
-assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "a silent failing guard holds nothing"
+assert_eq "$RC" "3" "exit code (paused by a failed guard)"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "the provider ran although the guard failed"; ok
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-08-guard-broken")" "guard failed: exit 1" "pause reason"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo 'agent-board unreachable' >&2; exit 7" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused by a failed guard)"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-08-guard-broken")" "guard failed: agent-board unreachable" "pause reason"
 
 # =============================================================================
 # 16. A pause inside the timeout fast-track resumes at Step 11, not at the
@@ -829,7 +977,7 @@ write_run 2026-01-04-tpr 7 experiments_planned
 mkdir -p "${OUT}/2026-01-04-tpr/experiments/exp-001"
 printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-04-tpr/experiments/exp-001/results.md"
 printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-04-tpr/experiments/exp-001/preflight.md"
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 MOCK_LIMIT_AT_STEP=11 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 MOCK_LIMIT_AT_STEP=11 RESEARCHER_SKIP_PUBLISH=true -- "Ignored topic"
 assert_eq "$RC" "3" "first invocation pauses"
 assert_eq "$(field current_step "${OUT}/2026-01-04-tpr")" "10" "current_step after fast-track"
 : > "${CASE_DIR}/steps.log"
@@ -873,7 +1021,7 @@ assert_eq "$(python3 "$LIB" state-field "${RUN}/state.md" topic)" "$QUOTED_TOPIC
 new_case quoted-run-id
 write_run 2026-01-15-quoted 2 research_complete autonomous 950
 sed -i 's/^run_id: .*/run_id: "2026-01-15-quoted"/' "${OUT}/2026-01-15-quoted/state.md"
-run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 -- "Ignored topic"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=0 -- "Ignored topic"
 assert_eq "$RC" "4" "exit code"
 assert_grep "^<!-- researcher-run: 2026-01-15-quoted outcome: failed -->" "$(ls "${CASE_DIR}"/comments/950-*.md)"
 
@@ -889,6 +1037,15 @@ RUN=$(run_dir_for_issue 800)
 [ -n "$RUN" ] || fail "issue_number not restored"; ok
 assert_eq "$(field run_id "$RUN")" "$(basename "$RUN")" "run_id restored"
 assert_grep "outcome: complete" "$(ls "${CASE_DIR}"/comments/800-*.md)"
+
+# 18b. A state.md the wrapper cannot write stops the run (exit 1) and says so;
+#      nothing writes a field anywhere else in the file instead.
+new_case broken-state
+write_run 2026-01-21-broken 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_BREAK_STATE_AT_STEP=11 -- "Ignored topic"
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: could not write status: failed to .*2026-01-21-broken/state.md" "${CASE_DIR}/stdout.log"
+assert_no_grep "^status: failed" "${OUT}/2026-01-21-broken/state.md"
 
 # =============================================================================
 # 19. The secret scan refuses a staged file (2026-10-28: a cite key read as an
@@ -941,5 +1098,274 @@ run_researcher MOCK_EMAIL_NO_SEND=true
 SESSION=$(sed -n 's/.*(session \([0-9a-f-]\{36\}\)).*/\1/p' "${CASE_DIR}/stdout.log" | head -1)
 assert_grep "The email session stopped without sending" "${CASE_DIR}/stdout.log"
 assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
+# When the wrapper sends the draft and the helper refuses it (exit 2: here a
+# listed image that does not exist), nothing is sent, the run log says why, the
+# draft stays, and the run exits 5.
+new_case email-refused
+set_issues <(issue_json 905 "Helper refuses the draft" "list:research-ideas")
+run_researcher MOCK_EMAIL_NO_SEND=true MOCK_EMAIL_BAD_IMAGE=true
+assert_eq "$RC" "5" "exit code"
+RUN=$(run_dir_for_issue 905)
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
+assert_grep "error: email-images.txt: missing: figures/none.png is not a file in the run directory" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: send-results-email.sh refused to send \(exit 2\): an input named above is missing or invalid; nothing was sent, and the draft stays in ${RUN}" \
+    "${CASE_DIR}/stdout.log"
+[ -s "${RUN}/email-draft.html" ] || fail "the draft was not kept"; ok
+
+# =============================================================================
+# 22. Settings are checked before anything runs: a numeric setting that is not
+#     an integer (it used to switch the stale-run check off), or an unknown host
+#     with no RESEARCHER_HOST_ALIAS (it used to become "local"), exits 2.
+# =============================================================================
+new_case settings
+run_researcher RESEARCHER_RESUME_MAX_AGE_DAYS=two-weeks -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (non-numeric setting)"
+assert_grep "RESEARCHER_RESUME_MAX_AGE_DAYS must be a whole number \(0 or more, no leading zeros\), got 'two-weeks'" "${CASE_DIR}/stdout.log"
+# A leading zero (bash arithmetic would read 08 as bad octal) or a negative
+# value is refused the same way; so is 0 where at least 1 is needed (a poll
+# interval of 0 would spin).
+run_researcher RESEARCHER_TIMEOUT_HOURS=08 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (leading zero)"
+assert_grep "RESEARCHER_TIMEOUT_HOURS must be a whole number \(0 or more, no leading zeros\), got '08'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_RETRY_DELAY_SECONDS=-5 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (negative)"
+run_researcher RESEARCHER_REPO_VISIBILITY=secret -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (unknown repo visibility)"
+assert_grep "RESEARCHER_REPO_VISIBILITY must be one of: private internal public; got 'secret'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_JOB_WAIT_POLL_SECONDS=0 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (zero poll interval)"
+assert_grep "RESEARCHER_JOB_WAIT_POLL_SECONDS must be a whole number of at least 1, got '0'" "${CASE_DIR}/stdout.log"
+mkdir -p "${CASE_DIR}/bin"
+printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
+chmod +x "${CASE_DIR}/bin/hostname"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (unknown host)"
+assert_grep "host 'some-laptop' is not in the table; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
+# A hostname that cannot be read is the same: set RESEARCHER_HOST_ALIAS.
+printf '#!/usr/bin/env bash\necho "hostname: mock failure" >&2\nexit 1\n' > "${CASE_DIR}/bin/hostname"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (hostname failed)"
+assert_grep "ERROR: could not read this machine's hostname \(hostname -s failed\); set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+
+# =============================================================================
+# 23. A check that cannot run is an error, not a pass: the re-read of an issue
+#     before claiming it, nvidia-smi, df, and the read of a candidate repo.
+# =============================================================================
+new_case claim-reread-fails
+set_issues <(issue_json 1001 "Claim reread" "list:research-ideas")
+run_researcher MOCK_GH_ISSUE_VIEW_FAIL=true
+assert_eq "$RC" "1" "exit code"
+assert_grep "HTTP 502: mock issue outage" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: issue #1001 could not be re-read before claiming it" "${CASE_DIR}/stdout.log"
+assert_no_grep "^issue edit" "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+
+new_case gpu-check-fails
+mkdir -p "${CASE_DIR}/bin"
+cat > "${CASE_DIR}/bin/nvidia-smi" <<'MOCK_SMI'
+#!/usr/bin/env bash
+case "${MOCK_SMI:-}" in
+    fail) echo "NVIDIA-SMI has failed because it couldn't communicate with the NVIDIA driver." >&2; exit 9 ;;
+    na) echo "4242, [N/A]" ;;
+esac
+MOCK_SMI
+chmod +x "${CASE_DIR}/bin/nvidia-smi"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_SKIP_GPU_CHECK=false MOCK_SMI=fail -- "Ignored topic"
+assert_eq "$RC" "1" "exit code (nvidia-smi failed)"
+assert_grep "couldn't communicate with the NVIDIA driver" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: nvidia-smi failed" "${CASE_DIR}/stdout.log"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_SKIP_GPU_CHECK=false MOCK_SMI=na -- "Ignored topic"
+assert_eq "$RC" "1" "exit code (unreadable memory)"
+assert_grep "ERROR: nvidia-smi reported GPU memory use '\[N/A\]'" "${CASE_DIR}/stdout.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+
+new_case df-fails
+mkdir -p "${CASE_DIR}/bin"
+printf '#!/usr/bin/env bash\necho "df: mock failure" >&2\nexit 1\n' > "${CASE_DIR}/bin/df"
+chmod +x "${CASE_DIR}/bin/df"
+set_issues <(issue_json 1002 "Disk space unknown" "list:research-ideas")
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}"
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 1002)
+jq -e '.reasons | any(test("could not measure the free space"))' "${RUN}/run-outcome.json" > /dev/null || fail "df reason missing"; ok
+assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
+
+new_case repo-view-fails
+set_issues <(issue_json 1003 "Repo unreadable" "list:research-ideas")
+run_researcher MOCK_GH_REPO_VIEW_FAIL=true
+assert_eq "$RC" "4" "exit code"
+RUN=$(run_dir_for_issue 1003)
+jq -e '.reasons | any(test("HTTP 502: mock repo outage"))' "${RUN}/run-outcome.json" > /dev/null || fail "gh's reason missing"; ok
+assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
+# A notice gh prints on stderr does not change its answer: an empty private
+# repo with the run's name is still empty, so it is reused.
+new_case repo-view-notice
+git init -q --bare "${REMOTES}/tbuckworth/research-notice-topic.git"
+echo private > "${REMOTES}/tbuckworth/research-notice-topic.git/mock-visibility"
+set_issues <(issue_json 1004 "Notice topic" "list:research-ideas")
+run_researcher MOCK_GH_NOTICE=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 1004)
+assert_eq "$(cat "${RUN}/.publish_repo")" "research-notice-topic" "the empty repo was reused"
+
+# =============================================================================
+# 24. A deliverable that fails (the email, the issue comment, the issue labels)
+#     is logged, the others are still attempted, and the run exits 5.
+# =============================================================================
+new_case deliverables-fail
+set_issues <(issue_json 1101 "Deliverables fail" "list:research-ideas")
+# With no usable TMPDIR, the email helper, the issue comment and the secret
+# scan cannot make their temporary files.
+run_researcher "TMPDIR=${CASE_DIR}/no-such-dir"
+assert_eq "$RC" "5" "exit code"
+RUN=$(run_dir_for_issue 1101)
+assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
+assert_grep "WARN: secret scan skipped: could not create a temporary file for its report" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: the email writer \(session\) failed \(exit 1" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: could not create a temporary file for the issue comment" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a comment was posted"; ok
+assert_grep "issue edit 1101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
+assert_grep "Updated issue #1101" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: not delivered in full: email, issue comment\.$" "${CASE_DIR}/stdout.log"
+
+new_case labels-fail
+set_issues <(issue_json 1102 "Labels fail" "list:research-ideas")
+run_researcher MOCK_GH_COMMENT_FAIL=true MOCK_GH_EDIT_FAIL_LABEL=status:claude-processed
+assert_eq "$RC" "5" "exit code"
+assert_grep "HTTP 502: mock comment outage" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: could not comment on issue #1102" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 1102 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+assert_grep "issue edit 1102 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
+assert_grep "HTTP 502: mock edit outage" "${CASE_DIR}/stdout.log"
+assert_no_grep "Updated issue #1102" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: not delivered in full: issue comment, issue labels\.$" "${CASE_DIR}/stdout.log"
+
+# A machine without gitleaks publishes, and says the secret scan was skipped.
+new_case no-gitleaks
+mkdir -p "${CASE_DIR}/bin" "${CASE_DIR}/home"
+for tool in "${MOCK_BIN}"/*; do
+    [ "$(basename "$tool")" = gitleaks ] || ln -s "$tool" "${CASE_DIR}/bin/"
+done
+SYSTEM_PATH=$(printf '%s\n' "$PATH" | tr ':' '\n' | grep -vxF -e "${HOME}/.local/bin" -e "$MOCK_BIN" | paste -sd: -)
+if env PATH="${CASE_DIR}/bin:${SYSTEM_PATH}" bash -c 'command -v gitleaks' > /dev/null; then
+    fail "gitleaks is installed outside ~/.local/bin; this case needs a PATH without it"
+fi; ok
+set_issues <(issue_json 1103 "No secret scanner" "list:research-ideas")
+run_researcher "PATH=${CASE_DIR}/bin:${SYSTEM_PATH}" "HOME=${CASE_DIR}/home"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "WARN: secret scan skipped: gitleaks is not installed" "${CASE_DIR}/stdout.log"
+
+# =============================================================================
+# 25. The email helper sends nothing while run-outcome.json cannot be read or
+#     email-images.txt has a bad line: it exits 2, and the session fixes them.
+# =============================================================================
+new_case email-helper
+HELPER_RUN="${CASE_DIR}/run"
+mkdir -p "${HELPER_RUN}/figures"
+printf '<html><body><img src="cid:main"></body></html>\n' > "${HELPER_RUN}/email-draft.html"
+printf '[Auto-Research] Helper test\n' > "${HELPER_RUN}/email-subject.txt"
+printf 'PNG' > "${HELPER_RUN}/figures/main.png"
+send_helper() {
+    set +e
+    env PATH="${MOCK_BIN}:${PATH}" TMPDIR="${CASE_DIR}/tmp" MOCK_EMAIL_LOG="${CASE_DIR}/email.log" \
+        RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" RESEARCHER_EMAIL_TO=self@example.test \
+        CLAUDE_CODE_SESSION_ID=helper-session \
+        "${REPO_DIR}/scripts/send-results-email.sh" "$HELPER_RUN" > "${CASE_DIR}/helper.log" 2>&1
+    RC=$?
+    set -e
+}
+printf '{"outcome": "unpub' > "${HELPER_RUN}/run-outcome.json"
+send_helper
+assert_eq "$RC" "2" "exit code (unreadable run-outcome.json)"
+assert_grep "run-outcome.json could not be read" "${CASE_DIR}/helper.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
+printf '{"outcome": "unpublished", "success": false}\n' > "${HELPER_RUN}/run-outcome.json"
+printf 'main=figures/main.png\nmissing=figures/none.png\n' > "${HELPER_RUN}/email-images.txt"
+send_helper
+assert_eq "$RC" "2" "exit code (bad email-images.txt)"
+assert_grep "missing: figures/none.png is not a file in the run directory" "${CASE_DIR}/helper.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
+printf 'main=figures/main.png\n' > "${HELPER_RUN}/email-images.txt"
+send_helper
+assert_eq "$RC" "0" "exit code (fixed)"
+assert_grep "^--subject \[UNPUBLISHED\] \[Auto-Research\] Helper test \| from=helper-session \| images=main.png " "${CASE_DIR}/email.log"
+
+# =============================================================================
+# 26. A follow-up runs only with its prior run's artifacts. A prior repo that
+#     cannot be cloned stops it, and its label is released for a later retry; a
+#     follow-up that names no repo copies them from the prior run's directory
+#     here; one with neither stops too.
+# =============================================================================
+no_run_dirs() {
+    [ -z "$(ls -A "$OUT" | grep -v -e '^logs$' -e '^\.tmp$' || true)" ] || fail "a run directory was left: $(ls "$OUT")"
+    [ -z "$(ls -A "${OUT}/.tmp" 2>/dev/null)" ] || fail "a prior clone was left"
+    ok
+}
+new_case followup-clone-fails
+MISSING_BODY=$'Try again.\n\n---\nParent: #396 | Repo: https://github.com/tbuckworth/research-missing | Run: missing-run'
+set_issues <(issue_json 403 "[Follow-up] Try again" "list:research-ideas,type:follow-up" "$MISSING_BODY")
+run_researcher
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: could not clone https://github.com/tbuckworth/research-missing" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 403 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+assert_grep "Released issue #403" "${CASE_DIR}/stdout.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+no_run_dirs
+
+new_case followup-local-prior
+write_run 2026-01-25-local-prior 11 complete autonomous 395
+printf '## Salad\n' > "${OUT}/2026-01-25-local-prior/method-spec.md"
+mkdir -p "${OUT}/2026-01-25-local-prior/experiments/exp-001"
+printf '## Verdict: PASS\n' > "${OUT}/2026-01-25-local-prior/experiments/exp-001/results.md"
+LOCAL_BODY=$'Use the held-out split.\n\n---\nParent: #395 | Repo:  | Run: 2026-01-25-local-prior'
+set_issues <(issue_json 404 "[Follow-up] Use the held-out split" "list:research-ideas,type:follow-up" "$LOCAL_BODY")
+run_researcher
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 404)
+case "$RUN" in *-followup-use-the-held-out-split) ok ;; *) fail "not a follow-up run directory: ${RUN}" ;; esac
+for path in state.md method-spec.md experiments/exp-001/results.md; do
+    [ -f "${RUN}/prior/${path}" ] || fail "prior ${path} not copied from the local run"
+    ok
+done
+assert_eq "$(field is_followup "$RUN")" "true" "is_followup"
+assert_eq "$(field prior_run_id "$RUN")" "2026-01-25-local-prior" "prior_run_id"
+assert_eq "$(field parent_issue "$RUN")" "395" "parent_issue"
+assert_grep "Use the held-out split" "${RUN}/followup-context.md"
+# Published as a repo of its own, without prior/.
+assert_eq "$(cat "${RUN}/.repo_url")" "https://github.com/tbuckworth/research-use-the-held-out-split" ".repo_url"
+if git --git-dir="${REMOTES}/tbuckworth/research-use-the-held-out-split.git" ls-tree -r --name-only main | grep -q '^prior/'; then
+    fail "prior/ was published"
+fi; ok
+assert_grep "^Follow-up #404 finished" "$(ls "${CASE_DIR}"/comments/395-*.md)"
+# Its comment links a repo of its own, not a branch of another.
+assert_grep "^\| Repo \| https://github.com/tbuckworth/research-use-the-held-out-split/tree/main \(private\) \|" \
+    "$(ls "${CASE_DIR}"/comments/404-*.md)"
+
+new_case followup-no-prior
+NONE_BODY=$'Start over.\n\n---\nParent: #394 | Repo:  | Run: never-ran-here'
+set_issues <(issue_json 405 "[Follow-up] Start over" "list:research-ideas,type:follow-up" "$NONE_BODY")
+run_researcher
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: follow-up #405 names no prior repo, and its prior run 'never-ran-here' has no directory" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 405 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+no_run_dirs
+
+# A copy that fails partway (here an artifact it cannot read) stops it the same
+# way, and the half-made run directory is removed.
+new_case followup-copy-fails
+write_run 2026-01-28-unreadable-prior 11 complete autonomous 393
+printf '## Salad\n' > "${OUT}/2026-01-28-unreadable-prior/method-spec.md"
+printf 'secret\n' > "${OUT}/2026-01-28-unreadable-prior/briefing.md"
+chmod 000 "${OUT}/2026-01-28-unreadable-prior/briefing.md"
+COPY_BODY=$'Retry it.\n\n---\nParent: #393 | Repo:  | Run: 2026-01-28-unreadable-prior'
+set_issues <(issue_json 406 "[Follow-up] Retry it" "list:research-ideas,type:follow-up" "$COPY_BODY")
+run_researcher
+chmod 600 "${OUT}/2026-01-28-unreadable-prior/briefing.md"
+assert_eq "$RC" "1" "exit code"
+assert_grep "ERROR: could not copy the prior run's artifacts" "${CASE_DIR}/stdout.log"
+assert_grep "issue edit 406 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
+[ -z "$(ls -d "$OUT"/*-followup-retry-it 2>/dev/null)" ] || fail "the partial run directory was left: $(ls "$OUT")"; ok
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

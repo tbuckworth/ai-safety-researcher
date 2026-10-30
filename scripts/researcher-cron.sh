@@ -33,6 +33,26 @@ OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
 LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
+# The numeric settings read below, checked once here: a value that is not a
+# whole number would otherwise switch a check off without a word (a non-numeric
+# `[ -gt ]` is just false), and a leading zero reads as octal in $(( )). The
+# second list cannot be 0 (a poll interval of 0 would spin, and `timeout 0` does
+# not time out). A numeric setting added below goes in one of these lists.
+for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RESUME_MAX_AGE_DAYS \
+    RESEARCHER_MIN_FREE_MB RESEARCHER_RETRY_DELAY_SECONDS RESEARCHER_JOB_WAIT_MAX_SECONDS \
+    RESEARCHER_JOB_WAIT_MAX_REFUNDS; do
+    if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+        echo "ERROR: ${setting} must be a whole number (0 or more, no leading zeros), got '${!setting}'." >&2
+        exit 2
+    fi
+done
+for setting in RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS \
+    RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS; do
+    if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "ERROR: ${setting} must be a whole number of at least 1, got '${!setting}'." >&2
+        exit 2
+    fi
+done
 TIMEOUT_HOURS="${RESEARCHER_TIMEOUT_HOURS:-8}"
 TIMEOUT_SECONDS="${RESEARCHER_TIMEOUT_SECONDS:-$(( TIMEOUT_HOURS * 3600 ))}"
 # A non-terminal run untouched for this long is not resumed automatically: an
@@ -75,9 +95,11 @@ FAST_TRACK_MIN_STEP=5
 STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
 # Optional hook: a shell command printing the still-outstanding external
-# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. While it prints
-# anything, a step that did not advance is WAITING on external compute, not
-# failing — so the attempt is refunded instead of spent. Empty = old behaviour.
+# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
+# its answer (no output: no jobs); a non-zero exit is an error, logged, and the
+# answer is unknown. While it reports jobs, or cannot say, a step that did not
+# advance is WAITING on external compute, not failing — so the attempt is
+# refunded instead of spent. Empty: no hook.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 # Each call of JOB_WAIT_CMD is stopped after this long; it covers the `timeout 90`
 # inside the mats profile's command (and agent-board's).
@@ -87,13 +109,18 @@ JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
 JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
 # Optional hook: a shell command run before each step ("{run_id}" substituted).
 # If it prints anything, its first line is the reason and the run pauses there,
-# exactly as on a provider limit: resumable, nothing published. Steps are never
-# interrupted, and the run doesn't pause while JOB_WAIT_CMD still reports jobs,
-# unless the line starts with "!" (a stop: the jobs keep running and the step
-# is redone on resume). agent-board's spare-capacity launcher uses it.
-# Empty = old behaviour.
+# exactly as on a provider limit: resumable, nothing published. A guard that
+# exits non-zero or times out holds the run the same way, with the reason
+# "guard failed: ...". Steps are never interrupted, and the run doesn't pause
+# while JOB_WAIT_CMD reports jobs or cannot say, unless the line starts with "!"
+# (a stop: the jobs keep running and the step is redone on resume).
+# agent-board's spare-capacity launcher uses it. Empty: no guard.
 GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
 GUARD_CMD_TIMEOUT_SECONDS=300
+# Where run_hook keeps the last hook's stderr, and repo_state gh's, for the
+# caller's message.
+HOOK_STDERR_FILE="${LOG_DIR}/.hook-stderr.$$"
+GH_STDERR_FILE="${LOG_DIR}/.gh-stderr.$$"
 # A caller that owns one run (agent-board's spare launcher) pins it: with
 # RESEARCHER_RUN_DIR it resumes exactly that run or exits 2, and with
 # RESEARCHER_NO_RESUME=true a fresh start never picks up another unfinished run.
@@ -148,6 +175,7 @@ case "$BACKEND" in
         ;;
 esac
 
+RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
 # The workflow statuses that end a run (is_terminal_status).
@@ -158,9 +186,9 @@ export RESEARCHER_EMAIL_TO="$EMAIL_TO"
 # Titus's own Gmail, and through the mailroom's pre-send review like every
 # agent's mail to him. A Claude session writes and sends it, so his reply comes
 # back to that session, whichever backend ran the research; a Codex run uses
-# EMAIL_CLAUDE_MODEL for it. Only when no Claude session can run does the run's
-# own backend write it, and it then goes unrouted (no review, replies to the
-# orchestrator).
+# EMAIL_CLAUDE_MODEL for it. Only when the Claude CLI is not installed does the
+# run's own backend write it, and it then goes unrouted (no review, replies to
+# the orchestrator).
 SEND_EMAIL="${SCRIPT_DIR}/send-results-email.sh"
 EMAIL_CLAUDE_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
 if [ "$BACKEND" = "claude" ]; then
@@ -171,13 +199,20 @@ fi
 
 # How the reader of the results email reaches the machine this run executed on, so
 # the email's "How to Continue This Research" steps are literally runnable. This is
-# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — set
-# RESEARCHER_HOST_ALIAS explicitly on any machine not in the table below. The value
-# "local" suppresses the ssh step entirely (run and reader on the same machine).
+# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — any
+# machine not in the table below must set RESEARCHER_HOST_ALIAS, or the run exits 2.
+# The value "local" suppresses the ssh step entirely (run and reader on the same machine).
 if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
-    case "$(hostname -s 2>/dev/null || echo unknown)" in
+    if ! RUN_HOSTNAME=$(hostname -s); then
+        echo "ERROR: could not read this machine's hostname (hostname -s failed); set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for it, or to 'local'." >&2
+        exit 2
+    fi
+    case "$RUN_HOSTNAME" in
         titus-MS-7A59) HOST_ALIAS="desktop" ;;
-        *)             HOST_ALIAS="local" ;;
+        *)
+            echo "ERROR: host '${RUN_HOSTNAME}' is not in the table; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
+            exit 2
+            ;;
     esac
 else
     HOST_ALIAS="$RESEARCHER_HOST_ALIAS"
@@ -201,27 +236,43 @@ fi
 COMPUTE_PROFILE_LOCAL="Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments."
 COMPUTE_PROFILE_MATS="MATS Slurm cluster, driven REMOTELY over SSH from wherever this run is executing (laptop or desktop) - you are NOT on the cluster. Every cluster command is prefixed: ssh mats '<cmd>' for the dev/login node, ssh mats-controller '<cmd>' for the controller (the only place gpu-avail and gpu-cost exist). AUTHORIZED COMPUTE: the FREE 'compute' partition only - one shared always-on node with 8x NVIDIA L40 (48GB VRAM each). Your concurrent cap across all your jobs is 6 GPUs, 124 CPUs, and 384GB RAM; max wall time is 24h per job. Request 1 GPU (--gres=gpu:1) unless the experiment genuinely needs more, and up to 6 when it does (single node, so torchrun/FSDP works). Sizing on 48GB: fp16 inference up to ~20B params, LoRA/QLoRA fine-tuning up to ~7B (13B with care), full fine-tuning only up to ~2-3B. Add --qos=debug for validation runs under 2h to jump the queue. PAID elastic-* partitions (A100/H100) are NOT authorized for autonomous runs (they bill by the hour and need Titus's explicit confirmation): if an experiment needs more than 6 L40s or more VRAM per device, do not attempt it - record a FAIL-on-affordability with the exact resource ask and continue. WORKFLOW for each experiment: (1) write the code and an sbatch script locally under experiments/exp-NNN/; (2) stage it with rsync -avP experiments/exp-NNN/ mats:/mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN/; (3) submit with ssh mats 'cd /mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN && mkdir -p logs && sbatch run.sbatch' - create logs/ BEFORE sbatch, because Slurm opens the output file at job launch and an in-script mkdir is too late; (4) poll with ssh mats 'squeue -u t.buckworth' until the job leaves the queue (PD pending, R running, CG completing), sleeping 60s between polls rather than busy-looping - the free partition is shared and a PD (Resources) wait of tens of minutes is normal, NOT a failure, so keep waiting; do NOT end the step while a job you submitted is still queued or running - if you must stop, first record the job id and its experiment in state.md so the next attempt resumes waiting instead of resubmitting; and before submitting anything, run squeue and check whether a job for this experiment is already queued or running, because the step may be retried after an interruption and duplicate submissions waste the shared partition; (5) pull results back with rsync -avP mats:.../exp-NNN/ experiments/exp-NNN/ and copy the full slurm log into run.log. NEVER run training, fine-tuning, heavy inference, or long CPU loops in an ssh shell on the dev node - it is the shared login node and that is the cluster's worst etiquette violation. Never run agents or jobs on the controller. The local machine this run executes on is for orchestration, plotting, and light analysis of returned results only - do not silently fall back to a local GPU for experiments under this profile. Job script requirements: all #SBATCH lines must precede the first command (any command above them silently disables every directive below); include --partition=compute, --gres=gpu:1, a realistic --time, --job-name, --cpus-per-task=8, --mem=32G, --output=logs/slurm-%j.out. Storage on the cluster: code, checkpoints, and final results under /mnt/nw/home/t.buckworth (persistent NFS, NOT backed up - pull anything irreplaceable back to this machine); HuggingFace cache, dataset shards, and intermediate outputs under /ephemeral/t.buckworth (fast local scratch, wiped on reboot) via HF_HOME=/ephemeral/t.buckworth/hf. Every job script also exports TMPDIR=/ephemeral/t.buckworth/tmp, XDG_CACHE_HOME=/ephemeral/t.buckworth/cache and WANDB_DIR=/ephemeral/t.buckworth/wandb, and runs mkdir -p on all four first: nothing bulky may go in /tmp, which is the worker's root disk (filling it drains the node for everyone). Inside every job script: source ~/venv/bin/activate (the cluster's shared venv) and run python with -u so logs are not buffered. That venv pins torch 2.5.1+cu121 to match the workers' CUDA 12.2 driver - do NOT upgrade torch or install one from default PyPI, which breaks CUDA on every job. Diagnostics: ssh mats 'scontrol show job <jobid>' explains a stuck job; sacct works only from the controller (it errors with Connection refused on the dev node); nvidia-smi on the dev node fails because there is no GPU there, which is expected; on compute, nvidia-smi inside a job lists all 8 physical GPUs but you only own \$CUDA_VISIBLE_DEVICES; an empty .out file on a running job is usually stdout buffering. scancel anything left idle. Prefer lightweight experiments (small open-weight models), each targeting under 30 min of GPU time. Max 5 experiments."
 
+# COMPUTE_PROFILE_NAME (the preset, or "custom") is for the startup log line.
 case "${RESEARCHER_COMPUTE_PROFILE:-}" in
-    ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL" ;;
+    ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL"; COMPUTE_PROFILE_NAME=local ;;
     mats|MATS|mats-cluster)
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
+        COMPUTE_PROFILE_NAME=mats
         # A queued/running job for THIS run means the step is waiting, not failing.
+        # grep finding no line of this run is the answer "none" (exit 0); ssh or
+        # squeue failing is an error (pipefail), so the answer is unknown.
         # Its own 90 s timeout must stay below JOB_WAIT_CMD_TIMEOUT_SECONDS (default 120),
-        # or run_hook cuts squeue off first and the step looks as if it had no jobs.
-        : "${JOB_WAIT_CMD:=timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | grep -F '{run_id}' || true}"
+        # so that it, not run_hook, stops a slow squeue.
+        : "${JOB_WAIT_CMD:=set -o pipefail; timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | (grep -F '{run_id}' || [ \$? -eq 1 ])}"
         ;;
-    *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE" ;;
+    *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE"; COMPUTE_PROFILE_NAME=custom ;;
 esac
 
 # Global research knowledge base (the compounding wiki). Optional: a run works
 # identically without one. Set RESEARCHER_KB_DIR=none to disable explicitly, or
-# bootstrap one with scripts/kb-init.sh. Only a directory that actually holds a
-# KB-SCHEMA.md counts — a path pointing at nothing is treated as "no KB" rather
-# than silently sending agents to write pages into an unstructured directory.
-KB_DIR="${RESEARCHER_KB_DIR:-${HOME}/pyg/research-wiki}"
-if [ "$KB_DIR" = "none" ] || [ ! -f "${KB_DIR}/KB-SCHEMA.md" ]; then
-    KB_DIR=""
-fi
+# bootstrap one with scripts/kb-init.sh. Only a directory that holds a
+# KB-SCHEMA.md is a knowledge base: with RESEARCHER_KB_DIR unset, the default
+# path without one means no KB; an explicit path without one exits 2, rather
+# than sending agents to write pages into an unstructured directory or quietly
+# running without the KB that was asked for.
+case "${RESEARCHER_KB_DIR:-}" in
+    "")
+        KB_DIR="${HOME}/pyg/research-wiki"
+        [ -f "${KB_DIR}/KB-SCHEMA.md" ] || KB_DIR=""
+        ;;
+    none) KB_DIR="" ;;
+    *)
+        if [ ! -f "${RESEARCHER_KB_DIR}/KB-SCHEMA.md" ]; then
+            echo "ERROR: RESEARCHER_KB_DIR=${RESEARCHER_KB_DIR} has no KB-SCHEMA.md. Bootstrap it with scripts/kb-init.sh, or set RESEARCHER_KB_DIR=none." >&2
+            exit 2
+        fi
+        KB_DIR="$RESEARCHER_KB_DIR"
+        ;;
+esac
 
 # The runner's functions live in scripts/runner/, one file per concern; this file
 # holds the configuration and the top-level flow.
@@ -266,7 +317,7 @@ if [ -f "$LOCKFILE" ]; then
     fi
 fi
 echo $$ > "$LOCKFILE"
-trap 'rm -f "$LOCKFILE"' EXIT
+trap 'rm -f "$LOCKFILE" "$HOOK_STDERR_FILE" "$GH_STDERR_FILE"' EXIT
 
 # --- Health checks ---
 if ! command -v "$PROVIDER_BIN" &>/dev/null; then
@@ -298,22 +349,28 @@ if [ "$BACKEND" = "codex" ]; then
     esac
 fi
 
-case "$REPO_VISIBILITY" in
-    private|internal|public) ;;
-    *)
-        log "ERROR: RESEARCHER_REPO_VISIBILITY must be private, internal or public, got '${REPO_VISIBILITY}'."
-        exit 2
-        ;;
-esac
+if ! python3 "$LIB" repo-visibilities | grep -qxF -- "$REPO_VISIBILITY"; then
+    log "ERROR: RESEARCHER_REPO_VISIBILITY must be one of: $(python3 "$LIB" repo-visibilities | paste -sd' '); got '${REPO_VISIBILITY}'."
+    exit 2
+fi
 
-log "Agent backend: ${BACKEND}; model: ${MODEL}"
+log "Agent backend: ${BACKEND}; model: ${MODEL}; compute profile: ${COMPUTE_PROFILE_NAME}; knowledge base: ${KB_DIR:-none}; owner: ${RUN_OWNER:-none}; pinned run: ${PIN_RUN_DIR:-none}"
 
-# Check if GPU is busy (>500MB VRAM used by any single process = busy)
+# Check if GPU is busy (>500MB VRAM used by any single process = busy). A GPU
+# whose use cannot be read is not taken to be idle: the runner stops (exit 1).
 if ! is_true "$SKIP_GPU_CHECK" && command -v nvidia-smi &>/dev/null; then
-    GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits 2>/dev/null || true)
+    if ! GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits); then
+        log "ERROR: nvidia-smi failed (its error is above), so whether the GPU is busy is unknown. Set RESEARCHER_SKIP_GPU_CHECK=true to run without the check. Exiting."
+        exit 1
+    fi
     if [ -n "$GPU_PROCS" ]; then
-        MAX_MEM=$(echo "$GPU_PROCS" | awk -F', ' '{print $2}' | sort -n | tail -1)
-        if [ "$MAX_MEM" -gt 500 ] 2>/dev/null; then
+        GPU_MEMS=$(printf '%s\n' "$GPU_PROCS" | awk -F', *' '{print $2}')
+        if BAD_MEM=$(printf '%s\n' "$GPU_MEMS" | grep -v -m1 '^[0-9][0-9]*$'); then
+            log "ERROR: nvidia-smi reported GPU memory use '${BAD_MEM}', not a number of MiB, so whether the GPU is busy is unknown. Set RESEARCHER_SKIP_GPU_CHECK=true to run without the check. Exiting."
+            exit 1
+        fi
+        MAX_MEM=$(printf '%s\n' "$GPU_MEMS" | sort -n | tail -1)
+        if [ "$MAX_MEM" -gt 500 ]; then
             log "GPU busy (process using ${MAX_MEM} MiB). Skipping this run."
             exit 0
         fi
@@ -395,7 +452,7 @@ fi
 RUN_DIR_OWNER=$(state_field "${RUN_DIR}/state.md" owner)
 [ -n "$RUN_DIR_OWNER" ] || RUN_DIR_OWNER="$RUN_OWNER"
 if [ -n "$RUN_DIR_OWNER" ]; then
-    upsert_frontmatter_field "owner" "$RUN_DIR_OWNER" || true
+    set_state_field owner "$RUN_DIR_OWNER"
 fi
 
 # Main step loop
@@ -416,9 +473,9 @@ while true; do
     esac
 
     ELAPSED=$(( $(date +%s) - START_TIME ))
-    if [ "$ELAPSED" -gt "$TIMEOUT_SECONDS" ]; then
+    if [ "$ELAPSED" -ge "$TIMEOUT_SECONDS" ]; then
         TIMED_OUT=true
-        upsert_frontmatter_field "timed_out" "true" || true
+        set_state_field timed_out true
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
         STEP_RC=0
         if [ "$CURRENT_STEP" -ge "$FAST_TRACK_MIN_STEP" ]; then
@@ -427,7 +484,7 @@ while true; do
             log "Skipping the results audit and compiling the report from what exists."
             # current_step too, so a pause inside the report resumes at the report
             # rather than re-running the remaining steps and the audit.
-            upsert_frontmatter_field "current_step" "$AUDIT_STEP" || true
+            set_state_field current_step "$AUDIT_STEP"
             set_status audit_complete
             run_step "$REPORT_STEP" || STEP_RC=$?
         fi
@@ -458,7 +515,6 @@ while true; do
     else
         AUDIT_ROUNDS=0
         NEXT_STEP=$((CURRENT_STEP + 1))
-        [ "$CURRENT_STEP" -eq 0 ] && NEXT_STEP=1
     fi
 
     if [ "$NEXT_STEP" -gt "$LAST_STEP" ]; then
@@ -535,14 +591,16 @@ OUTCOME_JSON=$(python3 "$LIB" outcome \
     --paused "$PAUSED") \
     || OUTCOME_JSON=$(jq -n --arg s "$STATUS" --arg p "$PUBLISH_STATE" \
         '{outcome: "unknown", success: false, status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
-# On a full disk these writes fail; that must not stop the email and the
-# issue update that report it.
-printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json" \
-    || log "WARN: could not write ${RUN_DIR}/run-outcome.json"
+# The deliverables: run-outcome.json, the email, the issue comment and the issue
+# labels. Each is attempted whatever happened to the others; one that fails is
+# logged and listed here, and makes the run exit 5 (see the end).
+FAILED_DELIVERABLES=()
+if ! printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json"; then
+    log "ERROR: could not write ${RUN_DIR}/run-outcome.json."
+    FAILED_DELIVERABLES+=("run-outcome.json")
+fi
 FINAL_OUTCOME=$(echo "$OUTCOME_JSON" | jq -r '.outcome')
 OUTCOME_REASONS=$(echo "$OUTCOME_JSON" | jq -r '.reasons[]' | sed 's/^/  - /')
-upsert_frontmatter_field "final_outcome" "$FINAL_OUTCOME" || true
-upsert_frontmatter_field "publish_state" "$PUBLISH_STATE" || true
 log "Final outcome: ${FINAL_OUTCOME} (workflow status ${STATUS}, publish ${PUBLISH_STATE})"
 [ -n "$OUTCOME_REASONS" ] && printf '%s\n' "$OUTCOME_REASONS"
 
@@ -550,56 +608,31 @@ log "Final outcome: ${FINAL_OUTCOME} (workflow status ${STATUS}, publish ${PUBLI
 
 if is_true "$SKIP_EMAIL"; then
     log "Skipping email (RESEARCHER_SKIP_EMAIL=${SKIP_EMAIL})."
-else
-    send_email || log "Note: email did not send. Results remain in ${RUN_DIR}."
+elif ! send_email; then
+    log "ERROR: the results email was not sent. Results remain in ${RUN_DIR}."
+    FAILED_DELIVERABLES+=("email")
 fi
 
 # --- Post-completion: report back on the GitHub issue ---
 
 if ! is_true "$SKIP_PUBLISH" && [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "none" ]; then
-    # The comment is best effort (a full disk can stop even mktemp); the label
-    # swap below must happen regardless, or the issue stays claimed forever.
-    COMMENT_FILE=$(mktemp "${TMPDIR:-/tmp}/researcher-comment.XXXXXX" 2>/dev/null) || COMMENT_FILE=""
-    if [ -n "$COMMENT_FILE" ]; then
-        python3 "$LIB" issue-comment \
-            ${NOTE_ARGS[@]+"${NOTE_ARGS[@]}"} \
-            --run-dir "$RUN_DIR" \
-            --status "$STATUS" \
-            --timed-out "$TIMED_OUT" \
-            --publish-state "$PUBLISH_STATE" \
-            --publish-error "$PUBLISH_ERROR" \
-            --paused "$PAUSED" \
-            --run-id "$RUN_ID" \
-            --repo-web "$REPO_WEB" \
-            --branch "$REPO_BRANCH" \
-            --agent-label "$AGENT_LABEL" \
-            --host "$HOST_ALIAS" \
-            --followup "$IS_FOLLOWUP" \
-            --visibility "$PUBLISHED_VISIBILITY" > "$COMMENT_FILE" \
-            || printf 'Autonomous research run `%s` finished with outcome `%s` (the findings summary could not be generated; see the cron log).\n' \
-                "$RUN_ID" "$FINAL_OUTCOME" > "$COMMENT_FILE" \
-            || true
-
-        post_issue_comment "$ISSUE_NUMBER" "$COMMENT_FILE"
-        if [ "$IS_FOLLOWUP" = true ] && [ -n "$PARENT_ISSUE" ] && [ "$PARENT_ISSUE" != "none" ]; then
-            if { printf 'Follow-up #%s finished.\n\n' "$ISSUE_NUMBER"; cat "$COMMENT_FILE"; } > "${COMMENT_FILE}.parent"; then
-                post_issue_comment "$PARENT_ISSUE" "${COMMENT_FILE}.parent"
-            fi
-            rm -f "${COMMENT_FILE}.parent"
-        fi
-        rm -f "$COMMENT_FILE"
-    else
-        log "WARN: could not create a temporary file for the issue comment (disk full?); skipping the comment."
-    fi
-
-    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
-        --remove-label "$PROCESSING_LABEL" 2>/dev/null || true
-    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" \
-        --add-label "$PROCESSED_LABEL" 2>/dev/null || true
-
-    log "Updated issue #${ISSUE_NUMBER}"
+    comment_on_issues || FAILED_DELIVERABLES+=("issue comment")
+    # Attempted whatever happened above, or the issue stays claimed for ever.
+    mark_issue_processed || FAILED_DELIVERABLES+=("issue labels")
 fi
 
+# Recorded after the deliverables, so that a state.md the runner cannot write
+# (which stops it) does not also keep the results from Titus.
+set_state_field final_outcome "$FINAL_OUTCOME"
+set_state_field publish_state "$PUBLISH_STATE"
+
+if [ "${#FAILED_DELIVERABLES[@]}" -gt 0 ]; then
+    printf -v FAILED_LIST '%s, ' "${FAILED_DELIVERABLES[@]}"
+    log "ERROR: not delivered in full: ${FAILED_LIST%, }."
+fi
+
+# Exit 3 (paused) and 4 (no usable result) take precedence over 5: they say
+# more about the run, and the line above already names what was not delivered.
 if is_true "$PAUSED"; then
     # Distinct exit code: a paused run must not look like a completed one to
     # cron, `at`, or any wrapper checking the status.
@@ -612,6 +645,11 @@ if ! outcome_is_success; then
     # result, so it cannot pass for a completed one.
     log "Done, but the run is NOT complete (outcome: ${FINAL_OUTCOME}). Run directory: ${RUN_DIR}"
     exit 4
+fi
+
+if [ "${#FAILED_DELIVERABLES[@]}" -gt 0 ]; then
+    log "Done, but the results were not delivered in full (see above). Run directory: ${RUN_DIR}"
+    exit 5
 fi
 
 log "Done. Run directory: ${RUN_DIR}"

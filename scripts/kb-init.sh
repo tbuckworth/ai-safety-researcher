@@ -151,9 +151,14 @@ if [ ! -d "${KB_DIR}/.git" ]; then
 *.tmp
 *.bak
 GIEOF
-    git -C "$KB_DIR" add -A
-    git -C "$KB_DIR" commit -qm "Bootstrap research knowledge base" || true
     echo "Initialised git repository in ${KB_DIR}"
+fi
+# Decided by the commit, not the repository: a re-run after a refused bootstrap
+# commit makes it.
+if ! git -C "$KB_DIR" rev-parse -q --verify HEAD >/dev/null; then
+    git -C "$KB_DIR" add -A
+    git -C "$KB_DIR" commit -qm "Bootstrap research knowledge base"
+    echo "Committed the knowledge base in ${KB_DIR}"
 fi
 
 echo

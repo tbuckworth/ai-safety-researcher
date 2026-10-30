@@ -46,7 +46,8 @@ MOCK_AGENT_MAIL
 # own arguments. It saves the prompt as <run>/.email-prompt.txt, writes the draft
 # and subject, and, when the prompt says to send it, runs the helper the prompt
 # names as the --session-id session, revising the draft once if the review holds
-# it. MOCK_EMAIL_NO_SEND=true stops it before sending.
+# it. MOCK_EMAIL_NO_SEND=true stops it before sending; MOCK_EMAIL_BAD_IMAGE=true
+# also lists an image that does not exist in email-images.txt.
 install_mock_email_composer() {
     cat > "$1/mock-email-composer" <<'MOCK_EMAIL_COMPOSER'
 #!/usr/bin/env bash
@@ -60,6 +61,9 @@ fi
 printf '%s\n' "$prompt" > "${run_dir}/.email-prompt.txt"
 printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
 printf '%s\n' '[Auto-Research] Mock result — 1 pass, 0 fail' > "${run_dir}/email-subject.txt"
+if [ "${MOCK_EMAIL_BAD_IMAGE:-false}" = "true" ]; then
+    printf '%s\n' 'missing=figures/none.png' > "${run_dir}/email-images.txt"
+fi
 if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" != "true" ]; then
     sid=""
     prev=""

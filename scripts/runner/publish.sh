@@ -9,13 +9,18 @@ publish_fail() {
 }
 
 free_mb() {
-    df -Pm "$1" 2>/dev/null | awk 'NR == 2 {print $4}'
+    df -Pm "$1" | awk 'NR == 2 {print $4}'
 }
 
 check_free_space() {
+    # Fails publishing when the run volume has less than MIN_FREE_MB free, or
+    # when the free space cannot be measured.
     local free
-    free=$(free_mb "$RUN_DIR")
-    if [ -n "$free" ] && [ "$free" -lt "$MIN_FREE_MB" ] 2>/dev/null; then
+    if ! free=$(free_mb "$RUN_DIR") || ! [[ "$free" =~ ^[0-9]+$ ]]; then
+        publish_fail "could not measure the free space on the run volume (df printed '${free}'; its error is in the log)"
+        return 1
+    fi
+    if [ "$free" -lt "$MIN_FREE_MB" ]; then
         publish_fail "disk nearly full: ${free} MB free on the run volume, publishing needs ${MIN_FREE_MB} MB"
         return 1
     fi
@@ -101,11 +106,19 @@ exclude_secret_findings() {
     # each flagged file out of the commit (it stays in the run directory), with
     # the reason. Never bypass or weaken the scan from here: if it was a real
     # secret it must not be published, and if not, Titus decides on an allowlist.
-    command -v gitleaks >/dev/null 2>&1 || return 0
+    # When the scan cannot run here, that is logged; a commit the hook then
+    # refuses fails publishing with the hook's reason (commit_all).
+    if ! command -v gitleaks >/dev/null 2>&1; then
+        log "WARN: secret scan skipped: gitleaks is not installed."
+        return 0
+    fi
     local report args=() rc findings file line rule
     [ -f .gitleaks.toml ] || { [ -f "$HOME/.gitleaks.toml" ] && args+=(--config "$HOME/.gitleaks.toml"); }
     [ -f .gitleaksignore ] || { [ -f "$HOME/.gitleaksignore" ] && args+=(--gitleaks-ignore-path "$HOME/.gitleaksignore"); }
-    report=$(mktemp "${TMPDIR:-/tmp}/researcher-gitleaks.XXXXXX") || return 0
+    if ! report=$(mktemp "${TMPDIR:-/tmp}/researcher-gitleaks.XXXXXX"); then
+        log "WARN: secret scan skipped: could not create a temporary file for its report (the global pre-commit hook still runs it on the commit)."
+        return 0
+    fi
     rc=0
     gitleaks git --pre-commit --staged --redact --no-banner --report-format json --report-path "$report" \
         ${args[@]+"${args[@]}"} >/dev/null 2>&1 || rc=$?
@@ -204,10 +217,20 @@ require_visibility() {
 }
 
 repo_state() {
-    # absent | empty | content
-    local empty
-    empty=$(gh repo view "$1" --json isEmpty --jq '.isEmpty' 2>/dev/null) || { echo absent; return 0; }
-    if [ "$empty" = "true" ]; then echo empty; else echo content; fi
+    # Prints absent | empty | content for REPO ($1, owner/name). When gh fails
+    # for any reason other than the repository not existing, prints gh's
+    # message instead and returns 1. gh's stderr is read only when it fails:
+    # on success it may hold a notice (a new gh release).
+    local out err
+    if out=$(gh repo view "$1" --json isEmpty --jq '.isEmpty' 2>"$GH_STDERR_FILE"); then
+        if [ "$out" = "true" ]; then echo empty; else echo content; fi
+        return 0
+    fi
+    err=$(tr '\n' ' ' < "$GH_STDERR_FILE")
+    case "$err" in
+        *"Could not resolve to a Repository"*) echo absent ;;
+        *) printf '%s\n' "${err:-gh repo view failed without a message}"; return 1 ;;
+    esac
 }
 
 choose_repo_slug() {
@@ -215,10 +238,14 @@ choose_repo_slug() {
     # repo that already has the requested visibility. Never another run's
     # repo (the push would be rejected), and never an empty repo left public
     # by the old master/main bug (results would go public while every report
-    # said private). Diagnostics go to stderr.
+    # said private). Returns 1 when every candidate is taken, and 2, printing
+    # why, when GitHub could not be asked about one. Diagnostics go to stderr.
     local slug="$1" candidate state vis
     for candidate in "$slug" "${slug}-$(echo "$RUN_ID" | cut -c1-10 | tr -d '-')" "${slug}-$(date +%H%M%S)"; do
-        state=$(repo_state "${REPO_OWNER}/${candidate}")
+        if ! state=$(repo_state "${REPO_OWNER}/${candidate}"); then
+            printf 'could not check whether %s exists on GitHub: %s\n' "${REPO_OWNER}/${candidate}" "$state"
+            return 2
+        fi
         case "$state" in
             absent) printf '%s\n' "$candidate"; return 0 ;;
             empty)
@@ -285,16 +312,21 @@ READMEEOF
 }
 
 publish_new_repo() {
-    local slug topic_slug repo_desc message
+    local slug topic_slug repo_desc message chosen=0
     if [ -s "${RUN_DIR}/.publish_repo" ]; then
         # Re-publishing this run: reuse the repo it already created.
         slug=$(cat "${RUN_DIR}/.publish_repo")
     else
         topic_slug=$(python3 "$LIB" slug --max-length 40 --word-boundary -- "$TOPIC_LINE")
-        if ! slug=$(choose_repo_slug "research-${topic_slug}"); then
-            publish_fail "no free repo name for research-${topic_slug} (all candidates hold other runs or have the wrong visibility)"
-            return 1
-        fi
+        slug=$(choose_repo_slug "research-${topic_slug}") || chosen=$?
+        case "$chosen" in
+            0) ;;
+            2) publish_fail "$slug"; return 1 ;;
+            *)
+                publish_fail "no free repo name for research-${topic_slug} (all candidates hold other runs or have the wrong visibility)"
+                return 1
+                ;;
+        esac
     fi
 
     log "Publishing to GitHub repo ${REPO_OWNER}/${slug} (${REPO_VISIBILITY})"
@@ -392,7 +424,7 @@ publish_run() {
     # A stale link from an earlier attempt must never outlive a failed one.
     rm -f "${RUN_DIR}/.repo_url"
     check_free_space || return 0
-    if is_followup_run; then
+    if continues_prior_repo; then
         publish_followup
     else
         publish_new_repo

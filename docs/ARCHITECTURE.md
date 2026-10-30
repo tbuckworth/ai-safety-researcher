@@ -139,9 +139,7 @@ researcher/
 ├── templates/
 │   ├── preamble.tex                 # LaTeX preamble
 │   ├── paper.tex                    # Main document template
-│   ├── Makefile                     # LaTeX build file
-│   └── sections/
-│       └── .gitkeep
+│   └── Makefile                     # LaTeX build file
 ├── hooks/
 ├── docs/
 │   ├── ARCHITECTURE.md              # This file

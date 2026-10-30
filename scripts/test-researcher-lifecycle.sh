@@ -57,6 +57,10 @@ cat > "${MOCK_BIN}/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$MOCK_GH_LOG"
+if [ "${MOCK_GH_NOTICE:-false}" = "true" ]; then
+    # What gh prints on stderr, success or not, when an update is out.
+    echo "A new release of gh is available: 2.99.0" >&2
+fi
 
 label=""; jq_expr=""; json=""
 args=("$@")
@@ -1177,6 +1181,16 @@ assert_eq "$RC" "4" "exit code"
 RUN=$(run_dir_for_issue 1003)
 jq -e '.reasons | any(test("HTTP 502: mock repo outage"))' "${RUN}/run-outcome.json" > /dev/null || fail "gh's reason missing"; ok
 assert_no_grep "^repo create" "${CASE_DIR}/gh.log"
+# A notice gh prints on stderr does not change its answer: an empty private
+# repo with the run's name is still empty, so it is reused.
+new_case repo-view-notice
+git init -q --bare "${REMOTES}/tbuckworth/research-notice-topic.git"
+echo private > "${REMOTES}/tbuckworth/research-notice-topic.git/mock-visibility"
+set_issues <(issue_json 1004 "Notice topic" "list:research-ideas")
+run_researcher MOCK_GH_NOTICE=true
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(run_dir_for_issue 1004)
+assert_eq "$(cat "${RUN}/.publish_repo")" "research-notice-topic" "the empty repo was reused"
 
 # =============================================================================
 # 24. A deliverable that fails (the email, the issue comment, the issue labels)

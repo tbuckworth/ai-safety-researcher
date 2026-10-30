@@ -219,15 +219,17 @@ require_visibility() {
 repo_state() {
     # Prints absent | empty | content for REPO ($1, owner/name). When gh fails
     # for any reason other than the repository not existing, prints gh's
-    # message instead and returns 1.
-    local out
-    if out=$(gh repo view "$1" --json isEmpty --jq '.isEmpty' 2>&1); then
+    # message instead and returns 1. gh's stderr is read only when it fails:
+    # on success it may hold a notice (a new gh release).
+    local out err
+    if out=$(gh repo view "$1" --json isEmpty --jq '.isEmpty' 2>"$GH_STDERR_FILE"); then
         if [ "$out" = "true" ]; then echo empty; else echo content; fi
         return 0
     fi
-    case "$out" in
+    err=$(tr '\n' ' ' < "$GH_STDERR_FILE")
+    case "$err" in
         *"Could not resolve to a Repository"*) echo absent ;;
-        *) printf '%s\n' "$out" | tr '\n' ' '; return 1 ;;
+        *) printf '%s\n' "${err:-gh repo view failed without a message}"; return 1 ;;
     esac
 }
 

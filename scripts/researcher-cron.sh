@@ -117,8 +117,10 @@ JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
 # agent-board's spare-capacity launcher uses it. Empty: no guard.
 GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
 GUARD_CMD_TIMEOUT_SECONDS=300
-# Where run_hook keeps the last hook's stderr, for the caller's message.
+# Where run_hook keeps the last hook's stderr, and repo_state gh's, for the
+# caller's message.
 HOOK_STDERR_FILE="${LOG_DIR}/.hook-stderr.$$"
+GH_STDERR_FILE="${LOG_DIR}/.gh-stderr.$$"
 # A caller that owns one run (agent-board's spare launcher) pins it: with
 # RESEARCHER_RUN_DIR it resumes exactly that run or exits 2, and with
 # RESEARCHER_NO_RESUME=true a fresh start never picks up another unfinished run.
@@ -315,7 +317,7 @@ if [ -f "$LOCKFILE" ]; then
     fi
 fi
 echo $$ > "$LOCKFILE"
-trap 'rm -f "$LOCKFILE" "$HOOK_STDERR_FILE"' EXIT
+trap 'rm -f "$LOCKFILE" "$HOOK_STDERR_FILE" "$GH_STDERR_FILE"' EXIT
 
 # --- Health checks ---
 if ! command -v "$PROVIDER_BIN" &>/dev/null; then

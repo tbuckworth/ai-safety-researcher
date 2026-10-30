@@ -173,6 +173,13 @@ class CompareTest(unittest.TestCase):
         self.assertAlmostEqual(report["p_adjusted"], min(1.0, report["p_value"] * 5), places=4)
 
 
+class StatusTest(unittest.TestCase):
+    def test_worse_keeps_the_more_severe_status(self):
+        self.assertEqual(pf.worse(pf.PASS, pf.WARN), pf.WARN)
+        self.assertEqual(pf.worse(pf.WARN, pf.PASS), pf.WARN)
+        self.assertEqual(pf.worse(pf.FAIL, pf.WARN), pf.FAIL)
+
+
 class CliTest(unittest.TestCase):
     def run_cli(self, *args):
         return subprocess.run([sys.executable, str(SCRIPTS / "preflight_checks.py"), *args],

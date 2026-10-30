@@ -43,6 +43,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
+_SEVERITY = (PASS, WARN, FAIL)
+
+
+def worse(status: str, other: str) -> str:
+    """The more severe of two statuses (PASS < WARN < FAIL)."""
+    return max(status, other, key=_SEVERITY.index)
 
 
 # --------------------------------------------------------------------------
@@ -191,7 +197,7 @@ def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
     if len(long_texts) >= 5:
         top, count = Counter(long_texts).most_common(1)[0]
         if count / len(long_texts) > 0.5:
-            status = FAIL if status == FAIL else WARN
+            status = worse(status, WARN)
             messages.append(f"mode collapse: {count}/{len(long_texts)} outputs are identical ({top[:60]!r}...)")
     report = {
         "check": "degeneracy",
@@ -208,7 +214,7 @@ def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
         ref_len = statistics.mean(len(t) for t in reference) if reference else 0
         cur_len = statistics.mean(len(t) for t in texts)
         if ref_len and not 0.2 <= cur_len / ref_len <= 5:
-            status = FAIL if status == FAIL else WARN
+            status = worse(status, WARN)
             messages.append(f"mean output length changed {cur_len / ref_len:.1f}x vs reference")
     report["status"] = status
     report["messages"] = messages or [f"{len(texts)} samples look fluent"]
@@ -250,13 +256,13 @@ def check_training(losses: list[float]) -> dict:
         status = WARN
         messages.append(f"loss barely moved: {start:.4g} -> {end:.4g}")
     if min(losses) >= 0 and end < 0.01:
-        status = FAIL if status == FAIL else WARN
+        status = worse(status, WARN)
         messages.append(f"near-zero final loss {end:.3g}: likely memorisation; evaluate on held-out data")
     window = losses[: max(5, k)]
     for i in range(len(window), len(losses)):
         median = statistics.median(losses[max(0, i - 20):i])
         if median > 0 and losses[i] > 3 * median:
-            status = FAIL if status == FAIL else WARN
+            status = worse(status, WARN)
             messages.append(f"loss spike at step index {i}: {losses[i]:.4g} vs running median {median:.4g}")
             break
     return {"check": "training", "status": status, "n": len(losses),
@@ -284,7 +290,7 @@ def auroc(positive: list[float], negative: list[float]) -> float:
     return (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 
 
-def cluster_means(values: list[float], clusters: list | None, group: str = "") -> dict:
+def cluster_means(values: list[float], clusters: list | None, group: str) -> dict:
     """Mean per independent unit, keyed by cluster id.
 
     A value without a cluster id is its own unit, keyed uniquely to `group`, so
@@ -298,13 +304,20 @@ def cluster_means(values: list[float], clusters: list | None, group: str = "") -
     return {c: statistics.mean(vs) for c, vs in grouped.items()}
 
 
+def _paired_diffs(a: dict, b: dict) -> list[float] | None:
+    """Per-unit differences b - a when both groups have the same 2+ units (a paired design), else None."""
+    shared = sorted(set(a) & set(b), key=str)
+    if len(shared) >= 2 and len(shared) == len(a) == len(b):
+        return [b[c] - a[c] for c in shared]
+    return None
+
+
 def bootstrap_diff_ci(a: dict, b: dict, *, iters: int = 2000, seed: int = 0, level: float = 0.95) -> tuple[float, float]:
     """CI for mean(b) - mean(a), resampling clusters (paired when clusters are shared)."""
     rng = random.Random(seed)
-    shared = sorted(set(a) & set(b), key=str)
+    d = _paired_diffs(a, b)
     diffs = []
-    if len(shared) >= 2 and len(shared) == len(a) == len(b):
-        d = [b[c] - a[c] for c in shared]
+    if d is not None:
         for _ in range(iters):
             diffs.append(statistics.mean(rng.choice(d) for _ in d))
     else:
@@ -319,9 +332,8 @@ def bootstrap_diff_ci(a: dict, b: dict, *, iters: int = 2000, seed: int = 0, lev
 
 def permutation_p(a: dict, b: dict, *, iters: int = 5000, seed: int = 0) -> float:
     rng = random.Random(seed)
-    shared = sorted(set(a) & set(b), key=str)
-    if len(shared) >= 2 and len(shared) == len(a) == len(b):
-        d = [b[c] - a[c] for c in shared]
+    d = _paired_diffs(a, b)
+    if d is not None:
         observed = abs(statistics.mean(d))
         hits = sum(abs(statistics.mean(x if rng.random() < 0.5 else -x for x in d)) >= observed - 1e-12
                    for _ in range(iters))

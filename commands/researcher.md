@@ -76,7 +76,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn search-planner agent**:
    ```
-   Task(subagent_type="general-purpose", model="sonnet", prompt="""
+   Task(subagent_type="researcher:search-planner", prompt="""
    You are the search-planner agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/search-planner.md
 
@@ -91,7 +91,7 @@ Do this yourself — no agent needed.
 
 3. **Spawn 3 parallel search agents** (one per source group):
    ```
-   Task(subagent_type="general-purpose", model="sonnet", prompt="""
+   Task(subagent_type="researcher:search", prompt="""
    You are the search agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/search.md
 
@@ -114,7 +114,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn novelty-analyst agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:novelty-analyst", prompt="""
    You are the novelty-analyst agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/novelty-analyst.md
 
@@ -140,7 +140,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn criteria agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:criteria", prompt="""
    You are the criteria agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/criteria.md
 
@@ -165,7 +165,7 @@ Do this yourself — no agent needed.
 
 1. **Spawn decomposition agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:decomposition", prompt="""
    You are the decomposition agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/decomposition.md
 
@@ -193,7 +193,7 @@ This step runs three **independent** adversarial review passes before committing
 
 2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:assumption-challenger", prompt="""
    You are the assumption-challenger agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
 
@@ -205,7 +205,7 @@ This step runs three **independent** adversarial review passes before committing
    Write output to: output/<run-id>/challenge/assumption-analysis.md
    """)
 
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:mentor-review", prompt="""
    You are the mentor-review agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/mentor-review.md
 
@@ -217,7 +217,7 @@ This step runs three **independent** adversarial review passes before committing
    Return your review as text. Do NOT write any files.
    """)
 
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:pre-mortem", prompt="""
    You are the pre-mortem agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
 
@@ -282,7 +282,7 @@ Do this yourself — no agent needed.
    a. Create `experiments/exp-NNN/plan.md` with the component details from the decomposition.
    b. **Spawn experiment agent**:
       ```
-      Task(subagent_type="general-purpose", model="fable", prompt="""
+      Task(subagent_type="researcher:experiment", prompt="""
       You are the experiment agent. Read your instructions from:
       ${CLAUDE_PLUGIN_ROOT}/agents/experiment.md
 
@@ -324,7 +324,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 3. **Run one audit round** — spawn the results-auditor (a fresh agent each round, for independence):
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:results-auditor", prompt="""
    You are the results-auditor agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
 
@@ -356,7 +356,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 1. **Spawn report agent**:
    ```
-   Task(subagent_type="general-purpose", model="fable", prompt="""
+   Task(subagent_type="researcher:report", prompt="""
    You are the report agent. Read your instructions from:
    ${CLAUDE_PLUGIN_ROOT}/agents/report.md
 

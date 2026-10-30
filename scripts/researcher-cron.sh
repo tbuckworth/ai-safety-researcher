@@ -106,6 +106,7 @@ CODEX_IGNORE_USER_CONFIG="${RESEARCHER_CODEX_IGNORE_USER_CONFIG:-true}"
 ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
 PAUSED=false
 
+# One branch per backend in researcher_lib.py BACKENDS (and in runner/provider.sh).
 case "$BACKEND" in
     claude)
         PROVIDER_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"

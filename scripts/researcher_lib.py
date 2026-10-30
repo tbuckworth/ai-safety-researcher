@@ -10,8 +10,6 @@ decisions that used to be made by ad-hoc grep/jq and got them wrong:
   status-label       a backend's researching / processed issue label
   pick               which queued issue to run, refusing duplicates
   claimed            whether a freshly read issue is claimed or closed
-  followup-key       a stable identity for a follow-up request, so the same
-                     request filed twice is run once
   find-followup      the oldest issue already filed with a follow-up key
   followup-issue     the title, body and key of a new follow-up issue
   followup-meta      the follow-up fields of a picked issue
@@ -38,7 +36,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 # The agent backends a run can use (RESEARCHER_BACKEND). Each one labels the
-# issues it works on with status_label().
+# issues it works on with status_label(). A backend added here also needs a branch
+# in the `case "$BACKEND"` statements of scripts/researcher-cron.sh (its settings)
+# and scripts/runner/provider.sh (how it is invoked).
 BACKENDS = ("claude", "codex")
 LABEL_STATES = ("researching", "processed")
 
@@ -755,7 +755,6 @@ def main(argv: list[str] | None = None) -> int:
                                                "not be claimed, or nothing when it may")
     p_claimed.add_argument("--explicit", action="store_true", help="an explicit request (RESEARCHER_ISSUE)")
 
-    sub.add_parser("followup-key", help="read an issue body on stdin, print its follow-up key")
 
     p_new = sub.add_parser("followup-issue", help="print the title, body and key of a new follow-up issue as JSON")
     p_new.add_argument("--feedback-file", required=True, type=Path)
@@ -844,10 +843,6 @@ def main(argv: list[str] | None = None) -> int:
                             explicit=args.explicit, allow_rerun=args.allow_rerun)
         if picked is not None:
             print(json.dumps(picked))
-        return 0
-
-    if args.command == "followup-key":
-        print(followup_key(sys.stdin.read()))
         return 0
 
     if args.command == "find-followup":

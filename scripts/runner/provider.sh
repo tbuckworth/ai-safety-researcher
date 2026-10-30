@@ -130,6 +130,7 @@ EOF
 }
 
 invoke_provider() {
+    # One branch per backend in researcher_lib.py BACKENDS.
     case "$BACKEND" in
         claude)
             "$PROVIDER_BIN" --print \

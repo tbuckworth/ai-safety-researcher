@@ -33,10 +33,12 @@ object without that field is bad input. --cluster names the field holding each
 record's prompt, scenario or item id, and every record must have one.
 
 training reads a JSON list of losses (numbers, or objects with a "loss" field),
-an object holding one (such as {"losses": [...]}), or JSONL. A null loss counts
-as non-finite, so the check fails; an object without "loss" is bad input. A
-file that is not JSON is a text log, and every "loss: X" or "loss=X" in it is
-read.
+an object holding one (such as {"losses": [...]}, or a Hugging Face
+trainer_state.json, whose list is "log_history"), or JSONL. Objects without a
+"loss" field, such as eval and summary entries, are skipped, and the report
+counts them; a file where no entry has one is bad input. A null loss counts as
+non-finite, so the check fails. A file that is not JSON is a text log, and
+every "loss: X" or "loss=X" in it is read.
 
 compare's p_adjusted is the Bonferroni-adjusted p for a family of
 --n-comparisons tests. Without that flag p_adjusted is null and the status is
@@ -44,7 +46,7 @@ WARN.
 
 Every report has "params": the settings that decided its result, defaults
 included (thresholds, saturation bounds, the fields read, the family size, the
-resampling iterations and seed). separation and compare also give the "design":
+resampling iterations and seed, how a loss file was read). separation and compare also give the "design":
 "paired" when both groups have exactly the same units, else "independent".
 
 Exit status: 0 PASS (or WARN), 1 FAIL, 2 bad input. Standard library only, so
@@ -91,22 +93,22 @@ def load_items(path: str | Path) -> list:
     if not stripped:
         return []
     if stripped[0] in "[{":
-        return json_items(stripped)
+        return json_items(stripped, LIST_KEYS)
     return [line for line in text.splitlines() if line.strip()]
 
 
-def json_items(text: str) -> list:
+def json_items(text: str, list_keys: tuple[str, ...]) -> list:
     """The items of a JSON document or of JSONL; json.JSONDecodeError if the text is neither.
 
-    An object holding a list under one of LIST_KEYS gives that list; any other
-    single value is one item.
+    An object holding a list under one of `list_keys` gives that list; any
+    other single value is one item.
     """
     try:
         data = json.loads(text)
     except json.JSONDecodeError:
         return [json.loads(line) for line in text.splitlines() if line.strip()]
     if isinstance(data, dict):
-        for key in LIST_KEYS:
+        for key in list_keys:
             if isinstance(data.get(key), list):
                 return data[key]
     return data if isinstance(data, list) else [data]
@@ -278,21 +280,30 @@ def check_degeneracy(texts: list[str], *, max_degenerate_frac: float = 0.1,
 # --------------------------------------------------------------------------
 
 _LOSS_RE = re.compile(r"""['"]?\b(?:train_)?loss['"]?\s*[:=]\s*['"]?(-?[0-9.]+(?:[eE][-+]?\d+)?|nan|inf|-inf)""", re.IGNORECASE)
+# A Hugging Face trainer_state.json keeps its training log under "log_history".
+LOSS_LIST_KEYS = ("log_history",) + LIST_KEYS
 
 
-def losses_from_file(path: str | Path) -> tuple[list[float], str]:
-    """The losses in a file, and how it was read: "json" or "text log".
+def losses_from_file(path: str | Path) -> tuple[list[float], dict]:
+    """The losses in a file, and how it was read.
 
-    JSON and JSONL are read by json_items, like every other input, and each
-    item is a loss or an object with a "loss" field. Only a file that is
-    neither is a text log, scraped with _LOSS_RE.
+    JSON and JSONL are read by json_items, like every other input. Each entry
+    is a loss or an object; an object without a "loss" field (an eval or
+    summary entry) is skipped and counted in "entries_without_loss", and a file
+    where no entry has one is an error. Only a file that is neither JSON nor
+    JSONL is a text log, scraped with _LOSS_RE.
     """
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     try:
-        items = json_items(text.strip())
+        items = json_items(text.strip(), LOSS_LIST_KEYS)
     except json.JSONDecodeError:
-        return [float(m.group(1)) for m in _LOSS_RE.finditer(text)], "text log"
-    return field_values(items, "loss", (), as_loss), "json"
+        losses = [float(m.group(1)) for m in _LOSS_RE.finditer(text)]
+        return losses, {"losses_read_as": "text log", "entries_without_loss": None}
+    entries = [item for item in items if not isinstance(item, dict) or "loss" in item]
+    if items and not entries:
+        raise ValueError(f"none of the {len(items)} entries has a 'loss' field")
+    reading = {"losses_read_as": "json", "entries_without_loss": len(items) - len(entries)}
+    return field_values(entries, "loss", (), as_loss), reading
 
 
 def check_training(losses: list[float]) -> dict:
@@ -594,9 +605,13 @@ def main(argv: list[str] | None = None) -> int:
                                       max_degenerate_frac=args.max_degenerate_frac, reference=reference)
             report["params"]["field"] = args.field
         elif args.command == "training":
-            losses, read_as = losses_from_file(args.losses)
+            losses, reading = losses_from_file(args.losses)
             report = check_training(losses)
-            report["params"]["losses_read_as"] = read_as
+            report["params"].update(reading)
+            skipped = reading["entries_without_loss"]
+            if skipped:
+                report["messages"].append(f"{skipped} of {len(losses) + skipped} JSON entries have no \"loss\" field "
+                                          "(eval or summary entries) and were not read")
         elif args.command == "separation":
             pos_items, neg_items = load_items(args.positive), load_items(args.negative)
             report = check_separation(field_values(pos_items, args.value, NUMBER_FIELDS, float),

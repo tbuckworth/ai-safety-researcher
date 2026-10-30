@@ -69,7 +69,7 @@ specialised leaf-node agents for focused work.
 │    ├─┤   experiment     │  fail → stop or pivot
 │    │ └─────────────────┘  pass → continue + write up
 │    ▼
-│  Step 10: Audit ◄────────────────┐  (re-run flagged exp, re-audit; ≤ R_MAX)
+│  Step 10: Audit ◄────────────────┐  (re-run flagged exp, re-audit; ≤ 3 rounds)
 │    │ ┌─────────────────┐         │
 │    ├─┤ results-auditor  │─────────┘  FIXABLE-DEFECT → loop
 │    │ └─────────────────┘            SUPPORTED / TRUE-NULL → exit

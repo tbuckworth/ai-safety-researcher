@@ -41,7 +41,7 @@ You will be given the run directory path and:
 - `method-spec.md` — the binding operational definition of every named method, condition and metric, quoted from the original request.
 - The pre-flight tooling: `<plugin-root>/scripts/preflight_checks.py` (standard library only) — use it to re-check generations, training logs, metric separation and clustered comparisons yourself.
 - `challenge/` files (assumption-analysis, mentor-review, pre-mortem) for context on what was expected to be risky.
-- **On remediation rounds (audit_round > 1)**: you are also given all prior `audit/results-audit.md` reports and the **round-1 `results.md` as a frozen claim anchor**. Use them to run the stuck-detector (see below).
+- **On remediation rounds (audit_round > 1)**: you are also given all prior `audit/results-audit.md` reports and the **claim anchors** `audit/claim-anchor-<exp>.md` (each experiment's round-1 `results.md`, frozen before the first audit). Use them to run the stuck-detector (see below).
 
 Read all of these before starting. If there are **zero completed experiments** (e.g. a theory-only rethink or a fail-fast stop), do not invent an audit — write a minimal report with overall disposition `NO-EXPERIMENTS` and `audit_exit_reason: no-experiments-to-audit`, and stop.
 
@@ -77,7 +77,7 @@ Work through the load-bearing (highest-lambda) experiment first, then the rest. 
 
 ### Stuck-detector (remediation rounds only)
 
-Given the prior rounds' audits and the round-1 `results.md`: compare this round's *claim* (not just its metric) to round 1. If the defect set is not shrinking, or the **claim has narrowed while the verdict improved** (e.g. "works" became "works on this easy subset" but is now SUPPORTED), that is a stuck signal — set the finding's disposition toward `narrowed-claim-residual` and recommend exiting to write-up rather than looping again.
+Given the prior rounds' audits and the claim anchors: compare this round's *claim* (not just its metric) to the claim anchor. If the defect set is not shrinking, or the **claim has narrowed while the verdict improved** (e.g. "works" became "works on this easy subset" but is now SUPPORTED), the round is stuck: write `audit_exit_reason: narrowed-claim-residual` and recommend exiting to write-up rather than looping again.
 
 ## Output
 

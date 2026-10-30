@@ -373,17 +373,17 @@ This step runs three **independent** adversarial review passes on the research p
 
 **Agent**: `results-auditor` (one per round)
 
-An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints — a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there) — and loops only on genuinely fixable methodology defects.
+An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints — a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there) — and loops only on genuinely fixable methodology defects. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 ### Process
 
-1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11.
+1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11. Otherwise copy each experiment's `results.md` to `audit/claim-anchor-<exp>.md` unless that claim anchor already exists, so a remediation re-run cannot overwrite the round-1 claim.
 
-2. **For each round** (cap: R_MAX ≈ 3; autonomous mode = 3), spawn a FRESH `results-auditor` with:
+2. **For each round**, spawn a FRESH `results-auditor` with:
    - The frozen anchor: original topic + `success-criteria.md` (the pre-registration — goalposts may not move)
    - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log`, `preflight.md` and code files
    - `method-spec.md`, against which it checks method fidelity in the code (a different method under the requested name is `UNSALVAGEABLE` for claims about that method), and `scripts/preflight_checks.py` to re-check generations, metric separation and clustered statistics itself. A FAIL from a pipeline that fails these checks is never `TRUE-NULL`.
-   - On round > 1: the prior `audit/results-audit.md` reports + the round-1 `claim-anchor-*.md`
+   - On round > 1: the prior `audit/results-audit.md` reports + the claim anchors `audit/claim-anchor-*.md`
 
 3. The auditor re-derives every number from the raw logs (and re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
    - `SUPPORTED` — the claim is backed by the evidence
@@ -398,7 +398,7 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
    - `FIXABLE-DEFECT` and round < R_MAX and not stuck → re-run ONLY the flagged experiment (handing back the defect *class*, not a fix; requiring a reported seed), then re-audit.
    - round == R_MAX or stuck → go to Step 11 with the unresolved findings carried into Limitations.
 
-5. **Stuck-detector**: if the defect set isn't shrinking, or a claim has narrowed while its verdict improved, exit with `audit_exit_reason: narrowed-claim-residual`.
+5. **Stuck**: a stuck round exits with `audit_exit_reason: narrowed-claim-residual`.
 
 6. **Independence**: the auditor is a fresh agent each round, re-derives from primary artefacts (never `results.md`'s summary), and keeps a neutral tone but a maximally suspicious stance. It audits; it never edits experiment code.
 

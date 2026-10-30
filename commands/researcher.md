@@ -304,7 +304,7 @@ Do this yourself — no agent needed.
 
 ## Step 10: Audit the Results (Audit-Remediation Loop)
 
-Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects — never to grind a null into a positive.
+Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects — never to grind a null into a positive. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 1. **Create the audit directory**:
    ```bash
@@ -312,6 +312,8 @@ Before anything is written up, an **independent auditor red-teams the results**.
    ```
 
 2. **Zero completed experiments** (e.g. a theory-only rethink): skip the loop. Write a minimal `audit/results-audit.md` (disposition `NO-EXPERIMENTS`, `audit_exit_reason: no-experiments-to-audit`) and go to Step 11.
+
+   Otherwise, **freeze the claim anchor**: for each experiment, if `audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. A remediation re-run overwrites `results.md`; the claim anchor keeps the round-1 claim, so the claim cannot be narrowed to pass.
 
 3. **Run one audit round** — spawn the results-auditor (a fresh agent each round, for independence):
    ```
@@ -323,8 +325,8 @@ Before anything is written up, an **independent auditor red-teams the results**.
    Frozen anchor: output/<run-id>/success-criteria.md  (do NOT let the goalposts move)
    Audit only this run's experiments: output/<run-id>/experiments/exp-*  (ignore any prior/ dir)
    This is audit round <N>.
-   If N > 1: also read every prior output/<run-id>/audit/results-audit.md AND the
-   round-1 results.md as a frozen claim anchor, and run the stuck-detector.
+   If N > 1: also read every prior output/<run-id>/audit/results-audit.md and the
+   claim anchors output/<run-id>/audit/claim-anchor-*.md, and run the stuck-detector.
    Write output to: output/<run-id>/audit/results-audit.md
    """)
    ```
@@ -335,9 +337,9 @@ Before anything is written up, an **independent auditor red-teams the results**.
    - **UNSALVAGEABLE** (the framing itself is broken): present to the user — loop back to Step 5 / Step 4, or write up "why this doesn't work" (Step 11).
    - **round == R_MAX or stuck**: present the residual findings; go to Step 11 carrying them into Limitations.
 
-   `R_MAX ≈ 3`. The user can override at any gate (re-run again, accept as-is, or stop).
+   The user can override at any gate (re-run again, accept as-is, or stop).
 
-5. **Stuck-detector**: if the defect set isn't shrinking across rounds, or a claim has narrowed while its verdict improved, that's stuck — go to Step 11 with `audit_exit_reason: narrowed-claim-residual` and surface it.
+5. **Stuck**: when the auditor reports the round stuck, go to Step 11 with `audit_exit_reason: narrowed-claim-residual` and surface it.
 
 6. Update `state.md`: `current_step: 10, status: audit_complete, audit_round: <N>, audit_exit_reason: <reason>`.
 

@@ -128,10 +128,7 @@ decisions: []
 
 1. **Create search plan**: Spawn the `search-planner` agent with:
    - Input: topic + clarifications from `state.md`
-   - Output: `search-plan.md` containing structured search tasks grouped by source:
-     - **Academic**: arXiv API queries + Semantic Scholar API queries
-     - **Lab blogs**: Site-specific searches for anthropic.com, openai.com, deepmind.google
-     - **Community**: Site-specific searches for lesswrong.com, alignmentforum.org, intelligence.org, alignment.org, safe.ai, blog.redwoodresearch.org
+   - Output: `search-plan.md` containing structured search tasks grouped by source (academic, lab blogs, community). `agents/search-planner.md` defines the APIs and sites for each group.
 
 2. **Review search plan**: Present the plan summary to the user via AskUserQuestion. Allow them to add/remove/modify search tasks.
 
@@ -240,7 +237,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
    - Output: `decomposition.md`
 
 2. The agent decomposes the project into components and for each estimates:
-   - **P_success**: Probability this component can be achieved (calibrated — see rubric below)
+   - **P_success**: Probability this component can be achieved (calibrated by the rubric in `agents/decomposition.md`)
    - **T** (hours): Estimated time to test/validate this component
    - **lambda = -ln(P_success) / T**: Information rate — high lambda means fast learning about likely failure
 
@@ -250,31 +247,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 5. Update `state.md` with the lambda table.
 
-### P_success Calibration Rubric
-
-| P_success | Interpretation |
-|-----------|---------------|
-| 0.9 - 1.0 | Multiple successful replications exist. Mark `[SKIP]` — no experiment needed. |
-| 0.7 - 0.9 | Similar work succeeded; minor adaptations needed. |
-| 0.5 - 0.7 | Related work exists but not directly comparable. |
-| 0.3 - 0.5 | Theoretical arguments exist but no empirical validation. |
-| 0.1 - 0.3 | Known difficulties; prior attempts documented. |
-| < 0.05    | Mark `[SHOWSTOPPER]`. Ask user before proceeding. |
-
-### Edge Cases
-
-- P = 0: Clamp to 0.01 (avoid -ln(0) = infinity)
-- P = 1: lambda = 0 — skip this component, no experiment needed
-- T = 0: Clamp to 0.1 hours
-
-### Lambda Table Format
-
-```
-| # | Component | P_success | T (hrs) | lambda | Quick Test | Status |
-|---|-----------|-----------|---------|--------|------------|--------|
-| 1 | <name>    | 0.25      | 1.0     | 1.39   | <desc>     | PENDING |
-| 2 | <name>    | 0.40      | 2.0     | 0.46   | <desc>     | PENDING |
-```
+`agents/decomposition.md` also defines the edge cases (P = 0, P = 1, T = 0) and the lambda table format.
 
 ---
 
@@ -302,7 +275,7 @@ This step runs three **independent** adversarial review passes on the research p
    - The mentor-review verdict (proceed / minor revisions / major revisions / rethink) and any construct-validity flaw
    - Top failure scenarios and their mitigations
 
-5. **Design-time limitation triage**: Classify each residual weakness against the compute profile + remaining experiment budget as fix-now-free / fix-now-cheap / future-work (see the shared triage rubric). Fold fix-now items into the plan (`challenge/limitation-triage.md`); future-work items carry to Step 11's Future Work section.
+5. **Design-time limitation triage**: Classify each residual weakness by the [Limitation Triage](#limitation-triage) rubric. Fold fix-now items into the plan (`challenge/limitation-triage.md`); future-work items carry to Step 11's Future Work section.
 
 6. **Present to user** via AskUserQuestion with options:
    - "Proceed to experiment plan" -> Step 7
@@ -418,7 +391,7 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
    - `TRUE-NULL` — sound setup, effect absent. **Exit to an honest negative** (do not loop — that would be p-hacking).
    - `UNSALVAGEABLE` — the framing itself is broken → write up "why this doesn't work".
 
-   It also produces a **results-time limitation triage** (per the shared rubric): each limitation classified fix-now-free / fix-now-cheap / future-work against the compute profile + remaining budget. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
+   It also produces a **results-time limitation triage** by the [Limitation Triage](#limitation-triage) rubric. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
 
 4. **Orchestrator/executor acts on the disposition**:
    - All `SUPPORTED`, or only `TRUE-NULL` → record `audit_exit_reason`, go to Step 11.
@@ -485,35 +458,29 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
 
 ---
 
-## Search Strategy
+## Limitation Triage
 
-Three source groups are searched in parallel:
+A limitation is a decision, not a disclaimer. Wherever limitations are surfaced
+(Step 6 for the design, Step 10 for the results) and when they are written up
+(Step 11), classify each one against the run's `compute_profile` and the
+remaining budget (experiment-cap headroom, wall-clock left):
 
-### 1. Academic (arXiv + Semantic Scholar)
+1. **fix-now-free**: addressable by re-analysis of data or artifacts the run
+   already has (add a CI, a paired statistic, a held-out re-score). It costs
+   nothing, so do it.
+2. **fix-now-cheap**: addressable by a small new run that fits the
+   `compute_profile`, the experiment cap and the time budget. Do it, and name
+   the cost.
+3. **future-work**: needs resources beyond the current profile (a bigger model,
+   cloud or multi-GPU, human labels, days of compute) or beyond the cap. Defer
+   it, and record precisely what a fix would require (model size,
+   hardware/backend, rough compute/$, data). These rows become the paper's
+   Future Work.
 
-- **arXiv API**: `curl` requests to `http://export.arxiv.org/api/query` with category filters (cs.AI, cs.LG, cs.CL, etc.)
-- **Semantic Scholar API**: `curl` requests to `https://api.semanticscholar.org/graph/v1/paper/search` with field filters
-- Retrieve: title, authors, abstract, year, URL, citation count
-
-### 2. Lab Blogs
-
-- **WebSearch** with `site:` filters:
-  - `site:anthropic.com`
-  - `site:openai.com`
-  - `site:deepmind.google`
-  - `site:transformer-circuits.pub`
-- Retrieve: title, date, URL, key claims
-
-### 3. Community
-
-- **WebSearch** with `site:` filters:
-  - `site:lesswrong.com`
-  - `site:alignmentforum.org`
-  - `site:intelligence.org`
-  - `site:alignment.org`
-  - `site:safe.ai`
-  - `site:blog.redwoodresearch.org`
-- Retrieve: title, author, date, URL, key arguments
+Prefer free re-analysis, then a cheap run, then future work. The cap is part of
+the rubric: "just run 20 more" when the budget is spent is future work, not a
+fix. Fix what is cheaply fixable now and defer the rest precisely; never turn a
+fixable flaw into a bare "limitation".
 
 ---
 

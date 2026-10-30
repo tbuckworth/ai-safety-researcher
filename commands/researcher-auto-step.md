@@ -60,13 +60,8 @@ Parse it as: `<step-number> <run-directory-path>`
 
 ## Shared: Limitation Triage
 
-A limitation is not something to disclaim by default — it is a decision. Wherever limitations are surfaced (Step 6 for the *design*, Step 10 for the *results*), and when they are written up (Step 11), apply this rubric to each one, judged against the run's `compute_profile` and the remaining budget (experiment-cap headroom, wall-clock left):
-
-1. **fix-now-free** — addressable by re-analysis of data/artifacts you already have (add a CI, a paired statistic, a held-out re-score). Costs nothing → do it.
-2. **fix-now-cheap** — addressable by a small new run that fits the `compute_profile` and the experiment cap / time budget → do it, and name the cost.
-3. **future-work** — needs resources beyond the current profile (bigger model, cloud/multi-GPU, human labels, days of compute) or beyond the cap → defer, and record *precisely what a fix would require* (model size, hardware/backend, rough compute/$, data). These become the paper's Future Work.
-
-Prefer free re-analysis > cheap run > future work. Respecting the cap is part of the rubric: "just run 20 more" when the budget is spent is not a fix, it is future work. The point is to **fix what is cheaply fixable now and defer the rest honestly and precisely** — never to launder a fixable flaw into a bare "limitation."
+Steps 6, 10 and 11 classify each limitation as fix-now-free, fix-now-cheap or
+future-work by the Limitation Triage rubric in WORKFLOW.md.
 
 ---
 
@@ -521,7 +516,7 @@ This step runs three **independent** adversarial review passes on the same plan.
         - Set `current_step: 6, status: challenge_complete, challenge_outcome: rethink_with_disproof, rethink_disproof: true`
         - Steps 7-10 proceed normally but with only the single disproof experiment
 
-5. **Design-time limitation triage** (only when proceeding — skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Apply the **Shared: Limitation Triage** rubric to each, judged against `compute_profile` and the remaining experiment-cap headroom (max 5, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap — if adding one would exceed 5, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
+5. **Design-time limitation triage** (only when proceeding — skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Classify each by the Limitation Triage rubric in WORKFLOW.md, judged against `compute_profile` and the remaining experiment-cap headroom (max 5, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap — if adding one would exceed 5, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
 
 ---
 
@@ -668,7 +663,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    ```
    (On a follow-up, prior experiments are numbered `exp-fNN`; the `exp-*` glob covers them.)
 
-4. **Read `audit/results-audit.md` overall disposition and decide.** The auditor's report now includes a **Limitation triage** table (per the Shared rubric): fix-now-free items are re-analyses of existing data, fix-now-cheap items are small runs within `compute_profile` and the cap, future-work items carry their resource asks. This table carries forward verbatim to Step 11 (it drives Limitations dispositions and Future Work) — do not drop it. A fix-now item that would flip a *claim* should already have been raised as a `FIXABLE-DEFECT` and handled by the loop below; the rest are write-up guidance for the report. Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
+4. **Read `audit/results-audit.md` overall disposition and decide.** The auditor's report includes a **Limitation triage** table (WORKFLOW.md's Limitation Triage rubric). This table carries forward verbatim to Step 11 (it drives Limitations dispositions and Future Work) — do not drop it. A fix-now item that would flip a *claim* should already have been raised as a `FIXABLE-DEFECT` and handled by the loop below; the rest are write-up guidance for the report. Write state.md atomically — `status` and `audit_round` together in one `state.md.tmp`→`mv`:
 
    - **CONVERGED-POSITIVE** or **HONEST-NEGATIVE**: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <all-supported | true-null>`.
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.

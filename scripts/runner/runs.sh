@@ -3,10 +3,17 @@
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
 is_terminal_status() {
-    case "$1" in
-        complete|failed|timed_out) return 0 ;;
+    # TERMINAL_STATUSES comes from researcher_lib.py, which holds the list.
+    case " ${TERMINAL_STATUSES} " in
+        *" $1 "*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+is_followup_run() {
+    # A follow-up issue that names the prior run's repo: the run copies that
+    # run's artifacts and publishes as a branch of its repo.
+    [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]
 }
 
 find_in_progress_run() {
@@ -15,16 +22,16 @@ find_in_progress_run() {
     # Runs live under machine-generated slug paths without whitespace.
     # shellcheck disable=SC2045
     for state_file in $(ls -1t "$OUTPUT_DIR"/*/state.md 2>/dev/null); do
-        status=$(grep '^status:' "$state_file" | head -1 | awk '{print $2}')
+        status=$(state_field "$state_file" status)
         is_terminal_status "$status" && continue
         # An interactive /researcher run shares the output directory; cron must
         # never take one over.
-        mode=$(grep '^mode:' "$state_file" | head -1 | awk '{print $2}')
+        mode=$(state_field "$state_file" mode)
         if [ -n "$mode" ] && [ "$mode" != "autonomous" ]; then
             continue
         fi
         # Nor one another caller owns (it runs it under its own guard and budget).
-        owner=$({ grep '^owner:' "$state_file" || true; } | head -1 | awk '{print $2}')
+        owner=$(state_field "$state_file" owner)
         if [ "$owner" != "$RUN_OWNER" ]; then
             log "Not resuming $(dirname "$state_file"): it belongs to ${owner:-no owner}." >&2
             continue
@@ -40,22 +47,18 @@ find_in_progress_run() {
     return 1
 }
 
-issue_is_claimed() {
-    # Re-read the issue's labels right before claiming it: the listing may be
-    # minutes old, and another runner (the other backend, another machine) may
-    # have claimed it since. If it cannot be re-read, treat it as claimed:
-    # skipping a night is cheap, a duplicate run is not.
-    local number="$1" include_processed="$2" fresh
-    fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state 2>/dev/null) || return 0
-    echo "$fresh" | jq -e --arg p "$include_processed" '
-        (.state != "OPEN") or
-        (.labels | map(.name) | any(
-            . == "status:claude-researching" or . == "status:codex-researching" or
-            ($p == "true" and (. == "status:claude-processed" or . == "status:codex-processed"))
-        ))' > /dev/null
+pick_issue() {
+    # Chooses the issue to run and claims it (or exits), then sets ISSUE_NUMBER,
+    # TOPIC and the follow-up fields from it.
+    select_issue
+    claim_issue "$(jq -r '.number' <<< "$PICKED")"
+    read_picked_issue
 }
 
-pick_issue() {
+select_issue() {
+    # Sets PICKED to the issue to run, as gh JSON: RESEARCHER_ISSUE when it is an
+    # open, unclaimed research idea (otherwise exits 1), else the first queued
+    # issue researcher_lib.py's pick accepts (exits 0 when there is none).
     local picked
     if [ -n "${RESEARCHER_ISSUE:-}" ]; then
         # Explicit target: fetch it directly rather than filtering the queue
@@ -120,27 +123,45 @@ pick_issue() {
         log "No unprocessed research ideas found. Exiting."
         exit 0
     fi
+    PICKED="$picked"
+}
 
-    ISSUE_NUMBER=$(echo "$picked" | jq -r '.number')
-    FOLLOWUP_KEY=$(echo "$picked" | jq -r '.followup_key // ""')
-    local title body include_processed=true
-    title=$(echo "$picked" | jq -r '.title')
-    body=$(echo "$picked" | jq -r '.body // ""')
-
-    [ -n "${RESEARCHER_ISSUE:-}" ] && include_processed=false
-    if issue_is_claimed "$ISSUE_NUMBER" "$include_processed"; then
-        log "Issue #${ISSUE_NUMBER} was claimed or closed by another runner since the listing (or could not be re-read). Exiting."
+claim_issue() {
+    # Labels issue $1 as being researched by this backend. The issue is re-read
+    # first: the listing may be minutes old, and another runner (the other
+    # backend, another machine) may have claimed it since. If it cannot be
+    # re-read, it counts as claimed: skipping a night is cheap, a duplicate run
+    # is not. Exits 0 without claiming when it is taken.
+    local number="$1" fresh reason explicit=()
+    [ -z "${RESEARCHER_ISSUE:-}" ] || explicit=(--explicit)
+    if ! fresh=$(gh issue view "$number" --repo "$TASKS_REPO" --json labels,state 2>/dev/null); then
+        log "Issue #${number} could not be re-read before claiming it. Exiting."
         exit 0
     fi
-
-    log "Picked issue #${ISSUE_NUMBER}: ${title}"
+    reason=$(printf '%s' "$fresh" | python3 "$LIB" claimed ${explicit[@]+"${explicit[@]}"})
+    if [ -n "$reason" ]; then
+        log "Issue #${number} was taken since the listing (${reason}). Exiting."
+        exit 0
+    fi
 
     gh label create "$PROCESSING_LABEL" \
         --repo "$TASKS_REPO" \
         --color "0E8A16" \
         --description "Currently being researched by the ${BACKEND} autonomous agent" \
         2>/dev/null || true
-    gh issue edit "$ISSUE_NUMBER" --repo "$TASKS_REPO" --add-label "$PROCESSING_LABEL"
+    gh issue edit "$number" --repo "$TASKS_REPO" --add-label "$PROCESSING_LABEL"
+}
+
+read_picked_issue() {
+    # Sets ISSUE_NUMBER, FOLLOWUP_KEY and TOPIC (the title, then the body as
+    # context) from PICKED and, for a follow-up issue, the follow-up fields that
+    # researcher_lib.py's followup-meta reads from its title and footer.
+    local title body meta
+    ISSUE_NUMBER=$(jq -r '.number' <<< "$PICKED")
+    FOLLOWUP_KEY=$(jq -r '.followup_key // ""' <<< "$PICKED")
+    title=$(jq -r '.title' <<< "$PICKED")
+    body=$(jq -r '.body // ""' <<< "$PICKED")
+    log "Picked issue #${ISSUE_NUMBER}: ${title}"
 
     TOPIC="$title"
     if [ -n "$body" ] && [ "$body" != "null" ]; then
@@ -150,15 +171,15 @@ Context from issue body:
 ${body}"
     fi
 
-    # Detect follow-up issues
-    if echo "$picked" | jq -e '.labels[] | select(.name == "type:follow-up")' > /dev/null 2>&1; then
+    meta=$(python3 "$LIB" followup-meta <<< "$PICKED")
+    if [ "$(jq -r '.is_followup' <<< "$meta")" = true ]; then
         IS_FOLLOWUP=true
-        PRIOR_REPO_URL=$(echo "$body" | sed -n 's/.*Repo: \(https:\/\/[^ ]*\).*/\1/p' | head -1)
-        PARENT_ISSUE=$(echo "$body" | sed -n 's/.*Parent: #\([0-9]*\).*/\1/p' | head -1)
-        PRIOR_RUN_ID=$(echo "$body" | sed -n 's/.*Run: \([^ ]*\).*/\1/p' | head -1)
-        # Feedback is the body minus the metadata footer
-        FEEDBACK=$(echo "$body" | sed '/^---$/,$d')
-        log "Follow-up detected. Parent: #${PARENT_ISSUE}, Prior repo: ${PRIOR_REPO_URL}"
+        FOLLOWUP_TITLE=$(jq -r '.title' <<< "$meta")
+        PRIOR_REPO_URL=$(jq -r '.prior_repo' <<< "$meta")
+        PARENT_ISSUE=$(jq -r '.parent_issue' <<< "$meta")
+        PRIOR_RUN_ID=$(jq -r '.prior_run_id' <<< "$meta")
+        FEEDBACK=$(jq -r '.feedback' <<< "$meta")
+        log "Follow-up detected. Parent: #${PARENT_ISSUE}, Prior repo: ${PRIOR_REPO_URL:-none}"
     fi
 }
 
@@ -228,155 +249,86 @@ unique_run_id() {
 }
 
 create_run_dir() {
-    local slug date_prefix run_id
-    date_prefix=$(date +%Y-%m-%d)
-    slug=$(echo "$TOPIC" | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 60)
-    run_id=$(unique_run_id "${date_prefix}-${slug}")
-    RUN_DIR="${OUTPUT_DIR}/${run_id}"
+    # Creates RUN_DIR for TOPIC: <date>-<slug of the title>, or
+    # <date>-followup-<slug> for a follow-up run, made unique, with the workflow's
+    # subdirectories, topic.txt, a fresh state.md and .gitignore. A follow-up run
+    # also gets the prior run's artifacts in prior/ and its feedback in
+    # followup-context.md.
+    local title stem topic_text body
+    if is_followup_run; then
+        title="$FOLLOWUP_TITLE"
+        stem="followup-$(python3 "$LIB" slug --max-length 50 -- "$title")"
+        topic_text=$(printf '%s\n\nFollow-up feedback:\n%s' "$title" "$FEEDBACK")
+        body=$(printf 'Follow-up research run initialized.\nTopic: %s\nParent issue: #%s' "$title" "$PARENT_ISSUE")
+    else
+        title=$(printf '%s\n' "$TOPIC" | head -1)
+        stem=$(python3 "$LIB" slug --max-length 60 -- "$title")
+        topic_text="$TOPIC"
+        body=$(printf 'Autonomous research run initialized.\nTopic: %s' "$title")
+    fi
+    RUN_DIR="${OUTPUT_DIR}/$(unique_run_id "$(date +%Y-%m-%d)-${stem}")"
 
     mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge"
-
-    cat > "${RUN_DIR}/state.md" << STATEEOF
----
-run_id: ${run_id}
-topic: "$(echo "$TOPIC" | head -1 | sed 's/"/\\"/g')"
-current_step: 0
-status: initialized
-mode: autonomous
-agent_backend: ${BACKEND}
-agent_model: "${MODEL}"
-issue_number: ${ISSUE_NUMBER:-none}
-compute_profile: "${COMPUTE_PROFILE}"
-knowledge_base: "${KB_DIR:-none}"
-clarifications: []
-decisions: []
----
-
-Autonomous research run initialized.
-Topic: $(echo "$TOPIC" | head -1)
-STATEEOF
-
-    echo "$TOPIC" > "${RUN_DIR}/topic.txt"
-
+    printf '%s\n' "$topic_text" > "${RUN_DIR}/topic.txt"
+    write_new_state "$title" "$body"
+    if is_followup_run; then
+        mkdir -p "${RUN_DIR}/prior"
+        copy_prior_artifacts
+        write_followup_context
+    fi
     write_gitignore "$RUN_DIR"
-
     log "Created run directory: ${RUN_DIR}"
 }
 
-setup_followup_run() {
-    local date_prefix slug run_id
-    date_prefix=$(date +%Y-%m-%d)
-    slug=$(echo "$TOPIC" | head -1 | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | head -c 50)
-    run_id=$(unique_run_id "${date_prefix}-followup-${slug}")
-    RUN_DIR="${OUTPUT_DIR}/${run_id}"
-
-    mkdir -p "${RUN_DIR}/literature" "${RUN_DIR}/experiments" "${RUN_DIR}/challenge" "${RUN_DIR}/prior"
-
-    # Clone the prior repo and copy key artifacts. The clone goes on the output
-    # volume, never /tmp: /tmp is on the small root disk.
-    if [ -n "$PRIOR_REPO_URL" ]; then
-        local tmp_clone
-        mkdir -p "${OUTPUT_DIR}/.tmp"
-        tmp_clone=$(mktemp -d "${OUTPUT_DIR}/.tmp/prior-clone.XXXXXX")
-        log "Cloning prior repo ${PRIOR_REPO_URL} for context..."
-        local prior_branch clone_args=(-q --depth 1)
-        prior_branch=$(repo_url_branch "$PRIOR_REPO_URL")
-        [ -n "$prior_branch" ] && clone_args+=(--branch "$prior_branch")
-        if git clone "${clone_args[@]}" "$(git_remote_for "$PRIOR_REPO_URL")" "$tmp_clone" 2>>"${LOG_DIR}/gh-push.log" \
-            && git -C "$tmp_clone" rev-parse -q --verify HEAD >/dev/null; then
-            # Copy key prior artifacts
-            [ -f "$tmp_clone/state.md" ] && cp "$tmp_clone/state.md" "${RUN_DIR}/prior/state.md"
-            [ -f "$tmp_clone/briefing.md" ] && cp "$tmp_clone/briefing.md" "${RUN_DIR}/prior/briefing.md"
-            [ -f "$tmp_clone/decomposition.md" ] && cp "$tmp_clone/decomposition.md" "${RUN_DIR}/prior/decomposition.md"
-            [ -f "$tmp_clone/novelty-assessment.md" ] && cp "$tmp_clone/novelty-assessment.md" "${RUN_DIR}/prior/novelty-assessment.md"
-            [ -f "$tmp_clone/success-criteria.md" ] && cp "$tmp_clone/success-criteria.md" "${RUN_DIR}/prior/success-criteria.md"
-            [ -f "$tmp_clone/next-steps.md" ] && cp "$tmp_clone/next-steps.md" "${RUN_DIR}/prior/next-steps.md"
-            [ -f "$tmp_clone/method-spec.md" ] && cp "$tmp_clone/method-spec.md" "${RUN_DIR}/prior/method-spec.md"
-            [ -d "$tmp_clone/literature" ] && cp -r "$tmp_clone/literature" "${RUN_DIR}/prior/literature"
-            [ -d "$tmp_clone/challenge" ] && cp -r "$tmp_clone/challenge" "${RUN_DIR}/prior/challenge"
-            # The prior repo's own knowledge base — what this research line has
-            # established, ruled out, and how to reproduce it. Carried forward and
-            # extended at Step 11, not started from scratch.
-            [ -d "$tmp_clone/knowledge" ] && cp -r "$tmp_clone/knowledge" "${RUN_DIR}/prior/knowledge"
-            # Copy experiment results (not full code) to keep it lightweight
-            if [ -d "$tmp_clone/experiments" ]; then
-                mkdir -p "${RUN_DIR}/prior/experiments"
-                for exp_dir in "$tmp_clone"/experiments/exp-*/; do
-                    [ -d "$exp_dir" ] || continue
-                    local exp_name
-                    exp_name=$(basename "$exp_dir")
-                    mkdir -p "${RUN_DIR}/prior/experiments/${exp_name}"
-                    [ -f "${exp_dir}/results.md" ] && cp "${exp_dir}/results.md" "${RUN_DIR}/prior/experiments/${exp_name}/"
-                    [ -f "${exp_dir}/plan.md" ] && cp "${exp_dir}/plan.md" "${RUN_DIR}/prior/experiments/${exp_name}/"
-                done
-            fi
-            if [ -d "$tmp_clone/paper/sections" ]; then
-                mkdir -p "${RUN_DIR}/prior/paper/sections"
-                cp "$tmp_clone"/paper/sections/*.tex "${RUN_DIR}/prior/paper/sections/" 2>/dev/null || true
-            fi
-            log "Prior artifacts copied to ${RUN_DIR}/prior/"
-        else
-            log "WARN: Failed to clone ${PRIOR_REPO_URL} (unreachable or empty). Proceeding without prior context."
-        fi
-        rm -rf "$tmp_clone"
+copy_prior_artifacts() {
+    # Clones the prior run's repo (on the output volume, never /tmp: /tmp is on
+    # the small root disk) and copies the artifacts later steps read into prior/.
+    # A clone that fails leaves prior/ empty, and the run goes on without it.
+    local tmp_clone prior_branch clone_args=(-q --depth 1) pattern path relative
+    # Paths in the prior repo, globs allowed. knowledge/ is the research line's
+    # own knowledge base (what it has established, ruled out, and how to
+    # reproduce it), carried forward and extended at Step 11. Of the
+    # experiments, only the plans and results are copied, to keep it light.
+    local artifacts=(
+        state.md briefing.md decomposition.md novelty-assessment.md success-criteria.md
+        next-steps.md method-spec.md references.bib citation-registry.md
+        literature challenge knowledge
+        'experiments/exp-*/results.md' 'experiments/exp-*/plan.md' 'paper/sections/*.tex'
+    )
+    mkdir -p "${OUTPUT_DIR}/.tmp"
+    tmp_clone=$(mktemp -d "${OUTPUT_DIR}/.tmp/prior-clone.XXXXXX")
+    log "Cloning prior repo ${PRIOR_REPO_URL} for context..."
+    prior_branch=$(repo_url_branch "$PRIOR_REPO_URL")
+    [ -z "$prior_branch" ] || clone_args+=(--branch "$prior_branch")
+    if git clone "${clone_args[@]}" "$(git_remote_for "$PRIOR_REPO_URL")" "$tmp_clone" 2>>"${LOG_DIR}/gh-push.log" \
+        && git -C "$tmp_clone" rev-parse -q --verify HEAD >/dev/null; then
+        for pattern in "${artifacts[@]}"; do
+            # The pattern is left unquoted so that it globs inside the clone.
+            for path in "$tmp_clone"/$pattern; do
+                [ -e "$path" ] || continue
+                relative="${path#"$tmp_clone"/}"
+                mkdir -p "$(dirname "${RUN_DIR}/prior/${relative}")"
+                cp -r "$path" "${RUN_DIR}/prior/${relative}"
+            done
+        done
+        log "Prior artifacts copied to ${RUN_DIR}/prior/"
+    else
+        log "WARN: Failed to clone ${PRIOR_REPO_URL} (unreachable or empty). Proceeding without prior context."
     fi
+    rm -rf "$tmp_clone"
+}
 
-    # Write followup-context.md
-    cat > "${RUN_DIR}/followup-context.md" << CTXEOF
----
-is_followup: true
-parent_issue: ${PARENT_ISSUE}
-prior_repo: ${PRIOR_REPO_URL}
-prior_run_id: ${PRIOR_RUN_ID}
----
-
-## User Feedback
-
-${FEEDBACK}
-CTXEOF
-
-    # Write topic.txt — original topic (from issue title, minus [Follow-up] prefix) + feedback
-    local original_topic
-    original_topic=$(echo "$TOPIC" | head -1 | sed 's/^\[Follow-up\] *//')
+write_followup_context() {
+    # followup-context.md: the follow-up fields, as state.md has them, and the feedback.
+    local key value fields
+    fields=$(followup_fields)
     {
-        echo "$original_topic"
-        echo
-        echo "Follow-up feedback:"
-        echo "$FEEDBACK"
-    } > "${RUN_DIR}/topic.txt"
-
-    # Write fresh state.md
-    local original_topic_yaml
-    original_topic_yaml=${original_topic//\"/\\\"}
-    cat > "${RUN_DIR}/state.md" << STATEEOF
----
-run_id: ${run_id}
-topic: "${original_topic_yaml}"
-current_step: 0
-status: initialized
-mode: autonomous
-agent_backend: ${BACKEND}
-agent_model: "${MODEL}"
-issue_number: ${ISSUE_NUMBER:-none}
-is_followup: true
-parent_issue: ${PARENT_ISSUE:-none}
-prior_repo: ${PRIOR_REPO_URL}
-prior_run_id: ${PRIOR_RUN_ID}
-followup_key: ${FOLLOWUP_KEY:-none}
-compute_profile: "${COMPUTE_PROFILE}"
-knowledge_base: "${KB_DIR:-none}"
-clarifications: []
-decisions: []
----
-
-Follow-up research run initialized.
-Topic: ${original_topic}
-Parent issue: #${PARENT_ISSUE}
-STATEEOF
-
-    write_gitignore "$RUN_DIR"
-
-    log "Follow-up run directory ready: ${RUN_DIR}"
+        echo "---"
+        while IFS=$'\t' read -r key value; do
+            printf '%s: %s\n' "$key" "$value"
+        done <<< "$fields"
+        printf -- '---\n\n## User Feedback\n\n%s\n' "$FEEDBACK"
+    } > "${RUN_DIR}/followup-context.md"
 }
 
 pinned_run() {
@@ -385,8 +337,8 @@ pinned_run() {
         log "ERROR: RESEARCHER_RUN_DIR=${PIN_RUN_DIR} has no state.md." >&2
         return 1
     fi
-    status=$({ grep '^status:' "${PIN_RUN_DIR}/state.md" || true; } | head -1 | awk '{print $2}')
-    mode=$({ grep '^mode:' "${PIN_RUN_DIR}/state.md" || true; } | head -1 | awk '{print $2}')
+    status=$(state_field "${PIN_RUN_DIR}/state.md" status)
+    mode=$(state_field "${PIN_RUN_DIR}/state.md" mode)
     if is_terminal_status "$status" || { [ -n "$mode" ] && [ "$mode" != "autonomous" ]; }; then
         log "ERROR: RESEARCHER_RUN_DIR=${PIN_RUN_DIR} is not a resumable autonomous run (status '${status}', mode '${mode:-?}')." >&2
         return 1

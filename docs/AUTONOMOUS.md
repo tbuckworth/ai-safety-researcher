@@ -403,10 +403,11 @@ since a redesign would answer a question that was never actually asked.
 
 ### Follow-Up Issue Format
 
-The issue body is pure free-text feedback. Metadata is in a single footer line:
+The title is `[Follow-up] ` and the feedback's first line. The body is the free-text feedback, then the metadata footer and the follow-up key; `scripts/researcher_lib.py` (`followup-issue`, `followup-meta`) writes and reads both, and only the footer's own `---` ends the feedback:
 ```
 ---
 Parent: #42 | Repo: https://github.com/tbuckworth/research-foo | Run: 2026-04-03-foo
+<!-- followup-key: <16 hex digits> -->
 ```
 
 ### Follow-Up Run Directory

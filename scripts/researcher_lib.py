@@ -4,15 +4,24 @@
 The bash wrapper owns every side effect (gh, git, email). This module owns the
 decisions that used to be made by ad-hoc grep/jq and got them wrong:
 
-  pick           which queued issue to run, refusing duplicates
-  followup-key   a stable identity for a follow-up request, so the same request
-                 filed twice is run once
-  outcome        the run's final status, derived from what actually exists:
-                 did the workflow finish, are there valid results, did the push
-                 land
-  issue-comment  the findings comment posted back to the originating issue
-  html-text      the plain-text part of the results email, from its HTML
-  email-images   the inline plots the email names (email-images.txt), checked
+  state-field        one field of a state.md frontmatter
+  terminal-statuses  the workflow statuses that end a run
+  backends           the agent backends a run can use
+  status-label       a backend's researching / processed issue label
+  pick               which queued issue to run, refusing duplicates
+  claimed            whether a freshly read issue is claimed or closed
+  followup-key       a stable identity for a follow-up request, so the same
+                     request filed twice is run once
+  find-followup      the oldest issue already filed with a follow-up key
+  followup-issue     the title, body and key of a new follow-up issue
+  followup-meta      the follow-up fields of a picked issue
+  slug               a topic as a run-id or repo-name fragment
+  outcome            the run's final status, derived from what actually exists:
+                     did the workflow finish, are there valid results, did the
+                     push land
+  issue-comment      the findings comment posted back to the originating issue
+  html-text          the plain-text part of the results email, from its HTML
+  email-images       the inline plots the email names (email-images.txt), checked
 
 Standard library only: it runs under whatever python3 cron finds.
 """
@@ -28,15 +37,28 @@ import sys
 from html.parser import HTMLParser
 from pathlib import Path
 
-BUSY_LABELS = (
-    "status:claude-researching",
-    "status:codex-researching",
-    "status:claude-processed",
-    "status:codex-processed",
-)
-RESEARCHING_LABELS = ("status:claude-researching", "status:codex-researching")
+# The agent backends a run can use (RESEARCHER_BACKEND). Each one labels the
+# issues it works on with status_label().
+BACKENDS = ("claude", "codex")
+LABEL_STATES = ("researching", "processed")
+
+
+def status_label(backend: str, state: str) -> str:
+    """The issue label marking `backend` as researching or having processed an issue."""
+    if backend not in BACKENDS or state not in LABEL_STATES:
+        raise ValueError(f"no status label for backend {backend!r} in state {state!r}")
+    return f"status:{backend}-{state}"
+
+
+RESEARCHING_LABELS = tuple(status_label(backend, "researching") for backend in BACKENDS)
+BUSY_LABELS = RESEARCHING_LABELS + tuple(status_label(backend, "processed") for backend in BACKENDS)
 FOLLOWUP_LABEL = "type:follow-up"
 FOLLOWUP_KEY_RE = re.compile(r"<!--\s*followup-key:\s*([0-9a-f]{8,64})\s*-->")
+FOLLOWUP_TITLE_PREFIX = "[Follow-up] "
+FOLLOWUP_TITLE_LENGTH = 70
+# The follow-up issue footer: a "---" line, then this line, then the key marker.
+FOLLOWUP_FOOTER = "Parent: #{parent} | Repo: {repo} | Run: {run}"
+FOLLOWUP_FOOTER_RE = re.compile(r"^Parent:\s*#?(?P<parent>\d*)\s*\|\s*Repo:\s*(?P<repo>\S*)\s*\|\s*Run:\s*(?P<run>\S*)\s*$")
 
 # Workflow statuses after which a run is finished and never auto-resumed.
 TERMINAL_STATUSES = ("complete", "failed", "timed_out")
@@ -54,12 +76,32 @@ def log(message: str) -> None:
 # state.md frontmatter
 # --------------------------------------------------------------------------
 
+_DOUBLE_QUOTED_RE = re.compile(r'^"((?:[^"\\]|\\.)*)"\s*(?:#.*)?$')
+_SINGLE_QUOTED_RE = re.compile(r"^'((?:[^']|'')*)'\s*(?:#.*)?$")
+
+
+def _scalar(raw: str) -> str:
+    """The value of a one-line YAML scalar: quotes removed (with \\" and \\\\
+    unescaped inside double quotes) and a trailing comment dropped. Text that is
+    not a well-formed quoted scalar is taken as written, without its comment."""
+    raw = raw.strip()
+    double = _DOUBLE_QUOTED_RE.match(raw)
+    if double:
+        return re.sub(r'\\(["\\])', r"\1", double.group(1))
+    single = _SINGLE_QUOTED_RE.match(raw)
+    if single:
+        return single.group(1).replace("''", "'")
+    return re.sub(r"(^|\s+)#.*$", "", raw)
+
+
 def read_frontmatter(path: Path) -> dict[str, str]:
     """Return the scalar `key: value` pairs of a state.md YAML frontmatter.
 
-    Deliberately not a YAML parser: state.md is rewritten by models and is not
-    always valid YAML, but the scalar keys the wrapper relies on always sit on
-    their own line.
+    Values are read as YAML scalars (see _scalar); the first occurrence of a
+    key wins, and nothing after the closing `---` is read. Deliberately not a
+    YAML parser: state.md is rewritten by models and is not always valid YAML,
+    but the scalar keys the wrapper relies on always sit on their own line.
+    An unreadable file has no fields.
     """
     fields: dict[str, str] = {}
     try:
@@ -73,10 +115,7 @@ def read_frontmatter(path: Path) -> dict[str, str]:
             break
         match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$", line)
         if match:
-            value = match.group(2).strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-                value = value[1:-1]
-            fields.setdefault(match.group(1), value)
+            fields.setdefault(match.group(1), _scalar(match.group(2)))
     return fields
 
 
@@ -113,6 +152,56 @@ def followup_key(body: str) -> str:
     return match.group(1) if match else compute_followup_key(body)
 
 
+def followup_issue(feedback: str, *, parent: str, repo_url: str, run_id: str) -> dict[str, str]:
+    """The title, body and follow-up key of a new follow-up issue.
+
+    The title is the prefix and the first line of `feedback`, cut to
+    FOLLOWUP_TITLE_LENGTH characters. The body is the feedback, then (when any of
+    parent, repo_url and run_id is given) a `---` line and the footer, then the
+    key marker. followup_meta() reads the footer back.
+    """
+    feedback = feedback.rstrip("\n")
+    body = feedback
+    if parent or repo_url or run_id:
+        body += "\n\n---\n" + FOLLOWUP_FOOTER.format(parent=parent, repo=repo_url, run=run_id)
+    key = compute_followup_key(body)
+    return {
+        "title": FOLLOWUP_TITLE_PREFIX + feedback.split("\n", 1)[0][:FOLLOWUP_TITLE_LENGTH],
+        "body": f"{body}\n<!-- followup-key: {key} -->",
+        "key": key,
+    }
+
+
+def followup_meta(issue: dict) -> dict:
+    """The follow-up fields of an issue (gh JSON with title, body and labels).
+
+    is_followup is whether it carries FOLLOWUP_LABEL. For a follow-up, title is
+    the issue title without FOLLOWUP_TITLE_PREFIX; parent_issue, prior_repo and
+    prior_run_id come from the last footer line (empty when there is none); and
+    feedback is the body before that footer's `---` line, or the whole body
+    without the key marker when there is no footer. A `---` inside the feedback
+    stays in it.
+    """
+    meta = {"is_followup": is_followup(issue), "title": "", "parent_issue": "", "prior_repo": "",
+            "prior_run_id": "", "feedback": ""}
+    if not meta["is_followup"]:
+        return meta
+    title = issue.get("title") or ""
+    if title.startswith(FOLLOWUP_TITLE_PREFIX.rstrip()):
+        title = title[len(FOLLOWUP_TITLE_PREFIX.rstrip()):].lstrip()
+    meta["title"] = title
+    lines = FOLLOWUP_KEY_RE.sub("", issue.get("body") or "").replace("\r\n", "\n").rstrip().split("\n")
+    feedback_end = len(lines)
+    for index in range(len(lines) - 1, -1, -1):
+        footer = FOLLOWUP_FOOTER_RE.match(lines[index])
+        if footer:
+            meta.update(parent_issue=footer["parent"], prior_repo=footer["repo"], prior_run_id=footer["run"])
+            feedback_end = index - 1 if index > 0 and lines[index - 1].strip() == "---" else index
+            break
+    meta["feedback"] = "\n".join(lines[:feedback_end]).strip()
+    return meta
+
+
 # --------------------------------------------------------------------------
 # Issue picking
 # --------------------------------------------------------------------------
@@ -125,11 +214,32 @@ def is_followup(issue: dict) -> bool:
     return FOLLOWUP_LABEL in label_names(issue)
 
 
+def claim_labels(*, explicit: bool) -> tuple[str, ...]:
+    """The labels that keep an issue from being claimed for a new run.
+
+    Any backend researching it always does. In queue mode a backend having
+    processed it does too; an explicit request (RESEARCHER_ISSUE) may re-run a
+    finished issue.
+    """
+    return RESEARCHING_LABELS if explicit else BUSY_LABELS
+
+
+def claimed_reason(issue: dict, *, explicit: bool) -> str:
+    """Why `issue` (gh JSON with state and labels) may not be claimed, or "" when it may.
+
+    Raises KeyError when the JSON has no state.
+    """
+    if issue["state"] != "OPEN":
+        return issue["state"].lower()
+    held = sorted(label_names(issue) & set(claim_labels(explicit=explicit)))
+    return f"labelled {', '.join(held)}" if held else ""
+
+
 def pick_issue(issues: list[dict], runs: list[dict[str, str]], *,
                explicit: bool = False, allow_rerun: bool = False) -> dict | None:
     """Return the first issue that is safe to run, or None.
 
-    Queue mode (explicit=False) skips anything claimed or processed by either
+    Queue mode (explicit=False) skips anything claimed or processed by any
     backend, anything that already has a run directory on this machine, and any
     follow-up whose request (follow-up key) is already claimed, processed, run
     locally, or filed again under a lower issue number.
@@ -150,12 +260,12 @@ def pick_issue(issues: list[dict], runs: list[dict[str, str]], *,
 
     for issue in issues:
         number = issue["number"]
-        labels = label_names(issue)
+        held = sorted(label_names(issue) & set(claim_labels(explicit=explicit)))
         prior = runs_by_issue.get(str(number), [])
 
         if explicit:
-            if labels & set(RESEARCHING_LABELS):
-                log(f"skip #{number}: already being researched ({', '.join(sorted(labels & set(RESEARCHING_LABELS)))})")
+            if held:
+                log(f"skip #{number}: already being researched ({', '.join(held)})")
                 continue
             active = [r for r in prior if r.get("status") not in TERMINAL_STATUSES]
             if active:
@@ -164,7 +274,7 @@ def pick_issue(issues: list[dict], runs: list[dict[str, str]], *,
             if prior:
                 log(f"WARN: #{number} was already run here ({', '.join(r['_dir'] for r in prior)}); re-running because it was requested explicitly")
         else:
-            if labels & set(BUSY_LABELS):
+            if held:
                 continue
             if prior and not allow_rerun:
                 log(f"skip #{number}: already has a local run ({prior[0]['_dir']}, status {prior[0].get('status', '?')}). "
@@ -195,6 +305,23 @@ def pick_issue(issues: list[dict], runs: list[dict[str, str]], *,
             picked["followup_key"] = keys[number]
         return picked
     return None
+
+
+# --------------------------------------------------------------------------
+# Run and repo names
+# --------------------------------------------------------------------------
+
+def slugify(text: str, max_length: int, *, word_boundary: bool) -> str:
+    """`text` lower-cased, with each run of characters other than a-z and 0-9
+    turned into one hyphen, no hyphen at either end, and at most `max_length`
+    characters. With word_boundary, a cut also drops the partial word it leaves."""
+    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    if len(slug) <= max_length:
+        return slug
+    cut = slug[:max_length]
+    if word_boundary and slug[max_length] != "-" and "-" in cut:
+        cut = cut[:cut.rindex("-")]
+    return cut.rstrip("-")
 
 
 # --------------------------------------------------------------------------
@@ -608,12 +735,40 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p_field = sub.add_parser("state-field", help="print one frontmatter field of a state.md (an empty line if absent)")
+    p_field.add_argument("file", type=Path)
+    p_field.add_argument("key")
+
+    sub.add_parser("terminal-statuses", help="print the workflow statuses that end a run, space-separated")
+    sub.add_parser("backends", help="print the agent backends, space-separated")
+
+    p_label = sub.add_parser("status-label", help="print a backend's issue status label")
+    p_label.add_argument("backend", choices=BACKENDS)
+    p_label.add_argument("state", choices=LABEL_STATES)
+
     p_pick = sub.add_parser("pick", help="read issues JSON on stdin, print the issue to run (or nothing)")
     p_pick.add_argument("--output-dir", required=True, type=Path)
     p_pick.add_argument("--explicit", action="store_true")
     p_pick.add_argument("--allow-rerun", action="store_true")
 
+    p_claimed = sub.add_parser("claimed", help="read one issue's JSON (state, labels) on stdin, print why it may "
+                                               "not be claimed, or nothing when it may")
+    p_claimed.add_argument("--explicit", action="store_true", help="an explicit request (RESEARCHER_ISSUE)")
+
     sub.add_parser("followup-key", help="read an issue body on stdin, print its follow-up key")
+
+    p_new = sub.add_parser("followup-issue", help="print the title, body and key of a new follow-up issue as JSON")
+    p_new.add_argument("--feedback-file", required=True, type=Path)
+    p_new.add_argument("--parent", required=True, help="parent issue number, or empty")
+    p_new.add_argument("--repo-url", required=True, help="the prior run's repo URL, or empty")
+    p_new.add_argument("--run-id", required=True, help="the prior run's id, or empty")
+
+    sub.add_parser("followup-meta", help="read one issue's JSON on stdin, print its follow-up fields as JSON")
+
+    p_slug = sub.add_parser("slug", help="print TEXT as a slug of at most --max-length characters")
+    p_slug.add_argument("--max-length", required=True, type=int)
+    p_slug.add_argument("--word-boundary", action="store_true", help="drop a partial word left by the cut")
+    p_slug.add_argument("text")
 
     p_find = sub.add_parser("find-followup", help="read issues JSON on stdin, print '<number> <url>' of the oldest with this key")
     p_find.add_argument("--key", required=True)
@@ -644,6 +799,43 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     truthy = ("1", "true", "yes", "on")
+
+    if args.command == "state-field":
+        if not args.file.is_file():
+            parser.error(f"no such state file: {args.file}")
+        print(read_frontmatter(args.file).get(args.key, ""))
+        return 0
+
+    if args.command == "terminal-statuses":
+        print(" ".join(TERMINAL_STATUSES))
+        return 0
+
+    if args.command == "backends":
+        print(" ".join(BACKENDS))
+        return 0
+
+    if args.command == "status-label":
+        print(status_label(args.backend, args.state))
+        return 0
+
+    if args.command == "claimed":
+        reason = claimed_reason(json.load(sys.stdin), explicit=args.explicit)
+        if reason:
+            print(reason)
+        return 0
+
+    if args.command == "followup-issue":
+        print(json.dumps(followup_issue(args.feedback_file.read_text(encoding="utf-8"), parent=args.parent,
+                                        repo_url=args.repo_url, run_id=args.run_id)))
+        return 0
+
+    if args.command == "followup-meta":
+        print(json.dumps(followup_meta(json.load(sys.stdin))))
+        return 0
+
+    if args.command == "slug":
+        print(slugify(args.text, args.max_length, word_boundary=args.word_boundary))
+        return 0
 
     if args.command == "pick":
         payload = json.load(sys.stdin)

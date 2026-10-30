@@ -2,11 +2,13 @@
 # create-followup-issue.sh — Create a follow-up research issue on GitHub
 #
 # Usage:
-#   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> [--source claude|codex] [--force]
+#   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> [--source <backend>] [--force]
 #
 # Creates an issue on tbuckworth/tasks with labels:
 # list:research-ideas, type:follow-up, source:<backend>, importance:<parent's>
-# Metadata is stored in a single footer line (not YAML) for easy parsing.
+# researcher_lib.py's followup-issue writes the title and body (the feedback,
+# then a footer line with the metadata); the runner reads them back with its
+# followup-meta.
 #
 # The follow-up takes its parent's importance label, or importance:medium when
 # the parent has none (or cannot be read). agent-spare only starts ideas rated
@@ -41,10 +43,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-case "$SOURCE_AGENT" in
-    claude|codex) ;;
+BACKENDS=$(python3 "$LIB" backends)
+case " ${BACKENDS} " in
+    *" ${SOURCE_AGENT} "*) ;;
     *)
-        echo "ERROR: --source must be 'claude' or 'codex'" >&2
+        echo "ERROR: --source must be one of: ${BACKENDS}" >&2
         exit 1
         ;;
 esac
@@ -54,26 +57,16 @@ if [ -z "$FEEDBACK_FILE" ] || [ ! -f "$FEEDBACK_FILE" ]; then
     exit 1
 fi
 
-FEEDBACK=$(cat "$FEEDBACK_FILE")
-if [ -z "$FEEDBACK" ]; then
+if [ -z "$(cat "$FEEDBACK_FILE")" ]; then
     echo "ERROR: Feedback file is empty" >&2
     exit 1
 fi
 
-# Title: first line of feedback, truncated to 70 chars
-TITLE_LINE=$(head -1 "$FEEDBACK_FILE" | head -c 70)
-TITLE="[Follow-up] ${TITLE_LINE}"
-
-# Build body: feedback text + metadata footer
-BODY="${FEEDBACK}"
-if [ -n "$PARENT" ] || [ -n "$REPO_URL" ] || [ -n "$RUN_ID" ]; then
-    BODY="${BODY}
-
----
-Parent: #${PARENT} | Repo: ${REPO_URL} | Run: ${RUN_ID}"
-fi
-
-KEY=$(printf '%s' "$BODY" | python3 "$LIB" followup-key)
+ISSUE=$(python3 "$LIB" followup-issue --feedback-file "$FEEDBACK_FILE" \
+    --parent "$PARENT" --repo-url "$REPO_URL" --run-id "$RUN_ID")
+TITLE=$(jq -r '.title' <<< "$ISSUE")
+BODY=$(jq -r '.body' <<< "$ISSUE")
+KEY=$(jq -r '.key' <<< "$ISSUE")
 if [ "$FORCE" != true ]; then
     # Fail closed: if the duplicate check cannot run, do not risk a duplicate.
     LIST_LIMIT=1000
@@ -100,8 +93,6 @@ if [ "$FORCE" != true ]; then
         exit 0
     fi
 fi
-BODY="${BODY}
-<!-- followup-key: ${KEY} -->"
 
 IMPORTANCE="importance:medium"
 if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then

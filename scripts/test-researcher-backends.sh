@@ -273,7 +273,8 @@ RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/invalid-output" \
 invalid_status=$?
 set -e
 test "$invalid_status" = "2"
-grep -q "must be 'claude' or 'codex'" "${TEST_ROOT}/invalid.stdout"
+grep -q "must be one of: $(python3 "${REPO_DIR}/scripts/researcher_lib.py" backends); got 'invalid'" \
+    "${TEST_ROOT}/invalid.stdout"
 
 mismatch_output="${TEST_ROOT}/mismatch-output"
 mkdir -p "${mismatch_output}/existing-run"

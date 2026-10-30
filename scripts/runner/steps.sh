@@ -138,7 +138,7 @@ run_step() {
     # while this run's external jobs were running and they have since finished
     # (at most JOB_WAIT_MAX_REFUNDS times): then the attempt is made again.
     local spent=0 refunds=0 attempt
-    local exit_code new_step new_status run_log
+    local exit_code new_step new_status run_log incomplete
     STEP_JOB_WAITED=0
     while [ "$spent" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((spent + 1))
@@ -150,6 +150,12 @@ run_step() {
             sleep "$RETRY_DELAY_SECONDS"
         fi
 
+        # A step that stops without progress says why in step_incomplete (the
+        # general rules of commands/researcher-auto-step.md); each attempt
+        # starts without it.
+        if [ -n "$(state_field "${RUN_DIR}/state.md" step_incomplete)" ]; then
+            set_state_field step_incomplete '""'
+        fi
         cd "$REPO_DIR"
         set +e
         run_step_provider "$step" 2>&1 | tee "$run_log"
@@ -161,6 +167,7 @@ run_step() {
         fi
         new_step=$(get_current_step || true)
         new_status=$(get_status || true)
+        incomplete=$(state_field "${RUN_DIR}/state.md" step_incomplete || true)
 
         # A provider usage/session cap is a pause, not a failure: retrying costs
         # nothing but the remaining attempts, and marking the run failed would
@@ -190,7 +197,10 @@ run_step() {
         # limit notice: a dropped connection exits non-zero AND leaves the status
         # unchanged, so without this gate a drop during the audit would return success
         # here and silently burn an AUDIT_ROUNDS increment upstream instead of retrying.
-        if [ "$new_step" != "$prev_step" ] \
+        # A step that recorded step_incomplete did not finish, whatever its status.
+        if [ -n "$incomplete" ]; then
+            log "Step ${step} stopped without progress: ${incomplete}"
+        elif [ "$new_step" != "$prev_step" ] \
             || is_terminal_status "$new_status" \
             || { [ "$limit_hit" = false ] \
                  && [ "$exit_code" -eq 0 ] \

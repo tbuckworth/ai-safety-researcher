@@ -190,6 +190,20 @@ if [ "${MOCK_SUBMIT_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_JOB_FILE}.submitte
     exit 0
 fi
 
+if [ "${MOCK_INCOMPLETE_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_INCOMPLETE_ONCE:-/nonexistent}" ]; then
+    # An agent failed twice: the step records why in step_incomplete and ends
+    # without changing current_step or status (once, with MOCK_INCOMPLETE_ONCE).
+    [ -z "${MOCK_INCOMPLETE_ONCE:-}" ] || touch "$MOCK_INCOMPLETE_ONCE"
+    reason='step_incomplete: "results-auditor: no output twice"'
+    if grep -q '^step_incomplete:' "$state_file"; then
+        sed -i "s/^step_incomplete:.*/${reason}/" "$state_file"
+    else
+        sed -i "s/^status: .*/&\n${reason}/" "$state_file"
+    fi
+    echo "Ending step ${step} without progress."
+    exit 0
+fi
+
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -735,6 +749,26 @@ run_researcher MOCK_LIMIT_AT_STEP=10 -- "Ignored topic"
 assert_eq "$RC" "3" "exit code (paused)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "provider calls"
 assert_eq "$(field status "${OUT}/2026-01-05-audit-limit")" "audit_remediating" "status left resumable"
+
+# 15b'. ...nor does a round that stopped without progress (an agent failed
+#       twice, and the step said so in step_incomplete): it is a failed attempt,
+#       retried with the field cleared, and it fails the run when the retries
+#       run out.
+new_case audit-incomplete
+write_run 2026-01-26-audit-incomplete 10 audit_remediating
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_INCOMPLETE_AT_STEP=10 -- "Ignored topic"
+assert_eq "$RC" "4" "exit code (failed)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 " "one attempt, not another round"
+assert_eq "$(field status "${OUT}/2026-01-26-audit-incomplete")" "failed" "status"
+assert_eq "$(field step_incomplete "${OUT}/2026-01-26-audit-incomplete")" "results-auditor: no output twice" "reason kept"
+assert_grep "Step 10 stopped without progress: results-auditor: no output twice" "${CASE_DIR}/stdout.log"
+new_case audit-incomplete-retry
+write_run 2026-01-27-audit-retry 9 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_STEP_ATTEMPTS=2 MOCK_INCOMPLETE_AT_STEP=10 \
+    "MOCK_INCOMPLETE_ONCE=${CASE_DIR}/incomplete-once" -- "Ignored topic"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "the step retried, then the report"
+assert_grep "Retrying step 10 \(attempt 2/2\)" "${CASE_DIR}/stdout.log"
+assert_eq "$(field step_incomplete "${OUT}/2026-01-27-audit-retry")" "" "cleared on retry"
 
 # 15c. A guard (RESEARCHER_GUARD_CMD) holds the run between steps: it pauses
 #      before calling the provider, records why, and resumes once it is quiet.

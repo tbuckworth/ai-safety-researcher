@@ -764,6 +764,6 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 - When spawning agents, always use absolute paths for all files.
 - After each agent completes, read its output to verify it produced what was expected.
-- If an agent produces no output or errors out, retry ONCE with the same prompt. If it still produces nothing, record in `state.md`'s narrative which agent failed and why, and end the step without changing `current_step` or `status`: the wrapper then retries the step, and marks the run failed when its retries run out. A failed knowledge-base action is the exception (see Shared: Knowledge Bases).
+- If an agent produces no output or errors out, retry ONCE with the same prompt. If it still produces nothing, set `step_incomplete: "<agent>: <why>"` in the `state.md` frontmatter and end the step without changing `current_step` or `status`: the wrapper counts that as a failed attempt (even mid-audit, where the status alone would read as a finished round), clears the field and retries the step, and marks the run failed when its retries run out. A failed knowledge-base action is the exception (see Shared: Knowledge Bases).
 - Write `state.md` updates atomically: write to `state.md.tmp`, then use bash `mv` to rename.
 - Keep state.md updates concise but include all decision rationale for debugging.

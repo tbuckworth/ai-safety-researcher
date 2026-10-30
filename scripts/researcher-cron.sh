@@ -28,9 +28,8 @@ case ":${PATH}:" in
     *) export PATH="${HOME}/.local/bin:${PATH}" ;;
 esac
 
-# Research output goes on the HDD (2.7TB) to avoid filling the SSD
-HDD="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
-OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${HDD}/researcher-output}"
+STORAGE_ROOT="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
+OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
 LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
@@ -226,8 +225,8 @@ source "${SCRIPT_DIR}/runner/publish.sh"
 # shellcheck source=runner/notify.sh
 source "${SCRIPT_DIR}/runner/notify.sh"
 
-if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$HDD" ]; then
-    echo "ERROR: storage root not mounted at ${HDD}." >&2
+if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$STORAGE_ROOT" ]; then
+    echo "ERROR: storage root not mounted at ${STORAGE_ROOT}." >&2
     echo "Set RESEARCHER_OUTPUT_DIR to use a different location." >&2
     exit 1
 fi

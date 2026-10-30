@@ -210,6 +210,11 @@ if GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="${TEST
     exit 1
 fi
 grep -q "mock hook refuses the commit" "${TEST_ROOT}/kb-refused.out"
+# ...and a re-run, once the commit is allowed, makes it (the repository exists
+# by then, but has no commit).
+bash "$REPO_DIR/scripts/kb-init.sh" "${TEST_ROOT}/wiki-refused" > "${TEST_ROOT}/kb-retry.out" 2>&1
+git -C "${TEST_ROOT}/wiki-refused" rev-parse -q --verify HEAD > /dev/null \
+    || { echo "FAIL: a re-run of kb-init did not make the bootstrap commit" >&2; exit 1; }
 
 run_case claude "" "$KB_FIXTURE" kb
 grep -qF -- "- Global knowledge base: ${KB_FIXTURE}" "$MOCK_PROMPT_LOG"

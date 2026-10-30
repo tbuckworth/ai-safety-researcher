@@ -1148,4 +1148,39 @@ run_researcher "PATH=${CASE_DIR}/bin:${SYSTEM_PATH}" "HOME=${CASE_DIR}/home"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_grep "WARN: secret scan skipped: gitleaks is not installed" "${CASE_DIR}/stdout.log"
 
+# =============================================================================
+# 25. The email helper sends nothing while run-outcome.json cannot be read or
+#     email-images.txt has a bad line: it exits 2, and the session fixes them.
+# =============================================================================
+new_case email-helper
+HELPER_RUN="${CASE_DIR}/run"
+mkdir -p "${HELPER_RUN}/figures"
+printf '<html><body><img src="cid:main"></body></html>\n' > "${HELPER_RUN}/email-draft.html"
+printf '[Auto-Research] Helper test\n' > "${HELPER_RUN}/email-subject.txt"
+printf 'PNG' > "${HELPER_RUN}/figures/main.png"
+send_helper() {
+    set +e
+    env PATH="${MOCK_BIN}:${PATH}" TMPDIR="${CASE_DIR}/tmp" MOCK_EMAIL_LOG="${CASE_DIR}/email.log" \
+        RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" RESEARCHER_EMAIL_TO=self@example.test \
+        CLAUDE_CODE_SESSION_ID=helper-session \
+        "${REPO_DIR}/scripts/send-results-email.sh" "$HELPER_RUN" > "${CASE_DIR}/helper.log" 2>&1
+    RC=$?
+    set -e
+}
+printf '{"outcome": "unpub' > "${HELPER_RUN}/run-outcome.json"
+send_helper
+assert_eq "$RC" "2" "exit code (unreadable run-outcome.json)"
+assert_grep "run-outcome.json could not be read" "${CASE_DIR}/helper.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
+printf '{"outcome": "unpublished", "success": false}\n' > "${HELPER_RUN}/run-outcome.json"
+printf 'main=figures/main.png\nmissing=figures/none.png\n' > "${HELPER_RUN}/email-images.txt"
+send_helper
+assert_eq "$RC" "2" "exit code (bad email-images.txt)"
+assert_grep "missing: figures/none.png is not a file in the run directory" "${CASE_DIR}/helper.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
+printf 'main=figures/main.png\n' > "${HELPER_RUN}/email-images.txt"
+send_helper
+assert_eq "$RC" "0" "exit code (fixed)"
+assert_grep "^--subject \[UNPUBLISHED\] \[Auto-Research\] Helper test \| from=helper-session \| images=main.png " "${CASE_DIR}/email.log"
+
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

@@ -785,7 +785,8 @@ def main(argv: list[str] | None = None) -> int:
     p_text = sub.add_parser("html-text", help="print the plain-text version of an HTML file")
     p_text.add_argument("file", type=Path)
 
-    p_img = sub.add_parser("email-images", help="print checked NAME=PATH lines from <run>/email-images.txt")
+    p_img = sub.add_parser("email-images", help="print checked NAME=PATH lines from <run>/email-images.txt; exit 1, listing "
+                           "the problems on stderr, when any line is invalid")
     p_img.add_argument("--run-dir", required=True, type=Path)
 
     for name in ("outcome", "issue-comment"):
@@ -874,8 +875,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "email-images":
         images, problems = email_images(args.run_dir)
-        for problem in problems:
-            print(f"warning: image left out: {problem}", file=sys.stderr)
+        if problems:
+            for problem in problems:
+                print(f"error: email-images.txt: {problem}", file=sys.stderr)
+            return 1
         for image in images:
             print(image)
         return 0

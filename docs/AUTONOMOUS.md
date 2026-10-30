@@ -463,7 +463,8 @@ step). So:
 - **Inline plots**: the composer lists them in `<run>/email-images.txt`
   (`NAME=relative/path.png` per line) and places each as
   `<img src="cid:NAME">`; the helper checks each one (an image inside the run
-  directory, placed in the HTML) before attaching it.
+  directory, placed in the HTML) and sends nothing (exit 2) until all pass, as
+  it does when `run-outcome.json` exists but cannot be read.
 - **Fallbacks.** A session that stops without sending has its draft sent by the
   wrapper as that session; a session that fails (a usage limit too) sends
   nothing, and the run exits 5. Only if the Claude CLI is not installed does a

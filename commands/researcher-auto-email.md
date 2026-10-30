@@ -299,7 +299,7 @@ The run directory is: **{{argument}}**
      JPEG, GIF or WebP, inside the run directory) and place it in the HTML as
      `<img src="cid:NAME" alt="what it shows" style="max-width:100%">`, with
      two lines under it on what to see. Never use data: URIs or file paths in
-     `src`; an image the HTML does not place is left out.
+     `src`; the helper sends nothing while a listed image is not one of these.
    - Confirm `<run-dir>/next-steps.md` exists and is non-empty — you either read it
      or wrote it in step 2b. It ships in the repo and is what
      `/researcher-continue` reads, so a missing one is a defect, not a detail.
@@ -320,6 +320,8 @@ The run directory is: **{{argument}}**
      sections (next steps, how to continue) through any revision: put the
      continuation commands below a clear break, labelled as the way to continue
      the run, not the way to see its results.
+   - **If it exits 2, nothing was sent either.** Fix the input it names (most
+     often a line of `email-images.txt`) and run it again.
    - Do NOT attach the PDF — the HTML email is self-contained and the GitHub repo link provides access to the full paper.
 
 6. If sending fails for any other reason, retain the composition artifacts and

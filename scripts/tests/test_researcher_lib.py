@@ -531,10 +531,15 @@ class ResultsEmailTest(unittest.TestCase):
             self.assertEqual(images, [f"main={(run / 'figures/main.png').resolve()}"])
             self.assertEqual([p.split(":")[0] for p in problems],
                              ["main", "unplaced", "esc", "txt", "'bad name=figures/main.png'", "missing"])
-            out = subprocess.run([sys.executable, str(SCRIPTS / "researcher_lib.py"), "email-images", "--run-dir",
-                                  str(run)], capture_output=True, text=True, check=True)
-            self.assertEqual(out.stdout.strip(), images[0])
-            self.assertIn("image left out: unplaced", out.stderr)
+            # The CLI fails on any bad line, so the email is fixed rather than sent without it.
+            bad = run_lib("email-images", "--run-dir", str(run))
+            self.assertEqual(bad.returncode, 1)
+            self.assertEqual(bad.stdout, "")
+            self.assertIn("unplaced: email-draft.html does not place it", bad.stderr)
+            write(run / "email-images.txt", "# plots\nmain = figures/main.png\n")
+            good = run_lib("email-images", "--run-dir", str(run))
+            self.assertEqual(good.returncode, 0, good.stderr)
+            self.assertEqual(good.stdout.strip(), images[0])
 
 
 if __name__ == "__main__":

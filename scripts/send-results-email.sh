@@ -13,7 +13,10 @@
 # Exit 3 with "agent-mail: NOT SENT" and the fixes means nothing was sent:
 # revise the draft and run this once more; that send goes out whatever the
 # review says. A held draft nobody revises is sent unchanged by the mailroom
-# after its fallback wait. Exit 0: sent, recorded in RUN_DIR/.email-sent.
+# after its fallback wait. Exit 0: sent, recorded in RUN_DIR/.email-sent. Exit 2:
+# nothing was sent because an input is missing or invalid (no draft or subject,
+# a run-outcome.json jq cannot read, a bad email-images.txt line); fix it and
+# run this again.
 #
 # --unrouted: no session, so no review, and replies go to the orchestrator.
 # Only the wrapper uses it, when the Claude CLI is not installed.
@@ -43,8 +46,14 @@ if [ ! -x "$AGENT_MAIL" ]; then
 fi
 
 subject=$(head -1 "${RUN_DIR}/email-subject.txt" | tr -d '\r')
-# The outcome of a run that did not succeed (run-outcome.json's `success`).
-outcome=$(jq -r 'select(.success != true) | .outcome // empty' "${RUN_DIR}/run-outcome.json" 2>/dev/null || true)
+# The outcome of a run that did not succeed (run-outcome.json's `success`). An
+# interactive run has no run-outcome.json; one that jq cannot read stops the send.
+outcome=""
+if [ -e "${RUN_DIR}/run-outcome.json" ] \
+        && ! outcome=$(jq -r 'select(.success != true) | .outcome // empty' "${RUN_DIR}/run-outcome.json"); then
+    echo "error: ${RUN_DIR}/run-outcome.json could not be read (jq's error is above); the email was not sent" >&2
+    exit 2
+fi
 if [ -n "$outcome" ]; then
     # Deterministic, whatever the composer wrote: an unpublished or
     # result-less run is visible from the inbox.
@@ -55,10 +64,14 @@ fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/researcher-email.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 python3 "$LIB" html-text "${RUN_DIR}/email-draft.html" > "${work}/body.txt"
+if ! images=$(python3 "$LIB" email-images --run-dir "$RUN_DIR"); then
+    echo "error: fix ${RUN_DIR}/email-images.txt (problems above) and run this again; the email was not sent" >&2
+    exit 2
+fi
 image_args=()
 while IFS= read -r image; do
     [ -n "$image" ] && image_args+=(--image "$image")
-done < <(python3 "$LIB" email-images --run-dir "$RUN_DIR")
+done <<< "$images"
 
 send_args=(send --to "$TO" --subject "$subject" --body-file "${work}/body.txt" --html "${RUN_DIR}/email-draft.html")
 [ -n "$UNROUTED" ] && send_args+=(--unrouted)

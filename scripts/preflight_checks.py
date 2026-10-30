@@ -30,17 +30,20 @@ Inputs are JSON lists, JSONL, or plain text (one item per line). Items may be
 objects; name the field to read with --field (texts) or --value (numbers), or
 leave it out to read the first of the usual field names an object has. An
 object without that field is bad input. --cluster names the field holding each
-record's prompt, scenario or item id, and every record must have one. A JSONL
-file whose first line is JSON but a later line is not, such as a log cut off
-by a killed run, is bad input.
+record's prompt, scenario or item id, and every record must have one. Except
+for training's loss file, a JSONL file whose first line is JSON but a later
+line is not, such as a file cut off by a killed run, is bad input: reading its
+lines as text samples would be silently wrong.
 
 training reads a JSON list of losses (numbers, or objects with a "loss" field),
 an object holding one (such as {"losses": [...]}, or a Hugging Face
 trainer_state.json, whose list is "log_history"), or JSONL. Objects without a
 "loss" field, such as eval and summary entries, are skipped, and the report
 counts them; a file where no entry has one is bad input. A null loss counts as
-non-finite, so the check fails. A file that is not JSON is a text log, and
-every "loss: X" or "loss=X" in it is read, with null, None and NaN read as NaN.
+non-finite, so the check fails. A file that is not JSON or JSONL throughout is
+a text log, such as step lines after a JSON config line or a JSONL log cut off
+mid-line, and every "loss: X" or "loss=X" in it is read, with null, None and
+NaN read as NaN.
 
 compare needs, in every record, the --condition field and a numeric --value
 (and the --cluster id, if given), whichever condition the record belongs to.
@@ -101,12 +104,16 @@ def load_items(path: str | Path) -> list:
     return [line for line in text.splitlines() if line.strip()]
 
 
+class IncompleteJsonlError(ValueError):
+    """JSONL whose first line is JSON but a later line is not, such as a file cut off by a killed run."""
+
+
 def json_items(text: str, list_keys: tuple[str, ...]) -> list:
     """The items of a JSON document or of JSONL; json.JSONDecodeError if the text is neither.
 
     An object holding a list under one of `list_keys` gives that list; any
     other single value is one item. JSONL whose first line is JSON but a
-    later line is not raises ValueError naming that line.
+    later line is not raises IncompleteJsonlError naming that line.
     """
     try:
         data = json.loads(text)
@@ -123,8 +130,8 @@ def jsonl_items(text: str) -> list:
     """One item per non-blank line of JSONL.
 
     json.JSONDecodeError when the first line is not JSON, so the text is not
-    JSONL at all. ValueError, naming the line, when a later line is not JSON,
-    as in a log cut off by a killed run: the file is JSONL but incomplete.
+    JSONL at all. IncompleteJsonlError, naming the line, when a later line is
+    not JSON, as in a log cut off by a killed run.
     """
     items = []
     for number, line in enumerate(text.splitlines(), 1):
@@ -135,8 +142,8 @@ def jsonl_items(text: str) -> list:
         except json.JSONDecodeError as error:
             if not items:
                 raise
-            raise ValueError(f"line {number} is not JSON ({error.msg}), but the lines before it are; "
-                             "the file may be truncated") from error
+            raise IncompleteJsonlError(f"line {number} is not JSON ({error.msg}), but the lines before it are; "
+                                       "the file may be truncated") from error
     return items
 
 
@@ -323,15 +330,16 @@ def losses_from_file(path: str | Path) -> tuple[list[float], dict]:
     or an object holding such a list (including a Hugging Face
     trainer_state.json). Every entry's loss is read, a null one as NaN; entries
     without a "loss" field, such as eval and summary entries, are skipped and
-    counted in "entries_without_loss". A file where no entry has a loss, or a
-    JSONL file with a line that is not JSON, raises ValueError. Any other file
-    is a text log: every "loss: X" or "loss=X" in it is read, with null, None
-    and NaN read as NaN.
+    counted in "entries_without_loss"; a file where no entry has a loss raises
+    ValueError. A file that is not JSON or JSONL throughout is a text log, such
+    as printed step lines after a JSON config line, or a JSONL log cut off by a
+    killed run. Every "loss: X" or "loss=X" in it is read, with null, None and
+    NaN read as NaN, so a NaN loss fails the check whichever way it was read.
     """
     text = Path(path).read_text(encoding="utf-8", errors="replace")
     try:
         items = json_items(text, LOSS_LIST_KEYS)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, IncompleteJsonlError):
         losses = [logged_loss(m.group(1)) for m in _LOSS_RE.finditer(text)]
         return losses, {"losses_read_as": "text log", "entries_without_loss": None}
     entries = [item for item in items if not isinstance(item, dict) or "loss" in item]

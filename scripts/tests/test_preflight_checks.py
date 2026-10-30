@@ -140,14 +140,25 @@ class TrainingTest(unittest.TestCase):
         self.assertEqual(losses, [3.0 - 0.1 * i for i in range(10)])
         self.assertEqual(reading, {"losses_read_as": "json", "entries_without_loss": 5})
 
-    def test_truncated_jsonl_is_bad_input(self):
-        # A run killed mid-write leaves a cut-off last line; read as a text log, the null loss vanished.
+    def test_truncated_jsonl_log_is_a_text_log_and_keeps_its_null_loss(self):
+        # A run killed mid-write leaves a cut-off last line. Read as a text log, the null loss used to vanish.
         lines = [json.dumps({"loss": None if i == 5 else 3.0 - 0.1 * i, "step": i}) for i in range(10)]
         with tempfile.TemporaryDirectory() as tmp:
             log = Path(tmp) / "train.jsonl"
             log.write_text("\n".join(lines) + '\n{"loss": 2.')
-            with self.assertRaisesRegex(ValueError, "line 11 is not JSON"):
-                pf.losses_from_file(log)
+            losses, reading = pf.losses_from_file(log)
+        self.assertEqual(reading["losses_read_as"], "text log")
+        self.assertTrue(math.isnan(losses[5]))
+        self.assertEqual(pf.check_training(losses, reading)["status"], pf.FAIL)
+
+    def test_text_log_after_a_json_config_line(self):
+        config = json.dumps({"learning_rate": 1e-4, "epochs": 3})
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "train.log"
+            log.write_text(config + "\n" + "\n".join(f"step {i} | loss={3 - 0.1 * i:.2f}" for i in range(10)))
+            losses, reading = pf.losses_from_file(log)
+        self.assertEqual(len(losses), 10)
+        self.assertEqual(reading["losses_read_as"], "text log")
 
     def test_text_log_reads_null_none_and_nan_as_nan(self):
         lines = {"None": "{{'loss': {}, 'grad_norm': 1.0}}", "null": "step | loss={}", "NaN": "loss: {}"}
@@ -392,17 +403,29 @@ class CliTest(unittest.TestCase):
                     self.assertEqual(result.returncode, 2, result.stderr)
                     self.assertIn(expected, result.stderr)
 
-    def test_truncated_jsonl_is_bad_input(self):
+    def test_truncated_jsonl(self):
         with tempfile.TemporaryDirectory() as tmp:
             losses, outputs = Path(tmp) / "train.jsonl", Path(tmp) / "outputs.jsonl"
             lines = [json.dumps({"loss": None if i == 5 else 3.0 - 0.1 * i, "step": i}) for i in range(10)]
             losses.write_text("\n".join(lines) + '\n{"loss": 2.')
             outputs.write_text("\n".join(json.dumps({"completion": t}) for t in FLUENT) + '\n{"completion": "Sure')
-            for args, line in ((("training", str(losses)), 11), (("degeneracy", str(outputs)), 7)):
-                with self.subTest(args[0]):
-                    result = self.run_cli(*args)
-                    self.assertEqual(result.returncode, 2, result.stdout)
-                    self.assertIn(f"line {line} is not JSON", result.stderr)
+            # A loss log is read as text, where its null loss fails the check as non-finite.
+            result = self.run_cli("training", str(losses))
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("non-finite", result.stderr)
+            # Samples and records must be JSON throughout: reading the lines as text would be silently wrong.
+            result = self.run_cli("degeneracy", str(outputs))
+            self.assertEqual(result.returncode, 2, result.stdout)
+            self.assertIn("line 7 is not JSON", result.stderr)
+
+    def test_training_text_log_after_a_json_config_line(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "train.log"
+            log.write_text(json.dumps({"learning_rate": 1e-4}) + "\n"
+                           + "\n".join(f"step {i} | loss={3 - 0.1 * i:.2f}" for i in range(10)))
+            result = self.run_cli("training", str(log))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["params"]["losses_read_as"], "text log")
 
     def test_every_report_records_its_settings(self):
         with tempfile.TemporaryDirectory() as tmp:

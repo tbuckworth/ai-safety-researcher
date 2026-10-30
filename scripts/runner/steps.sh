@@ -5,41 +5,53 @@
 run_hook() {
     # run_hook CMD TIMEOUT: runs the hook command CMD (JOB_WAIT_CMD, GUARD_CMD)
     # in bash with "{run_id}" replaced by this run's id, stops it after TIMEOUT
-    # seconds, and prints its output; an empty CMD prints nothing. The output
-    # decides, not the exit code: a hook that exits non-zero when it has nothing
-    # to report (a bare `squeue | grep`, the obvious thing to write) reports
-    # nothing, and one that is stopped reports what it printed by then. The
-    # hook's stderr is discarded; a stop is logged on stderr.
+    # seconds, prints its output and returns its exit status (124 when it was
+    # stopped, which is also logged on stderr); an empty CMD prints nothing and
+    # returns 0. The hook's stderr goes to HOOK_STDERR_FILE (see hook_error).
     local cmd="$1" limit="$2" run_id rc=0
+    : > "$HOOK_STDERR_FILE"
     [ -n "$cmd" ] || return 0
     run_id=$(basename "$RUN_DIR")
     cmd=${cmd//\{run_id\}/$run_id}
-    timeout "$limit" bash -c "$cmd" 2>/dev/null || rc=$?
+    timeout "$limit" bash -c "$cmd" 2>"$HOOK_STDERR_FILE" || rc=$?
     if [ "$rc" -eq 124 ]; then
         log "WARN: hook stopped at its ${limit}s limit: ${cmd}" >&2
     fi
+    return "$rc"
+}
+
+hook_error() {
+    # The first non-blank line of the last hook's stderr (run_hook keeps it), or nothing.
+    grep -v -m1 '^[[:space:]]*$' "$HOOK_STDERR_FILE" || true
 }
 
 outstanding_jobs() {
     # This run's outstanding external job ids (the first word of each line
-    # JOB_WAIT_CMD prints), space-separated.
-    run_hook "$JOB_WAIT_CMD" "$JOB_WAIT_CMD_TIMEOUT_SECONDS" | awk '{print $1}' | tr '\n' ' '
+    # JOB_WAIT_CMD prints), space-separated. When the hook fails, logs its error
+    # on stderr and returns 1: whether jobs are outstanding is then unknown.
+    local out rc=0
+    out=$(run_hook "$JOB_WAIT_CMD" "$JOB_WAIT_CMD_TIMEOUT_SECONDS") || rc=$?
+    if [ "$rc" -ne 0 ]; then
+        log "WARN: the job-wait hook failed (exit ${rc}): $(hook_error); whether this run's jobs are outstanding is unknown." >&2
+        return 1
+    fi
+    printf '%s\n' "$out" | awk '{print $1}' | tr '\n' ' '
 }
 
 guard_hold() {
     # The first non-blank line GUARD_CMD prints, or nothing. A guard that fails
-    # silently holds nothing (a guard that must hold on failure says so itself).
-    run_hook "$GUARD_CMD" "$GUARD_CMD_TIMEOUT_SECONDS" | grep -v '^[[:space:]]*$' | head -1 || true
-}
-
-hold_applies() {
-    # A hold waits for this run's outstanding jobs (pausing mid-experiment is
-    # what the guard must not do), unless it starts with "!": then it applies at
-    # once, and the jobs keep running for the step that is redone on resume.
-    case "$1" in
-        !*) return 0 ;;
+    # (a non-zero exit, or stopped at its time limit) holds the run with
+    # "guard failed: " and its first stderr line, "timed out" or its exit status.
+    local out rc=0 why
+    out=$(run_hook "$GUARD_CMD" "$GUARD_CMD_TIMEOUT_SECONDS") || rc=$?
+    case "$rc" in
+        0) printf '%s\n' "$out" | grep -v -m1 '^[[:space:]]*$' || true ;;
+        124) echo "guard failed: timed out" ;;
+        *)
+            why=$(hook_error)
+            echo "guard failed: ${why:-exit ${rc}}"
+            ;;
     esac
-    [ -z "$(outstanding_jobs | tr -d ' ')" ]
 }
 
 pause_for_guard() {
@@ -52,24 +64,33 @@ pause_for_guard() {
 }
 
 guard_holds_run() {
-    # True when the guard holds the run now (see hold_applies), after
-    # pause_for_guard has recorded why. A hold that waits for outstanding jobs
-    # is logged, and the run carries on: pausing now would leave this run's
-    # cluster jobs unwatched, so the step that collects them goes ahead.
+    # True when the guard holds the run now, after pause_for_guard has recorded
+    # why. A hold waits for this run's outstanding jobs (pausing mid-experiment
+    # is what the guard must not do), and for an answer when the job-wait hook
+    # cannot give one: it is logged, and the run carries on, so the step that
+    # collects the jobs goes ahead. A hold starting with "!" applies at once,
+    # and the jobs keep running for the step that is redone on resume.
     local hold outstanding
     hold=$(guard_hold)
     [ -n "$hold" ] || return 1
-    if hold_applies "$hold"; then
+    case "$hold" in
+        !*) pause_for_guard "$hold"; return 0 ;;
+    esac
+    if ! outstanding=$(outstanding_jobs); then
+        log "Guard asked to hold (${hold}), but this run's jobs could not be checked; carrying on."
+        return 1
+    fi
+    if [ -z "${outstanding// /}" ]; then
         pause_for_guard "$hold"
         return 0
     fi
-    outstanding=$(outstanding_jobs)
     log "Guard asked to hold (${hold}), but job(s) ${outstanding% } are still outstanding; carrying on."
     return 1
 }
 
 wait_for_jobs() {
     # wait_for_jobs STEP: waits while this run's external jobs are outstanding,
+    # or the job-wait hook cannot say whether they are ("unknown" below),
     # polling every JOB_WAIT_POLL_SECONDS, until they finish, the run times out,
     # or the step's waits add up to JOB_WAIT_MAX_SECONDS (counted in
     # STEP_JOB_WAITED, which run_step resets for each step). A stop from the
@@ -79,7 +100,7 @@ wait_for_jobs() {
     # resume. Sets JOB_WAIT_RESULT to none (no jobs were
     # outstanding), finished, gave-up or stopped.
     local step="$1" outstanding hold waited=0
-    outstanding=$(outstanding_jobs)
+    outstanding=$(outstanding_jobs) || outstanding="unknown"
     if [ -z "${outstanding// /}" ]; then
         JOB_WAIT_RESULT=none
         return 0
@@ -97,7 +118,7 @@ wait_for_jobs() {
             JOB_WAIT_RESULT=stopped
             return 0
         fi
-        outstanding=$(outstanding_jobs)
+        outstanding=$(outstanding_jobs) || outstanding="unknown"
     done
     if [ -n "${outstanding// /}" ]; then
         log "Step ${step}: job(s) still outstanding after ${waited}s (cumulative ${STEP_JOB_WAITED}s of ${JOB_WAIT_MAX_SECONDS}s, run timeout ${TIMEOUT_SECONDS}s); giving up on waiting."

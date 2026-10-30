@@ -750,8 +750,8 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHE
 [ -n "$(run_dir_for_issue 301)" ] || fail "no fresh run for #301"; ok
 assert_eq "$(field current_step "${OUT}/2026-01-11-someone-elses")" "3" "still untouched"
 
-# 15d. ...but never while the run's cluster jobs are outstanding, and a guard
-#      that fails without printing anything holds nothing.
+# 15d. ...but never while the run's cluster jobs are outstanding, or while the
+#      job-wait hook cannot say whether they are.
 new_case guard-jobs
 write_run 2026-01-07-guard-jobs 10 audit_complete
 mkdir -p "${OUT}/2026-01-07-guard-jobs/experiments/exp-001"
@@ -770,6 +770,15 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
     RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS=1 -- "Ignored topic"
 [ ! -e "${CASE_DIR}/hook-finished" ] || fail "the job-wait hook ran past its time limit"; ok
 assert_grep "WARN: hook stopped at its 1s limit" "${CASE_DIR}/stdout.log"
+assert_grep "Guard asked to hold \(hold\), but this run's jobs could not be checked; carrying on" "${CASE_DIR}/stdout.log"
+# A job-wait hook that fails is an unknown answer, not "no jobs": the guard's
+# hold does not pause the run on it.
+new_case guard-jobs-unknown
+write_run 2026-01-22-guard-unknown 10 audit_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo hold" \
+    "RESEARCHER_JOB_WAIT_CMD=echo 'squeue: mock outage' >&2; exit 1" -- "Ignored topic"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran despite the hold"
+assert_grep "WARN: the job-wait hook failed \(exit 1\): squeue: mock outage" "${CASE_DIR}/stdout.log"
 # ...except a hold marked "!" (a stop), which applies at once: before a step,
 # and while a stalled step waits for its jobs.
 new_case guard-stop-jobs
@@ -799,6 +808,45 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_SUBMIT_AT_STEP=9 "MOCK_JOB_FILE
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 9 10 11 " "step 9 retried after its job"
 assert_grep "retrying without spending an attempt \(refund 1/10\)" "${CASE_DIR}/stdout.log"
+# ...and a job-wait hook that fails while the step waits is an unknown answer:
+# the step keeps waiting, without spending an attempt, until the hook answers.
+new_case job-wait-hook-error
+write_run 2026-01-23-job-error 8 mock_step_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true MOCK_SUBMIT_AT_STEP=9 "MOCK_JOB_FILE=${CASE_DIR}/job" \
+    "RESEARCHER_JOB_WAIT_CMD=[ -e ${CASE_DIR}/asked ] || { touch ${CASE_DIR}/asked; echo 'squeue: mock outage' >&2; exit 1; }" \
+    RESEARCHER_JOB_WAIT_POLL_SECONDS=1 -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "9 9 10 11 " "step 9 retried once the hook answered"
+assert_grep "WARN: the job-wait hook failed \(exit 1\): squeue: mock outage" "${CASE_DIR}/stdout.log"
+assert_grep "retrying without spending an attempt \(refund 1/10\)" "${CASE_DIR}/stdout.log"
+# The mats profile's own job-wait command: squeue listing no job of this run is
+# the answer "none" (the hold pauses the run); ssh failing is no answer (it
+# does not).
+new_case mats-job-wait
+write_run 2026-01-24-mats 10 audit_complete
+mkdir -p "${OUT}/2026-01-24-mats/experiments/exp-001" "${CASE_DIR}/bin"
+printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-24-mats/experiments/exp-001/results.md"
+printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-24-mats/experiments/exp-001/preflight.md"
+# Stands in for `ssh mats squeue ...`, which a test must not reach: it prints
+# MOCK_SQUEUE, or fails as an unreachable host does when that is "down".
+cat > "${CASE_DIR}/bin/ssh" <<'MOCK_SSH'
+#!/usr/bin/env bash
+if [ "${MOCK_SQUEUE:-}" = down ]; then
+    echo "ssh: connect to host mats port 22: Connection refused" >&2
+    exit 255
+fi
+printf '%s\n' "${MOCK_SQUEUE:-}"
+MOCK_SSH
+chmod +x "${CASE_DIR}/bin/ssh"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_COMPUTE_PROFILE=mats RESEARCHER_SKIP_PUBLISH=true \
+    "RESEARCHER_GUARD_CMD=echo hold" "MOCK_SQUEUE=4242 /mnt/nw/home/t.buckworth/researcher-runs/other-run" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (no jobs of this run, so the hold applies)"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-24-mats")" "hold" "pause reason"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_COMPUTE_PROFILE=mats RESEARCHER_SKIP_PUBLISH=true \
+    "RESEARCHER_GUARD_CMD=echo hold" MOCK_SQUEUE=down -- "Ignored topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "the step ran: squeue could not be asked"
+assert_grep "WARN: the job-wait hook failed \(exit 255\): ssh: connect to host mats" "${CASE_DIR}/stdout.log"
 # ...but a job that outlasts the step's wait budget spends the attempt.
 new_case job-wait-gave-up
 write_run 2026-01-19-job-gave-up 8 mock_step_complete
@@ -833,9 +881,15 @@ write_run 2026-01-08-guard-broken 10 audit_complete
 mkdir -p "${OUT}/2026-01-08-guard-broken/experiments/exp-001"
 printf '## Component Tested\nX\n\n## Verdict: PASS\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/results.md"
 printf '| method-fidelity | PASS | t |\n' > "${OUT}/2026-01-08-guard-broken/experiments/exp-001/preflight.md"
+# A guard that fails holds the run, saying why: its first stderr line, or its
+# exit status when it printed none.
 run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=false" -- "Ignored topic"
-[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
-assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "a silent failing guard holds nothing"
+assert_eq "$RC" "3" "exit code (paused by a failed guard)"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "the provider ran although the guard failed"; ok
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-08-guard-broken")" "guard failed: exit 1" "pause reason"
+run_researcher RESEARCHER_SKIP_PUBLISH=true "RESEARCHER_GUARD_CMD=echo 'agent-board unreachable' >&2; exit 7" -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused by a failed guard)"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-08-guard-broken")" "guard failed: agent-board unreachable" "pause reason"
 
 # =============================================================================
 # 16. A pause inside the timeout fast-track resumes at Step 11, not at the

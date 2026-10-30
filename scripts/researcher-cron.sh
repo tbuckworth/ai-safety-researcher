@@ -87,9 +87,11 @@ FAST_TRACK_MIN_STEP=5
 STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
 # Optional hook: a shell command printing the still-outstanding external
-# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. While it prints
-# anything, a step that did not advance is WAITING on external compute, not
-# failing — so the attempt is refunded instead of spent. Empty = old behaviour.
+# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
+# its answer (no output: no jobs); a non-zero exit is an error, logged, and the
+# answer is unknown. While it reports jobs, or cannot say, a step that did not
+# advance is WAITING on external compute, not failing — so the attempt is
+# refunded instead of spent. Empty: no hook.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 # Each call of JOB_WAIT_CMD is stopped after this long; it covers the `timeout 90`
 # inside the mats profile's command (and agent-board's).
@@ -99,13 +101,16 @@ JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
 JOB_WAIT_MAX_REFUNDS="${RESEARCHER_JOB_WAIT_MAX_REFUNDS:-10}"
 # Optional hook: a shell command run before each step ("{run_id}" substituted).
 # If it prints anything, its first line is the reason and the run pauses there,
-# exactly as on a provider limit: resumable, nothing published. Steps are never
-# interrupted, and the run doesn't pause while JOB_WAIT_CMD still reports jobs,
-# unless the line starts with "!" (a stop: the jobs keep running and the step
-# is redone on resume). agent-board's spare-capacity launcher uses it.
-# Empty = old behaviour.
+# exactly as on a provider limit: resumable, nothing published. A guard that
+# exits non-zero or times out holds the run the same way, with the reason
+# "guard failed: ...". Steps are never interrupted, and the run doesn't pause
+# while JOB_WAIT_CMD reports jobs or cannot say, unless the line starts with "!"
+# (a stop: the jobs keep running and the step is redone on resume).
+# agent-board's spare-capacity launcher uses it. Empty: no guard.
 GUARD_CMD="${RESEARCHER_GUARD_CMD:-}"
 GUARD_CMD_TIMEOUT_SECONDS=300
+# Where run_hook keeps the last hook's stderr, for the caller's message.
+HOOK_STDERR_FILE="${LOG_DIR}/.hook-stderr.$$"
 # A caller that owns one run (agent-board's spare launcher) pins it: with
 # RESEARCHER_RUN_DIR it resumes exactly that run or exits 2, and with
 # RESEARCHER_NO_RESUME=true a fresh start never picks up another unfinished run.
@@ -225,9 +230,11 @@ case "${RESEARCHER_COMPUTE_PROFILE:-}" in
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
         COMPUTE_PROFILE_NAME=mats
         # A queued/running job for THIS run means the step is waiting, not failing.
+        # grep finding no line of this run is the answer "none" (exit 0); ssh or
+        # squeue failing is an error (pipefail), so the answer is unknown.
         # Its own 90 s timeout must stay below JOB_WAIT_CMD_TIMEOUT_SECONDS (default 120),
-        # or run_hook cuts squeue off first and the step looks as if it had no jobs.
-        : "${JOB_WAIT_CMD:=timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | grep -F '{run_id}' || true}"
+        # so that it, not run_hook, stops a slow squeue.
+        : "${JOB_WAIT_CMD:=set -o pipefail; timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | (grep -F '{run_id}' || [ \$? -eq 1 ])}"
         ;;
     *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE"; COMPUTE_PROFILE_NAME=custom ;;
 esac
@@ -297,7 +304,7 @@ if [ -f "$LOCKFILE" ]; then
     fi
 fi
 echo $$ > "$LOCKFILE"
-trap 'rm -f "$LOCKFILE"' EXIT
+trap 'rm -f "$LOCKFILE" "$HOOK_STDERR_FILE"' EXIT
 
 # --- Health checks ---
 if ! command -v "$PROVIDER_BIN" &>/dev/null; then

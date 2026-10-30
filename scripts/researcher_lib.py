@@ -39,7 +39,7 @@ FOLLOWUP_LABEL = "type:follow-up"
 FOLLOWUP_KEY_RE = re.compile(r"<!--\s*followup-key:\s*([0-9a-f]{8,64})\s*-->")
 
 # Workflow statuses after which a run is finished and never auto-resumed.
-TERMINAL_STATUSES = ("complete", "failed", "aborted_rethink", "timed_out")
+TERMINAL_STATUSES = ("complete", "failed", "timed_out")
 
 VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
 

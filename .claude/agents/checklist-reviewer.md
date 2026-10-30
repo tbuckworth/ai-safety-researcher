@@ -1,6 +1,7 @@
 ---
 name: checklist-reviewer
 model: opus
+effort: high
 description: Reviews a branch's changes against the project's checklist criteria before a pull request lands them. Invoked by the checklist review gate when gh pr create or gh pr merge is attempted, or for an early review.
 tools: Bash, Read, Grep, Glob, Write
 ---
@@ -201,4 +202,4 @@ the listed files—reading them as needed—so a cross-increment violation (a
 newly duplicated helper, a doc the newer half of a change leaves stale) is
 caught even though only the newer half is in the diff under review.
 
-<!-- claude-tooling: rendered from template, fingerprint 463fe62c418b -->
+<!-- claude-tooling: rendered from template, fingerprint bcbc21245d8f -->

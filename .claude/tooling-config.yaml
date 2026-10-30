@@ -130,6 +130,7 @@ checks:
 review_gate:
   trigger: pr
   claude_reviewer_model: opus
+  claude_reviewer_effort: high
   codex_reviewer_model: gpt-6.1-sol
   codex_reviewer_effort: high
   setup_command: agent-gate setup . --kind software

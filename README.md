@@ -269,13 +269,13 @@ researcher/
 │   ├── researcher-cron.sh         # Dual-backend autonomous runner
 │   ├── runner/                    # The runner's functions, one file per concern (sourced by researcher-cron.sh)
 │   ├── kb-init.sh                 # Bootstraps the global knowledge base
-│   ├── researcher_lib.py          # Issue picking/dedupe, final outcome, issue comment (used by the runner)
+│   ├── researcher_lib.py          # The runner's decisions: state.md fields, issue picking and claiming, follow-up issues, final outcome, issue comment
 │   ├── preflight_checks.py        # Experiment pre-flight checks: degeneracy, training, metric separation, clustered stats
 │   ├── create-followup-issue.sh   # Creates a type:follow-up research issue (idempotent)
 │   ├── check-voice-blocks.sh      # Voice-block and KEEP-token guard
 │   ├── test-researcher-backends.sh # Mock provider integration tests
 │   ├── test-researcher-lifecycle.sh # Mock pick/timeout/publish/outcome/issue tests
-│   └── tests/                     # Unit tests for the two Python helpers
+│   └── tests/                     # Unit tests for the Python helpers and manifests; mocks.sh, the mock CLIs both integration tests use
 ├── skills/
 │   ├── research-workflow/         # Auto-trigger skill definition
 │   └── researcher*/               # Codex workflow adapters

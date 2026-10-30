@@ -222,12 +222,7 @@ publish_new_repo() {
         # Re-publishing this run: reuse the repo it already created.
         slug=$(cat "${RUN_DIR}/.publish_repo")
     else
-        # Truncate at word boundary (max ~40 chars for the topic portion)
-        topic_slug=$(echo "$TOPIC_LINE" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')
-        if [ "${#topic_slug}" -gt 40 ]; then
-            # Cut to 40 chars, then drop the partial word the cut left behind.
-            topic_slug=$(echo "$topic_slug" | head -c 40 | sed 's/-[^-]*$//')
-        fi
+        topic_slug=$(python3 "$LIB" slug --max-length 40 --word-boundary -- "$TOPIC_LINE")
         if ! slug=$(choose_repo_slug "research-${topic_slug}"); then
             publish_fail "no free repo name for research-${topic_slug} (all candidates hold other runs or have the wrong visibility)"
             return 1
@@ -384,7 +379,7 @@ publish_run() {
     # A stale link from an earlier attempt must never outlive a failed one.
     rm -f "${RUN_DIR}/.repo_url"
     check_free_space || return 0
-    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]; then
+    if is_followup_run; then
         publish_followup
     else
         publish_new_repo

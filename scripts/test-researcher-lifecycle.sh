@@ -126,37 +126,19 @@ esac
 MOCK_GH
 chmod +x "${MOCK_BIN}/gh"
 
-# --- mock provider -----------------------------------------------------------
+# --- mock provider and agent-mail --------------------------------------------
+# shellcheck source=tests/mocks.sh
+source "${SCRIPT_DIR}/tests/mocks.sh"
+install_mock_agent_mail "$MOCK_BIN"
+install_mock_email_composer "$MOCK_BIN"
+
 cat > "${MOCK_BIN}/claude" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
 prompt=$(cat)
 
 if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
-    run_dir=$(printf '%s\n' "$prompt" | sed -n 's/^The run directory is: \*\*\(.*\)\*\*$/\1/p' | head -1)
-    printf '%s\n' "$prompt" > "${run_dir}/.email-prompt.txt"
-    printf '%s\n' '<html><body>Mock research report</body></html>' > "${run_dir}/email-draft.html"
-    printf '%s\n' '[Auto-Research] Mock result — 1 pass, 0 fail' > "${run_dir}/email-subject.txt"
-    if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" != "true" ]; then
-        sid=""
-        prev=""
-        for arg in "$@"; do
-            [ "$prev" = "--session-id" ] && sid="$arg"
-            prev="$arg"
-        done
-        helper=$(printf '%s\n' "$prompt" | sed -n 's/^ *\(\/.*send-results-email\.sh\) .*$/\1/p' | head -1)
-        set +e
-        CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
-        rc=$?
-        if [ "$rc" -eq 3 ]; then
-            printf '%s\n' '<p>Revised after the review.</p>' >> "${run_dir}/email-draft.html"
-            CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
-            rc=$?
-        fi
-        set -e
-        [ "$rc" -eq 0 ] || exit "$rc"
-    fi
-    exit 0
+    exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
 fi
 
 argument=$(printf '%s\n' "$prompt" | sed -n 's/^The argument is: \*\*\([0-9][0-9]*\) \(.*\)\*\*$/\1|\2/p' | head -1)
@@ -228,37 +210,6 @@ mv "${state_file}.tmp" "$state_file"
 echo "Mock step ${step} complete."
 MOCK_PROVIDER
 chmod +x "${MOCK_BIN}/claude"
-
-cat > "${MOCK_BIN}/agent-mail" <<'MOCK_AGENT_MAIL'
-#!/usr/bin/env bash
-set -euo pipefail
-args=("$@")
-subject="" html="" unrouted=false images=""
-for ((i = 0; i < ${#args[@]}; i++)); do
-    case "${args[$i]}" in
-        --subject) subject="${args[$((i + 1))]}" ;;
-        --html) html="${args[$((i + 1))]}" ;;
-        --image) images="${images} ${args[$((i + 1))]##*/}" ;;
-        --unrouted) unrouted=true ;;
-    esac
-done
-[ "${1:-}" = "send" ] || { echo "mock agent-mail: only send" >&2; exit 2; }
-[ -s "$html" ] || { echo "mock agent-mail: missing HTML" >&2; exit 2; }
-who="${CLAUDE_CODE_SESSION_ID:-}"
-[ "$unrouted" = true ] && who=unrouted
-[ -n "$who" ] || { echo "agent-mail: not inside a Claude session and no --session given." >&2; exit 1; }
-if [ "${MOCK_REVIEW_PUSHBACK:-false}" = "true" ] && [ "$who" != "unrouted" ] \
-        && ! grep -qxF "$who" "${MOCK_EMAIL_LOG}.held" 2>/dev/null; then
-    printf '%s\n' "$who" >> "${MOCK_EMAIL_LOG}.held"
-    echo "agent-mail: NOT SENT: a reviewer with no context expects Titus to ask what this is."
-    echo "Fix before sending:"
-    echo "  1. Put the headline result in the first line."
-    exit 3
-fi
-printf -- '--subject %s | from=%s | images=%s | %s\n' "$subject" "$who" "${images# }" "$*" >> "$MOCK_EMAIL_LOG"
-echo "sent to self@example.test | subject '${subject}' | thread mock-thread | tag mocktag1 | from researcher (claude)"
-MOCK_AGENT_MAIL
-chmod +x "${MOCK_BIN}/agent-mail"
 
 # A mock gitleaks: flags each staged file holding MOCK-SECRET-VALUE, as the
 # real scan reports (JSON), unless MOCK_SECRET_UNSEEN (a scan that misses it).
@@ -549,13 +500,22 @@ assert_grep "No unprocessed research ideas found" "${CASE_DIR}/stdout.log"
 new_case followup
 make_bare_remote tbuckworth/research-prior \
     "README.md=prior readme" "prior-only.txt=kept" "state.md=prior state" \
-    "method-spec.md=## Salad" "experiments/exp-001/results.md=## Verdict: PASS"
-FOLLOWUP_BODY=$'Use a bigger model organism.\n\n---\nParent: #399 | Repo: https://github.com/tbuckworth/research-prior | Run: prior-run'
+    "method-spec.md=## Salad" "experiments/exp-001/results.md=## Verdict: PASS" \
+    "references.bib=@article{prior2026}" "citation-registry.md=| prior2026 | verified |"
+# The feedback has a rule of its own; only the footer's rule ends it.
+FOLLOWUP_BODY=$'Use a bigger model organism.\n\n---\n\nKeep the old metric.\n\n---\nParent: #399 | Repo: https://github.com/tbuckworth/research-prior | Run: prior-run'
 set_issues <(issue_json 400 "[Follow-up] Use a bigger model organism" "list:research-ideas,type:follow-up" "$FOLLOWUP_BODY")
 run_researcher
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 RUN=$(run_dir_for_issue 400)
-[ -f "${RUN}/prior/method-spec.md" ] || fail "prior method-spec.md not carried over"; ok
+for path in method-spec.md references.bib citation-registry.md experiments/exp-001/results.md; do
+    [ -f "${RUN}/prior/${path}" ] || fail "prior ${path} not carried over"
+    ok
+done
+assert_grep "Keep the old metric" "${RUN}/followup-context.md"
+assert_grep "Keep the old metric" "${RUN}/topic.txt"
+assert_no_grep "Parent: #399" "${RUN}/topic.txt"
+assert_eq "$(field prior_run_id "$RUN")" "prior-run" "prior_run_id"
 grep -qE '^followup_key: [0-9a-f]{16}$' "${RUN}/state.md" || fail "followup_key not recorded"; ok
 BARE="${REMOTES}/tbuckworth/research-prior.git"
 BRANCH=$(git --git-dir="$BARE" for-each-ref --format='%(refname:short)' 'refs/heads/followup-*')
@@ -847,6 +807,35 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Same 
 run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Same topic"
 assert_eq "$(ls -d "$OUT"/*-same-topic* | wc -l | tr -d ' ')" "2" "run directories"
 ls -d "$OUT"/*-same-topic-2 > /dev/null || fail "second run not suffixed"; ok
+# A topic whose 60-character cut ends between two words names its run without
+# a trailing hyphen.
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- \
+    "Does gradient routing localise unwanted capabilities in toy models"
+ls -d "$OUT"/*-does-gradient-routing-localise-unwanted-capabilities-in-toy > /dev/null \
+    || fail "run directory not named by the trimmed slug: $(ls "$OUT")"; ok
+
+# =============================================================================
+# 17b. state.md values a model quoted or commented are read as YAML values: a
+#      quoted terminal status is not resumed, and a quoted run_id does not
+#      leak its quotes into the reports.
+# =============================================================================
+new_case quoted-state
+write_run 2026-01-16-quoted-done 11 '"complete"  # report compiled'
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Fresh quoted topic"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "1 2 3 4 5 6 7 8 9 10 11 " "a fresh run, not the finished one"
+ls -d "$OUT"/*-fresh-quoted-topic > /dev/null || fail "no run for the topic"; ok
+# A topic with quotes and backslashes is written to state.md and read back intact.
+QUOTED_TOPIC='Is "honesty" one direction? Compare C:\new and \"x\"'
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "$QUOTED_TOPIC"
+RUN=$(ls -d "$OUT"/*-is-honesty-one-direction-*)
+assert_eq "$(python3 "$LIB" state-field "${RUN}/state.md" topic)" "$QUOTED_TOPIC" "topic round trip"
+new_case quoted-run-id
+write_run 2026-01-15-quoted 2 research_complete autonomous 950
+sed -i 's/^run_id: .*/run_id: "2026-01-15-quoted"/' "${OUT}/2026-01-15-quoted/state.md"
+run_researcher RESEARCHER_TIMEOUT_SECONDS=-1 -- "Ignored topic"
+assert_eq "$RC" "4" "exit code"
+assert_grep "^<!-- researcher-run: 2026-01-15-quoted outcome: failed -->" "$(ls "${CASE_DIR}"/comments/950-*.md)"
 
 # =============================================================================
 # 18. A model rewrite that drops run_id/topic/issue_number does not silently

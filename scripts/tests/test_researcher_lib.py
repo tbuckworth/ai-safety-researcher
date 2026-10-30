@@ -51,6 +51,145 @@ PREFLIGHT_OK = """| Check | Status | Evidence |
 PREFLIGHT_BAD = PREFLIGHT_OK.replace("| training-sanity | N/A | none |", "| training-sanity | FAIL | QuestionQuestion... |")
 
 
+def run_lib(*args, stdin=""):
+    return subprocess.run([sys.executable, str(SCRIPTS / "researcher_lib.py"), *args],
+                          input=stdin, capture_output=True, text=True)
+
+
+class FrontmatterTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = Path(self.tmp.name) / "state.md"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_values_are_yaml_scalars(self):
+        # A model may quote any value or add a comment; neither may leak into
+        # run ids, branch names or status checks.
+        write(self.state, '---\nrun_id: "2026-01-15-quoted"\nstatus: complete  # report compiled\n'
+                          "mode: 'autonomous'\ntopic: \"say \\\"hi\\\" to C:\\\\tmp\"\ncurrent_step: \"3\"\n"
+                          "status: failed\n---\n\nstatus: body line\n")
+        fields = lib.read_frontmatter(self.state)
+        self.assertEqual(fields["run_id"], "2026-01-15-quoted")
+        self.assertEqual(fields["status"], "complete")
+        self.assertEqual(fields["mode"], "autonomous")
+        self.assertEqual(fields["topic"], 'say "hi" to C:\\tmp')
+        self.assertEqual(fields["current_step"], "3")
+
+    def test_state_field_cli(self):
+        write(self.state, '---\nrun_id: "r1"\nissue_number: 7\n---\nowner: body\n')
+        self.assertEqual(run_lib("state-field", str(self.state), "run_id").stdout, "r1\n")
+        self.assertEqual(run_lib("state-field", str(self.state), "owner").stdout, "\n")
+        missing = run_lib("state-field", str(self.state.parent / "nope.md"), "run_id")
+        self.assertNotEqual(missing.returncode, 0)
+        self.assertIn("nope.md", missing.stderr)
+
+    def test_terminal_statuses_cli(self):
+        self.assertEqual(run_lib("terminal-statuses").stdout.split(), list(lib.TERMINAL_STATUSES))
+
+
+class BackendLabelTest(unittest.TestCase):
+    def test_labels_come_from_the_backend_list(self):
+        for backend in lib.BACKENDS:
+            self.assertIn(lib.status_label(backend, "researching"), lib.RESEARCHING_LABELS)
+            self.assertIn(lib.status_label(backend, "processed"), lib.BUSY_LABELS)
+        self.assertEqual(run_lib("status-label", "codex", "researching").stdout, "status:codex-researching\n")
+        self.assertEqual(run_lib("backends").stdout.split(), list(lib.BACKENDS))
+        self.assertNotEqual(run_lib("status-label", "gemini", "researching").returncode, 0)
+
+    def test_claimed(self):
+        free = {"state": "OPEN", "labels": [{"name": "list:research-ideas"}]}
+        processed = {"state": "OPEN", "labels": [{"name": "status:claude-processed"}]}
+        researching = {"state": "OPEN", "labels": [{"name": "status:codex-researching"}]}
+        closed = {"state": "CLOSED", "labels": []}
+        self.assertEqual(lib.claimed_reason(free, explicit=False), "")
+        self.assertIn("status:claude-processed", lib.claimed_reason(processed, explicit=False))
+        # An explicit request may re-run a finished issue, never one in progress.
+        self.assertEqual(lib.claimed_reason(processed, explicit=True), "")
+        self.assertIn("status:codex-researching", lib.claimed_reason(researching, explicit=True))
+        self.assertIn("closed", lib.claimed_reason(closed, explicit=True))
+        self.assertEqual(run_lib("claimed", stdin=json.dumps(free)).stdout, "")
+        self.assertIn("status:claude-processed", run_lib("claimed", stdin=json.dumps(processed)).stdout)
+        self.assertEqual(run_lib("claimed", "--explicit", stdin=json.dumps(processed)).stdout, "")
+
+
+class FollowupIssueTest(unittest.TestCase):
+    FEEDBACK = "Use a bigger model organism.\n\n---\n\nThe old one was too small.\n"
+
+    def build(self, feedback=FEEDBACK, **meta):
+        args = dict(parent="1874", repo_url="https://github.com/o/research-x", run_id="2026-04-03-x")
+        args.update(meta)
+        return lib.followup_issue(feedback, **args)
+
+    def test_round_trip_keeps_feedback_with_a_rule(self):
+        built = self.build()
+        self.assertEqual(built["title"], "[Follow-up] Use a bigger model organism.")
+        meta = lib.followup_meta({"title": built["title"], "body": built["body"],
+                                  "labels": [{"name": lib.FOLLOWUP_LABEL}]})
+        self.assertEqual(meta, {"is_followup": True, "title": "Use a bigger model organism.",
+                                "parent_issue": "1874", "prior_repo": "https://github.com/o/research-x",
+                                "prior_run_id": "2026-04-03-x", "feedback": self.FEEDBACK.strip()})
+
+    def test_key_is_recorded_and_matches_the_body(self):
+        built = self.build()
+        self.assertIn(f"<!-- followup-key: {built['key']} -->", built["body"])
+        self.assertEqual(lib.followup_key(built["body"]), built["key"])
+        self.assertEqual(lib.compute_followup_key(built["body"]), built["key"])
+
+    def test_body_matches_issues_already_filed(self):
+        # Issues filed before the body was built here must keep their key, or a
+        # second filing of the same request is not recognised as a duplicate.
+        built = self.build("The experimental setup needs a more realistic model organism. Key issues: ...\n\n"
+                           "The core Salad vs Soup comparison methodology was sound.\n",
+                           repo_url="https://github.com/tbuckworth/research-salad-vs-soup-does-token-interleaving",
+                           run_id="2026-04-03-salad-vs-soup")
+        self.assertEqual(built["key"], lib.followup_key(DUP_BODY))
+
+    def test_no_metadata_no_footer(self):
+        built = self.build("Just feedback.", parent="", repo_url="", run_id="")
+        self.assertNotIn("Parent:", built["body"])
+        meta = lib.followup_meta({"title": built["title"], "body": built["body"],
+                                  "labels": [{"name": lib.FOLLOWUP_LABEL}]})
+        self.assertEqual((meta["prior_repo"], meta["feedback"]), ("", "Just feedback."))
+
+    def test_title_is_cut_at_70_characters(self):
+        self.assertEqual(self.build("x" * 100)["title"], "[Follow-up] " + "x" * 70)
+
+    def test_plain_issue_is_not_a_followup(self):
+        meta = lib.followup_meta({"title": "Idea", "body": DUP_BODY, "labels": []})
+        self.assertFalse(meta["is_followup"])
+
+    def test_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            feedback = Path(tmp) / "feedback.txt"
+            write(feedback, self.FEEDBACK)
+            out = run_lib("followup-issue", "--feedback-file", str(feedback), "--parent", "1874",
+                          "--repo-url", "https://github.com/o/research-x", "--run-id", "2026-04-03-x")
+            built = json.loads(out.stdout)
+            self.assertEqual(built, self.build())
+            issue_json = json.dumps({"number": 5, "title": built["title"], "body": built["body"],
+                                     "labels": [{"name": lib.FOLLOWUP_LABEL}]})
+            meta = json.loads(run_lib("followup-meta", stdin=issue_json).stdout)
+            self.assertEqual(meta["feedback"], self.FEEDBACK.strip())
+
+
+class SlugifyTest(unittest.TestCase):
+    def test_cut_never_leaves_a_hyphen(self):
+        # "gradient-routing-" is what a plain 17-character cut used to leave.
+        self.assertEqual(lib.slugify("Gradient routing persistence", 17, word_boundary=False), "gradient-routing")
+        self.assertEqual(lib.slugify("  Does X (really) help?  ", 60, word_boundary=False), "does-x-really-help")
+
+    def test_word_boundary_drops_the_partial_word(self):
+        self.assertEqual(lib.slugify("Gradient routing persistence", 20, word_boundary=True), "gradient-routing")
+        self.assertEqual(lib.slugify("Gradient routing persistence", 16, word_boundary=True), "gradient-routing")
+        self.assertEqual(lib.slugify("Gradient routing persistence", 20, word_boundary=False), "gradient-routing-per")
+
+    def test_cli(self):
+        self.assertEqual(run_lib("slug", "--max-length", "40", "--word-boundary", "--", "-Leading dash").stdout,
+                         "leading-dash\n")
+
+
 class FollowupKeyTest(unittest.TestCase):
     def test_identical_requests_share_a_key(self):
         self.assertEqual(lib.followup_key(DUP_BODY), lib.followup_key(DUP_BODY + "\n\n"))
@@ -169,6 +308,23 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(failed["outcome"], "unpublished")
         self.assertTrue(any("disk nearly full" in r for r in failed["reasons"]))
 
+    def test_success_flag(self):
+        self.add_exp("exp-001", "PASS")
+        self.assertTrue(self.outcome()["success"])
+        self.assertTrue(self.outcome(publish_state="skipped")["success"])
+        self.assertFalse(self.outcome(publish_state="failed")["success"])
+        self.assertFalse(self.outcome(status="failed")["success"])
+        self.assertFalse(self.outcome(paused=True, publish_state="skipped")["success"])
+
+    def test_findings_are_collected(self):
+        self.add_exp("exp-001", "PASS")
+        write(self.run / "next-steps.md", "**Outcome**: It holds.\n\n## Ranked Next Steps\n\n### 1. Scale up\n")
+        write(self.run / "audit" / "results-audit.md", "## Overall disposition: HONEST-POSITIVE\n")
+        facts = self.outcome()
+        self.assertEqual((facts["findings"], facts["next_step_titles"], facts["audit"]),
+                         ("It holds.", ["Scale up"], "HONEST-POSITIVE"))
+        self.assertEqual(json.loads(json.dumps(facts)), facts)
+
     def test_negative_result_is_still_a_result(self):
         self.add_exp("exp-001", "FAIL")
         self.assertEqual(self.outcome()["outcome"], "complete")
@@ -263,6 +419,17 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("INCONCLUSIVE (stated FAIL, but pre-flight failed: training-sanity)", text)
         self.assertIn("Results audit: HONEST-NEGATIVE (true-null)", text)
         self.assertIn("1. Validate the metric at t=0", text)
+
+    def test_comment_is_formatted_from_the_outcome_alone(self):
+        facts = lib.compute_outcome(self.run, status="complete", timed_out=False, publish_state="pushed")
+        (self.run / "next-steps.md").unlink()
+        (self.run / "audit" / "results-audit.md").unlink()
+        text = lib.issue_comment(facts, run_dir=self.run, run_id="2026-10-12-topic",
+                                 repo_web="https://github.com/o/research-x", branch="main", agent_label="Claude fable",
+                                 host="desktop", is_followup=False, visibility="private")
+        self.assertIn("Routing localises, persistence untested.", text)
+        self.assertIn("Results audit: HONEST-NEGATIVE (true-null)", text)
+        self.assertIn("2. Capability-pressure RL", text)
 
     def test_unpublished_comment_has_no_dead_link(self):
         text = self.comment("failed", "")

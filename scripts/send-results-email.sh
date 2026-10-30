@@ -5,7 +5,7 @@
 #   send-results-email.sh RUN_DIR [--unrouted]
 #
 # Reads, in RUN_DIR: email-subject.txt (one line), email-draft.html,
-# run-outcome.json (a run that is not `complete` gets its outcome in front of
+# run-outcome.json (a run whose `success` is false gets its outcome in front of
 # the subject, e.g. "[UNPUBLISHED] ...") and the optional email-images.txt
 # (NAME=relative/path.png per line, placed in the HTML as <img src="cid:NAME">).
 #
@@ -43,16 +43,14 @@ if [ ! -x "$AGENT_MAIL" ]; then
 fi
 
 subject=$(head -1 "${RUN_DIR}/email-subject.txt" | tr -d '\r')
-outcome=$(jq -r '.outcome // empty' "${RUN_DIR}/run-outcome.json" 2>/dev/null || true)
-case "$outcome" in
-    ""|complete|complete-local) ;;
-    *)
-        # Deterministic, whatever the composer wrote: an unpublished or
-        # result-less run is visible from the inbox.
-        prefix="[$(printf '%s' "$outcome" | tr '[:lower:]' '[:upper:]')]"
-        case "$subject" in "$prefix"*) ;; *) subject="${prefix} ${subject}" ;; esac
-        ;;
-esac
+# The outcome of a run that did not succeed (run-outcome.json's `success`).
+outcome=$(jq -r 'select(.success != true) | .outcome // empty' "${RUN_DIR}/run-outcome.json" 2>/dev/null || true)
+if [ -n "$outcome" ]; then
+    # Deterministic, whatever the composer wrote: an unpublished or
+    # result-less run is visible from the inbox.
+    prefix="[$(printf '%s' "$outcome" | tr '[:lower:]' '[:upper:]')]"
+    case "$subject" in "$prefix"*) ;; *) subject="${prefix} ${subject}" ;; esac
+fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/researcher-email.XXXXXX")
 trap 'rm -rf "$work"' EXIT

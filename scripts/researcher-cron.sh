@@ -57,6 +57,10 @@ GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-https://github.com}"
 MIN_FREE_MB="${RESEARCHER_MIN_FREE_MB:-1024}"
 MAX_FILE_MB="${RESEARCHER_MAX_FILE_MB:-50}"
 LIB="${SCRIPT_DIR}/researcher_lib.py"
+if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
+    echo "ERROR: python3 and ${LIB} are required. Exiting." >&2
+    exit 1
+fi
 # Per-step retry: a connection drop mid-step
 # leaves state.md un-advanced; re-running the step from current state recovers it.
 # Bounded so a genuinely stuck step still fails instead of looping forever.
@@ -102,6 +106,7 @@ CODEX_IGNORE_USER_CONFIG="${RESEARCHER_CODEX_IGNORE_USER_CONFIG:-true}"
 ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
 PAUSED=false
 
+# One branch per backend in researcher_lib.py BACKENDS (and in runner/provider.sh).
 case "$BACKEND" in
     claude)
         PROVIDER_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
@@ -126,13 +131,15 @@ case "$BACKEND" in
         COMMIT_ATTRIBUTION="Generated-By: OpenAI Codex (${MODEL}, ${CODEX_REASONING})"
         ;;
     *)
-        echo "ERROR: RESEARCHER_BACKEND must be 'claude' or 'codex', got '${BACKEND}'." >&2
+        echo "ERROR: RESEARCHER_BACKEND must be one of: $(python3 "$LIB" backends); got '${BACKEND}'." >&2
         exit 2
         ;;
 esac
 
-PROCESSING_LABEL="status:${BACKEND}-researching"
-PROCESSED_LABEL="status:${BACKEND}-processed"
+PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
+PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
+# The workflow statuses that end a run (is_terminal_status).
+TERMINAL_STATUSES=$(python3 "$LIB" terminal-statuses)
 EMAIL_TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
 export RESEARCHER_EMAIL_TO="$EMAIL_TO"
 # The results email goes from the agents' mail account (agent-mail), never from
@@ -285,11 +292,6 @@ case "$REPO_VISIBILITY" in
         ;;
 esac
 
-if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
-    log "ERROR: python3 and ${LIB} are required. Exiting."
-    exit 1
-fi
-
 log "Agent backend: ${BACKEND}; model: ${MODEL}"
 
 # Check if GPU is busy (>500MB VRAM used by any single process = busy)
@@ -307,7 +309,9 @@ fi
 # --- Find or create run ---
 RUN_DIR=""
 ISSUE_NUMBER=""
+PICKED=""
 IS_FOLLOWUP=false
+FOLLOWUP_TITLE=""
 PARENT_ISSUE=""
 PRIOR_REPO_URL=""
 PRIOR_RUN_ID=""
@@ -323,7 +327,8 @@ elif ! is_true "$NO_RESUME"; then
 fi
 if [ -n "$IN_PROGRESS" ]; then
     RUN_DIR="$IN_PROGRESS"
-    STORED_BACKEND=$(grep '^agent_backend:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' || true)
+    STATE_FILE="${RUN_DIR}/state.md"
+    STORED_BACKEND=$(state_field "$STATE_FILE" agent_backend)
     if [ -n "$STORED_BACKEND" ] \
         && [ "$STORED_BACKEND" != "$BACKEND" ] \
         && ! is_true "$ALLOW_BACKEND_SWITCH"; then
@@ -331,13 +336,16 @@ if [ -n "$IN_PROGRESS" ]; then
         log "Resume with RESEARCHER_BACKEND=${STORED_BACKEND}, or set RESEARCHER_ALLOW_BACKEND_SWITCH=true deliberately."
         exit 2
     fi
-    ISSUE_NUMBER=$(grep '^issue_number:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' | tr -d "\"'" || true)
+    # The run's own wrapper-owned fields (see runtime_fields in runner/state.sh),
+    # which ensure_runtime_state writes back after every step.
+    ISSUE_NUMBER=$(state_field "$STATE_FILE" issue_number)
     [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
-    # Check if the in-progress run is a follow-up
-    if grep -q '^is_followup: true' "${RUN_DIR}/state.md" 2>/dev/null; then
+    if [ "$(state_field "$STATE_FILE" is_followup)" = true ]; then
         IS_FOLLOWUP=true
-        PRIOR_REPO_URL=$(grep '^prior_repo:' "${RUN_DIR}/state.md" | head -1 | sed 's/prior_repo: *//' || true)
-        PARENT_ISSUE=$(grep '^parent_issue:' "${RUN_DIR}/state.md" | head -1 | awk '{print $2}' || true)
+        PARENT_ISSUE=$(state_field "$STATE_FILE" parent_issue)
+        PRIOR_REPO_URL=$(state_field "$STATE_FILE" prior_repo)
+        PRIOR_RUN_ID=$(state_field "$STATE_FILE" prior_run_id)
+        FOLLOWUP_KEY=$(state_field "$STATE_FILE" followup_key)
     fi
     if [ -n "${RESEARCHER_ISSUE:-}" ] && [ "${ISSUE_NUMBER:-}" != "$RESEARCHER_ISSUE" ]; then
         # Finishing in-flight work first is right, but doing it silently is not:
@@ -351,11 +359,7 @@ elif [ -n "$TOPIC" ]; then
     create_run_dir
 else
     pick_issue
-    if [ "$IS_FOLLOWUP" = true ] && [ -n "$PRIOR_REPO_URL" ]; then
-        setup_followup_run
-    else
-        create_run_dir
-    fi
+    create_run_dir
 fi
 
 # --- Step loop ---
@@ -367,12 +371,14 @@ AUDIT_ROUNDS=0
 # A timeout is recorded in state.md, so a run paused during its timeout
 # fast-track still reports the skipped audit when it is resumed.
 TIMED_OUT=false
-grep -q '^timed_out: true' "${RUN_DIR}/state.md" && TIMED_OUT=true
+if [ "$(state_field "${RUN_DIR}/state.md" timed_out)" = true ]; then
+    TIMED_OUT=true
+fi
 
 # The run's owner (RESEARCHER_OWNER when it was created) stays in state.md and is
 # restored after every step, so a plain cron never resumes a run someone else
 # runs under its own guard and budget.
-RUN_DIR_OWNER=$({ grep '^owner:' "${RUN_DIR}/state.md" || true; } | head -1 | awk '{print $2}')
+RUN_DIR_OWNER=$(state_field "${RUN_DIR}/state.md" owner)
 [ -n "$RUN_DIR_OWNER" ] || RUN_DIR_OWNER="$RUN_OWNER"
 if [ -n "$RUN_DIR_OWNER" ]; then
     upsert_frontmatter_field "owner" "$RUN_DIR_OWNER" || true
@@ -476,9 +482,9 @@ done
 
 # --- Post-completion: publish to GitHub (git init in place, no copying) ---
 STATUS=$(get_status)
-RUN_ID=$({ grep '^run_id:' "${RUN_DIR}/state.md" || true; } | head -1 | sed 's/run_id: *//')
-[ -n "$RUN_ID" ] || RUN_ID=$(basename "$RUN_DIR")
-TOPIC_LINE=$({ grep '^topic:' "${RUN_DIR}/state.md" || true; } | head -1 | sed 's/topic: *"*//;s/"*$//')
+# The run id is the directory name; ensure_runtime_state keeps run_id in step.
+RUN_ID=$(basename "$RUN_DIR")
+TOPIC_LINE=$(state_field "${RUN_DIR}/state.md" topic)
 [ -n "$TOPIC_LINE" ] || TOPIC_LINE=$(head -1 "${RUN_DIR}/topic.txt" 2>/dev/null || true)
 [ -n "$TOPIC_LINE" ] || TOPIC_LINE="$RUN_ID"
 
@@ -524,7 +530,7 @@ OUTCOME_JSON=$(python3 "$LIB" outcome \
     --publish-error "$PUBLISH_ERROR" \
     --paused "$PAUSED") \
     || OUTCOME_JSON=$(jq -n --arg s "$STATUS" --arg p "$PUBLISH_STATE" \
-        '{outcome: "unknown", status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
+        '{outcome: "unknown", success: false, status: $s, publish_state: $p, reasons: ["the outcome could not be computed; see the cron log"]}')
 # On a full disk these writes fail; that must not stop the email and the
 # issue update that report it.
 printf '%s\n' "$OUTCOME_JSON" > "${RUN_DIR}/run-outcome.json" \

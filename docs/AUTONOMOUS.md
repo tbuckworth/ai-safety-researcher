@@ -277,7 +277,7 @@ never fails a step.
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
 - **Repos**: Created as `tbuckworth/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
-- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`:
+- **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0:
 
   | Outcome | Meaning | Exit |
   |---------|---------|------|
@@ -403,10 +403,11 @@ since a redesign would answer a question that was never actually asked.
 
 ### Follow-Up Issue Format
 
-The issue body is pure free-text feedback. Metadata is in a single footer line:
+The title is `[Follow-up] ` and the feedback's first line. The body is the free-text feedback, then the metadata footer and the follow-up key; `scripts/researcher_lib.py` (`followup-issue`, `followup-meta`) writes and reads both, and only the footer's own `---` ends the feedback:
 ```
 ---
 Parent: #42 | Repo: https://github.com/tbuckworth/research-foo | Run: 2026-04-03-foo
+<!-- followup-key: <16 hex digits> -->
 ```
 
 ### Follow-Up Run Directory

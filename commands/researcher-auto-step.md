@@ -147,7 +147,7 @@ Do this yourself — no agent needed.
 
    If the topic leaves a definition genuinely open, choose the most literal reading of the source wording, and say so. A follow-up keeps the prior spec unless the feedback changes a definition, in which case it records the change.
 
-4. Write `state.md`. Preserve any follow-up fields from the existing state.md (`is_followup`, `parent_issue`, `prior_repo`, `prior_run_id`). Set `current_step` based on `followup_focus` (or `1` for non-follow-ups and for a construct-redesign re-entry):
+4. Write `state.md`, keeping every frontmatter field the existing state.md has, including any the template below does not show. Set `current_step` based on `followup_focus` (or `1` for non-follow-ups and for a construct-redesign re-entry):
    ```yaml
    ---
    run_id: <from existing state.md>

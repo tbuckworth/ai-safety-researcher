@@ -90,14 +90,14 @@ run_step() {
             limit_hit=true
         fi
 
-        # Success = the step advanced, reached a genuine terminal status, OR (for the
+        # Success = the step advanced, reached a terminal status, OR (for the
         # audit step, which by design keeps current_step at 10 across rounds) the round
         # actually completed. We proxy "completed" with a clean provider exit and no
         # limit notice: a dropped connection exits non-zero AND leaves the status
         # unchanged, so without this gate a drop during Step 10 would return success
         # here and silently burn an AUDIT_ROUNDS increment upstream instead of retrying.
         if [ "$new_step" != "$prev_step" ] \
-            || [ "$new_status" = "complete" ] || [ "$new_status" = "failed" ] \
+            || is_terminal_status "$new_status" \
             || { [ "$limit_hit" = false ] \
                  && [ "$exit_code" -eq 0 ] \
                  && [ "$step" -eq 10 ] \

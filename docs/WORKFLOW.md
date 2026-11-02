@@ -585,10 +585,9 @@ Lambda table computed. 6 components identified, ordered by information rate.
 
 ### Context Recovery
 
-If the orchestrator loses context (due to context compaction), it should:
+The orchestrator must re-read `state.md` at the start of every step. If it
+loses context (through context compaction), it must:
 
-1. Read `state.md` to determine current step
-2. Read relevant artefact files for the current step
-3. Resume from where it left off
-
-The orchestrator should re-read `state.md` at the start of every major step to ensure it has the latest state.
+1. Read `state.md` to determine the current step.
+2. Read the artefact files the current step uses.
+3. Resume from where it left off.

@@ -110,23 +110,27 @@ Once the user picks a direction:
    don't change, and pushes to a branch on the existing repo.
 
 5. **Offer to start it now** rather than waiting for the next scheduled run. Ask
-   first — this launches a multi-hour job:
+   first — this launches a multi-hour job. Before launching, settle its settings:
+   - Take the backend and the compute-profile preset from the prior run's
+     `run-config.json` (Setup step 3): a follow-up that silently drops from a
+     cloud profile to the local GPU will quietly fail to run the experiment that
+     was proposed.
+   - When the prior run's profile is not a preset (its own text, or an older run
+     with only the expanded text in `state.md`), ask which preset to use.
+   - If the chosen next step needs more than the prior profile provided, say so
+     and name the profile it actually needs.
+   - A paid preset also needs `RESEARCHER_COMPUTE_BUDGET_USD` (the runner exits 2
+     without it): ask the user for the budget, offering the prior run's, and add
+     it to the command.
+
+   Then run the runner in a `tmux` session, since it runs for hours, with the
+   runner checkout as above:
    ```bash
-   RESEARCHER_BACKEND=<the prior run's backend> \
-   RESEARCHER_COMPUTE_PROFILE=<the prior run's preset> \
-   RESEARCHER_ISSUE=<new issue number> \
-     <runner checkout>/scripts/researcher-cron.sh
+   tmux new-session -d -s research-<new issue number> \
+     "RESEARCHER_BACKEND=<backend> RESEARCHER_COMPUTE_PROFILE=<preset> RESEARCHER_ISSUE=<new issue number> <runner checkout>/scripts/researcher-cron.sh"
    ```
-   with the runner checkout as above. Take the backend and the compute-profile
-   preset from the prior run's `run-config.json` (Setup step 3): a follow-up that
-   silently drops from a cloud profile to the local GPU will quietly fail to run
-   the experiment that was proposed. A paid preset also needs
-   `RESEARCHER_COMPUTE_BUDGET_USD` (the runner exits 2 without it): ask the user
-   for the budget, offering the prior run's. When the prior run's profile is not a
-   preset (its own text, or an older run with only the expanded text in
-   `state.md`), ask which preset to use. If the chosen next step needs more than
-   the prior profile provided, say so and name the profile it actually needs.
-   Long runs belong in `tmux`.
+   Tell the user the session name, and that `tmux attach -t research-<new issue number>`
+   shows the run.
 
 The user may queue several directions in one session — each is its own issue.
 

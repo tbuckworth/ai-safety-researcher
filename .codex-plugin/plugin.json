@@ -1,6 +1,6 @@
 {
   "name": "researcher",
-  "version": "0.6.6+codex.20261102120000",
+  "version": "0.6.7+codex.20261102120000",
   "description": "Run Titus's structured AI-safety research workflow from literature search through results audit and paper writing.",
   "author": {
     "name": "Titus"

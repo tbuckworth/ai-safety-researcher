@@ -9,14 +9,14 @@ specialised leaf-node agents for focused work.
 
 ## Design Principles
 
-1. **Hub-and-spoke** — The Claude `/researcher` command or Codex `researcher`
+1. **Hub-and-spoke**: The Claude `/researcher` command or Codex `researcher`
    skill is the sole hub. It handles all user interaction and spawns all
    agents. Agents are leaf workers that never interact with users or spawn
    other agents.
-2. **Fail fast** — The Steinhardt decomposition method orders experiments by information rate (lambda), testing the riskiest components first.
-3. **State persistence** — Every step writes to `state.md`, enabling recovery from context compaction.
-4. **Iterative** — The workflow supports looping between steps when the user or the evidence demands it.
-5. **Transparency** — Every step produces markdown artefacts that the user can inspect, steer, and override.
+2. **Fail fast**: The Steinhardt decomposition method orders experiments by information rate (lambda), testing the riskiest components first.
+3. **State persistence**: Every step writes to `state.md`, enabling recovery from context compaction.
+4. **Iterative**: The workflow supports looping between steps when the user or the evidence demands it.
+5. **Transparency**: Every step produces markdown artefacts that the user can inspect, steer, and override.
 
 ## Pipeline
 
@@ -26,7 +26,7 @@ specialised leaf-node agents for focused work.
     ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                        ORCHESTRATOR                              │
-│  (commands/researcher.md — handles all user dialogue & loops)    │
+│  (commands/researcher.md: handles all user dialogue & loops)     │
 │                                                                  │
 │  Step 1: Clarify ◄──────────────────────────────────────────┐    │
 │    │ (direct dialogue)                                      │    │
@@ -93,12 +93,12 @@ specialised leaf-node agents for focused work.
 | criteria | `agents/criteria.md` | 4 | fable | deep | Identifies SOTA, success criteria, benchmarks |
 | decomposition | `agents/decomposition.md` | 5 | fable | deep | Steinhardt decomposition: components, P_success, T, lambda ordering |
 | assumption-challenger | `agents/assumption-challenger.md` | 6 | fable | deep | Surfaces unstated assumptions in the research plan |
-| mentor-review | `agents/mentor-review.md` | 6 | fable | deep | Senior researcher review — simpler paths, blind spots, honest feedback |
-| pre-mortem | `agents/pre-mortem.md` | 6 | fable | deep | Failure scenario analysis — root causes, early warnings, mitigations |
+| mentor-review | `agents/mentor-review.md` | 6 | fable | deep | Senior researcher review: simpler paths, blind spots, honest feedback |
+| pre-mortem | `agents/pre-mortem.md` | 6 | fable | deep | Failure scenario analysis: root causes, early warnings, mitigations |
 | experiment | `agents/experiment.md` | 9 | fable | deep | Executes a single experiment, reports pass/fail |
 | results-auditor | `agents/results-auditor.md` | 10 | fable | deep | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
 | report | `agents/report.md` | 11 | fable | deep | Compiles all artefacts into LaTeX paper with real BibTeX |
-| knowledge | `agents/knowledge.md` | 2, 3, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
+| knowledge | `agents/knowledge.md` | 2, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking; see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
 
 Codex `fast` and `deep` are runtime roles (`templates/codex-adapter.md`), whose
 models are settings with defaults in `config/researcher.env`, so they change
@@ -106,86 +106,17 @@ without changing shared agent files.
 
 ## Directory Layout
 
-```
-researcher/
-├── .claude/
-│   └── settings.local.json         # Plugin-specific permissions
-├── .claude-plugin/
-│   └── plugin.json                  # Claude plugin manifest
-├── .codex-plugin/
-│   └── plugin.json                  # Codex plugin manifest
-├── commands/
-│   ├── researcher.md                # Interactive orchestrator (11-step workflow)
-│   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
-│   ├── researcher-auto-next-steps.md  # next-steps.md for a run that ended without one
-│   └── researcher-auto-email.md     # Autonomous email composer
-├── config/
-│   ├── researcher.env               # Deployment defaults, read by scripts/config.sh
-│   ├── compute-profiles/            # Compute-profile presets
-│   └── paid-compute.md              # The rules every paid preset includes
-├── scripts/
-│   ├── researcher-cron.sh           # Dual-backend state machine and post-processing
-│   └── test-researcher-backends.sh  # Mock provider integration tests
-├── skills/
-│   ├── research-workflow/           # Shared auto-trigger
-│   └── researcher*/                 # Codex command adapters
-├── agents/
-│   ├── search-planner.md            # Step 2: Search plan creation
-│   ├── search.md                    # Step 2: Single search execution
-│   ├── novelty-analyst.md           # Step 3: Novelty assessment
-│   ├── criteria.md                  # Step 4: Success criteria
-│   ├── decomposition.md             # Step 5: Steinhardt decomposition
-│   ├── assumption-challenger.md     # Step 6: Assumption analysis
-│   ├── mentor-review.md             # Step 6: Senior researcher review
-│   ├── pre-mortem.md                # Step 6: Failure scenario analysis
-│   ├── experiment.md                # Step 9: Experiment execution
-│   ├── results-auditor.md           # Step 10: Independent results audit
-│   └── report.md                    # Step 11: LaTeX paper compilation
-├── templates/
-│   ├── preamble.tex                 # LaTeX preamble
-│   ├── paper.tex                    # Main document template
-│   ├── Makefile                     # LaTeX build file
-│   └── codex-adapter.md             # Codex translation of the workflow
-├── hooks/
-├── docs/
-│   ├── ARCHITECTURE.md              # This file
-│   ├── AUTONOMOUS.md                # Autonomous mode setup and reference
-│   ├── DIAGRAM.md                   # Mermaid architecture diagrams
-│   ├── STANCE.md                    # Canonical truth-seeking Voice block + KEEP/REFRAME rubric
-│   └── WORKFLOW.md                  # Detailed 11-step workflow specification
-├── output/                          # Research artefacts (gitignored)
-├── logs/                            # Autonomous mode logs (gitignored)
-├── CLAUDE.md                        # Claude project context
-├── AGENTS.md                        # Codex/project context
-└── .gitignore
-```
+The repo map in [`AGENTS.md`](../AGENTS.md) lists the directories and entry points.
 
 ## State Management
 
-Every run writes `output/<run-id>/state.md` with YAML frontmatter tracking:
-- Current step and status
-- User clarifications and decisions
-- Novelty verdict
-- Criteria approval
-- Fail-fast agreement
-- Lambda table (component decomposition)
-- Experiment results
-
-The orchestrator re-reads `state.md` at the start of each step and after any context compaction event, enabling seamless recovery.
+Every run writes `output/<run-id>/state.md`: YAML frontmatter for the
+machine-readable state and a narrative body, whose fields
+[`WORKFLOW.md`](WORKFLOW.md#state-management) gives. The orchestrator re-reads
+it at the start of each step and after a context compaction, and resumes from
+the step it records.
 
 ## Output Artefacts
 
-Each run produces artefacts in `output/<run-id>/`:
-
-- `state.md` — Workflow state and history
-- `search-plan.md` — Approved search plan
-- `literature/` — Search results and synthesis
-- `novelty-assessment.md` — Novelty analysis
-- `success-criteria.md` — SOTA, benchmarks, publishability bar
-- `decomposition.md` — Lambda table and component details
-- `challenge/` — Assumption analysis, mentor review, pre-mortem
-- `experiments/exp-NNN/` — Experiment plans, results, `run.log`, report sections
-- `audit/` — Results auditor findings (`results-audit.md`) and round-1 claim anchors
-- `references.bib` — Accumulated BibTeX citations
-- `citation-registry.md` — Citation key registry
-- `paper/` — Complete LaTeX project with compiled PDF
+Each run writes its artefacts to `output/<run-id>/`, laid out as
+[`WORKFLOW.md`](WORKFLOW.md#run-directory) shows.

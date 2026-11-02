@@ -18,7 +18,7 @@ flowchart TD
         S9["Step 9: Execute Experiments"]
         S10["Step 10: Audit Results"]
         S11["Step 11: Compile Paper"]
-        Done(["Done — paper.pdf"])
+        Done(["Done: paper.pdf"])
 
         S1 -->|"user answers 3-5 Qs"| S2
         S2 --> S3
@@ -57,6 +57,7 @@ flowchart TD
     EX["experiment ×N"]:::agent --> S9
     RA["results-auditor ×rounds"]:::agent --> S10
     RE["report"]:::agent --> S11
+    KN["knowledge"]:::agent --> S2 & S6 & S11
 
     %% User interaction points
     S1 ~~~ U1(["🗣 User dialogue"]):::user
@@ -81,17 +82,18 @@ flowchart LR
     end
 
     subgraph Agents["Leaf-Node Agents"]
-        A1["search-planner\n(sonnet)"]
-        A2["search\n(sonnet)"]
-        A3["novelty-analyst\n(fable)"]
-        A4["criteria\n(fable)"]
-        A5["decomposition\n(fable)"]
-        A6["assumption-challenger\n(fable)"]
-        A7["mentor-review\n(fable)"]
-        A8["pre-mortem\n(fable)"]
-        A9["experiment\n(fable)"]
-        A10["results-auditor\n(fable)"]
-        A11["report\n(fable)"]
+        A1["search-planner"]
+        A2["search"]
+        A3["novelty-analyst"]
+        A4["criteria"]
+        A5["decomposition"]
+        A6["assumption-challenger"]
+        A7["mentor-review"]
+        A8["pre-mortem"]
+        A9["experiment"]
+        A10["results-auditor"]
+        A11["report"]
+        A12["knowledge"]
     end
 
     subgraph State["Persistent State"]
@@ -111,6 +113,7 @@ flowchart LR
     O -->|"Task() ×N"| A9
     O -->|"Task() ×rounds"| A10
     O -->|"Task()"| A11
+    O -->|"Task()"| A12
 
     A1 -->|writes| AR
     A2 -->|writes| AR
@@ -123,6 +126,7 @@ flowchart LR
     A9 -->|writes| AR
     A10 -->|writes| AR
     A11 -->|writes| AR
+    A12 -->|writes| AR
 
     O <-->|"read/write"| SM
     O <-->|"read"| AR
@@ -150,46 +154,4 @@ flowchart LR
 
     style STOP fill:#ff4444,stroke:#cc0000,color:#fff
     style PAPER fill:#44bb44,stroke:#228822,color:#fff
-```
-
-## Output Directory Structure
-
-```mermaid
-flowchart TD
-    OUT["output/&lt;run-id&gt;/"] --> SM["state.md"]
-    OUT --> SP["search-plan.md"]
-    OUT --> LIT["literature/"]
-    OUT --> NOV["novelty-assessment.md"]
-    OUT --> SC["success-criteria.md"]
-    OUT --> DEC["decomposition.md"]
-    OUT --> CHL["challenge/"]
-    OUT --> EXP["experiments/"]
-    OUT --> AUD["audit/"]
-    OUT --> REF["references.bib"]
-    OUT --> CIT["citation-registry.md"]
-    OUT --> PAP["paper/"]
-
-    LIT --> L1["search-001-academic.md"]
-    LIT --> L2["search-002-blogs.md"]
-    LIT --> L3["search-003-community.md"]
-    LIT --> L4["synthesis.md"]
-
-    CHL --> CH1["assumption-analysis.md"]
-    CHL --> CH2["mentor-review.md"]
-    CHL --> CH3["pre-mortem.md"]
-
-    EXP --> E1["exp-001/"]
-    EXP --> E2["exp-002/"]
-    E1 --> E1P["plan.md"]
-    E1 --> E1R["results.md"]
-    E1 --> E1L["run.log"]
-    E1 --> E1S["report-section.md"]
-
-    AUD --> AU1["results-audit.md"]
-    AUD --> AU2["claim-anchor-*.md"]
-
-    PAP --> PT["paper.tex"]
-    PAP --> PP["preamble.tex"]
-    PAP --> PS["sections/*.tex"]
-    PAP --> PDF["paper.pdf"]
 ```

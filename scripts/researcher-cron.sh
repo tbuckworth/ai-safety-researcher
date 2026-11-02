@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# researcher-cron.sh — Autonomous research runner
+# researcher-cron.sh: Autonomous research runner
 #
 # Picks a research idea from GitHub Issues (or takes one as argument),
 # runs the 11-step research workflow via per-step Claude or Codex sessions,
@@ -13,7 +13,7 @@
 # Launcher: agent-board's agent-spare (the agent-spare.timer systemd user timer)
 # starts this script for one issue in its own systemd unit, and its output goes to
 # ~/.local/state/agent-board/spare/run.log; step logs stay in LOG_DIR (below).
-# The old crontab line is disabled. It can still be run by hand or from cron, e.g.
+# It also runs by hand or from cron, e.g.
 #   0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
 #
 # Deployment defaults (storage, GitHub owner and queue, recipient, models, ...)
@@ -219,8 +219,8 @@ MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
 # refunded instead of spent. Empty: no hook.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 
-# Provider selection. RESEARCHER_MODEL remains a backwards-compatible
-# provider-specific override; the named variables avoid ambiguous saved config.
+# Provider selection. RESEARCHER_MODEL, when set, overrides the selected
+# backend's model (RESEARCHER_CLAUDE_MODEL or RESEARCHER_CODEX_MODEL).
 BACKEND="$RESEARCHER_BACKEND"
 CODEX_IGNORE_USER_CONFIG="$RESEARCHER_CODEX_IGNORE_USER_CONFIG"
 
@@ -307,9 +307,9 @@ fi
 # (scripts/config.sh) takes: a preset in config/compute-profiles/, or profile
 # text. apply_compute_budget then requires RESEARCHER_COMPUTE_BUDGET_USD for a
 # paid profile and puts it in the text.
-# The text's "30 min" and "Max 5 experiments" predate the configured limits
-# (RESEARCHER_EXPERIMENT_MINUTES, RESEARCHER_MAX_EXPERIMENTS), which the runtime
-# header gives every step and which win. The line stays byte-for-byte as it is:
+# The text's "30 min" and "Max 5 experiments" are not the configured limits
+# (RESEARCHER_EXPERIMENT_MINUTES, RESEARCHER_MAX_EXPERIMENTS): the runtime header
+# gives every step those, and they win. The line stays byte-for-byte as it is:
 # agent-board's agent-spare reads it by regex.
 COMPUTE_PROFILE_MATS="MATS Slurm cluster, driven REMOTELY over SSH from wherever this run is executing (laptop or desktop) - you are NOT on the cluster. Every cluster command is prefixed: ssh mats '<cmd>' for the dev/login node, ssh mats-controller '<cmd>' for the controller (the only place gpu-avail and gpu-cost exist). AUTHORIZED COMPUTE: the FREE 'compute' partition only - one shared always-on node with 8x NVIDIA L40 (48GB VRAM each). Your concurrent cap across all your jobs is 6 GPUs, 124 CPUs, and 384GB RAM; max wall time is 24h per job. Request 1 GPU (--gres=gpu:1) unless the experiment genuinely needs more, and up to 6 when it does (single node, so torchrun/FSDP works). Sizing on 48GB: fp16 inference up to ~20B params, LoRA/QLoRA fine-tuning up to ~7B (13B with care), full fine-tuning only up to ~2-3B. Add --qos=debug for validation runs under 2h to jump the queue. PAID elastic-* partitions (A100/H100) are NOT authorized for autonomous runs (they bill by the hour and need Titus's explicit confirmation): if an experiment needs more than 6 L40s or more VRAM per device, do not attempt it - record a FAIL-on-affordability with the exact resource ask and continue. WORKFLOW for each experiment: (1) write the code and an sbatch script locally under experiments/exp-NNN/; (2) stage it with rsync -avP experiments/exp-NNN/ mats:/mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN/; (3) submit with ssh mats 'cd /mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN && mkdir -p logs && sbatch run.sbatch' - create logs/ BEFORE sbatch, because Slurm opens the output file at job launch and an in-script mkdir is too late; (4) poll with ssh mats 'squeue -u t.buckworth' until the job leaves the queue (PD pending, R running, CG completing), sleeping 60s between polls rather than busy-looping - the free partition is shared and a PD (Resources) wait of tens of minutes is normal, NOT a failure, so keep waiting; do NOT end the step while a job you submitted is still queued or running - if you must stop, first record the job id and its experiment in state.md so the next attempt resumes waiting instead of resubmitting; and before submitting anything, run squeue and check whether a job for this experiment is already queued or running, because the step may be retried after an interruption and duplicate submissions waste the shared partition; (5) pull results back with rsync -avP mats:.../exp-NNN/ experiments/exp-NNN/ and copy the full slurm log into run.log. NEVER run training, fine-tuning, heavy inference, or long CPU loops in an ssh shell on the dev node - it is the shared login node and that is the cluster's worst etiquette violation. Never run agents or jobs on the controller. The local machine this run executes on is for orchestration, plotting, and light analysis of returned results only - do not silently fall back to a local GPU for experiments under this profile. Job script requirements: all #SBATCH lines must precede the first command (any command above them silently disables every directive below); include --partition=compute, --gres=gpu:1, a realistic --time, --job-name, --cpus-per-task=8, --mem=32G, --output=logs/slurm-%j.out. Storage on the cluster: code, checkpoints, and final results under /mnt/nw/home/t.buckworth (persistent NFS, NOT backed up - pull anything irreplaceable back to this machine); HuggingFace cache, dataset shards, and intermediate outputs under /ephemeral/t.buckworth (fast local scratch, wiped on reboot) via HF_HOME=/ephemeral/t.buckworth/hf. Every job script also exports TMPDIR=/ephemeral/t.buckworth/tmp, XDG_CACHE_HOME=/ephemeral/t.buckworth/cache and WANDB_DIR=/ephemeral/t.buckworth/wandb, and runs mkdir -p on all four first: nothing bulky may go in /tmp, which is the worker's root disk (filling it drains the node for everyone). Inside every job script: source ~/venv/bin/activate (the cluster's shared venv) and run python with -u so logs are not buffered. That venv pins torch 2.5.1+cu121 to match the workers' CUDA 12.2 driver - do NOT upgrade torch or install one from default PyPI, which breaks CUDA on every job. Diagnostics: ssh mats 'scontrol show job <jobid>' explains a stuck job; sacct works only from the controller (it errors with Connection refused on the dev node); nvidia-smi on the dev node fails because there is no GPU there, which is expected; on compute, nvidia-smi inside a job lists all 8 physical GPUs but you only own \$CUDA_VISIBLE_DEVICES; an empty .out file on a running job is usually stdout buffering. scancel anything left idle. Prefer lightweight experiments (small open-weight models), each targeting under 30 min of GPU time. Max 5 experiments."
 
@@ -489,7 +489,7 @@ START_TIME=$(date +%s)
 # session that writes a missing next-steps.md.
 LAST_STEP_LOG=""
 # Bash-owned ceiling for the Step 10 audit-remediation loop, independent of any
-# agent-written field — so a missing or garbage audit_round can never wedge the run.
+# agent-written field, so a missing or garbage audit_round can never wedge the run.
 # AUDIT_ROUNDS counts the re-entries, so the ceiling allows MAX_AUDIT_ROUNDS + 1 rounds.
 AUDIT_ROUNDS=0
 AUDIT_ROUND_CEILING=$((MAX_AUDIT_ROUNDS + 1))
@@ -534,8 +534,8 @@ while true; do
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
         STEP_RC=0
         if [ "$CURRENT_STEP" -ge "$FAST_TRACK_MIN_STEP" ]; then
-            # Bypass the audit on a timed-out run — never re-enter a
-            # multi-hour remediation re-run — and compile whatever exists.
+            # Bypass the audit on a timed-out run (never re-enter a
+            # multi-hour remediation re-run) and compile whatever exists.
             log "Skipping the results audit and compiling the report from what exists."
             # current_step too, so a pause inside the report resumes at the report
             # rather than re-running the remaining steps and the audit.
@@ -546,22 +546,20 @@ while true; do
         if [ "$STEP_RC" -eq 2 ]; then
             pause_run "$REPORT_STEP"
         elif [ "$(get_status)" != "complete" ]; then
-            # Only a run whose report did NOT complete is marked timed out. A
-            # finished report keeps status complete: the timeout used to
-            # overwrite finished runs to "failed" (tasks#1874).
+            # Only a run whose report did NOT complete is marked timed out; a
+            # finished report keeps status complete (tasks#1874).
             set_status timed_out
         fi
         break
     fi
 
     # Audit-remediation re-entry: stay on the audit while the auditor asks for another
-    # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
+    # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling; no agent field is needed.
     if [ "$CURRENT_STEP" -eq "$AUDIT_STEP" ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
         if [ "$AUDIT_ROUNDS" -ge "$AUDIT_ROUND_CEILING" ]; then
             # Hand over to the report like any other audit exit; the report's
-            # own success or failure then decides the status. (Forcing
-            # "complete" here used to mark runs complete whose report failed.)
+            # own success or failure then decides the status.
             log "Audit-remediation ceiling reached (${AUDIT_ROUNDS} rounds). Forcing the report."
             set_status audit_complete
             continue

@@ -1,41 +1,47 @@
 # Stance: Truth-Seeking, Not Accomplishment-Making
 
-This document is the **single source of truth** for the researcher's voice. Every agent and the two orchestrator commands embed the canonical Voice block verbatim. `scripts/check-voice-blocks.sh` asserts each embedded copy is **byte-identical** to the block below (copies are not `@`-imported, because agents run in isolated sub-sessions that cannot reliably resolve imports — so they are duplicated and machine-checked instead).
+This document is the **single source of truth** for the researcher's voice. Every agent and the two orchestrator commands embed the canonical Voice block verbatim. `scripts/check-voice-blocks.sh` asserts each embedded copy is **byte-identical** to the block below (copies are not `@`-imported, because agents run in isolated sub-sessions that cannot reliably resolve imports, so they are duplicated and machine-checked instead).
 
 ## The canonical Voice block
 
 Copy the lines **between the markers** (including the markers) into each agent/command, near the top, right after the frontmatter and title:
 
 <!-- VOICE:BEGIN -->
-> **Voice — truth-seeking, not accomplishment-making.** Your job is to find out what is true, not to make the project succeed. A negative or null result is a finding of equal value to a positive one — report it plainly: this is what happened. State observations and their implications neutrally. No blame, no drama, no disappointment — including about your own mistakes. Curiosity, not defensiveness.
+> **Voice: truth-seeking, not accomplishment-making.** Your job is to find out what is true, not to make the project succeed. A negative or null result is a finding of equal value to a positive one, so report it plainly as what happened. State observations and their implications neutrally. No blame, no drama and no disappointment, including about your own mistakes. Curiosity, not defensiveness.
 <!-- VOICE:END -->
 
 ## KEEP vs REFRAME rubric
 
 The voice shift changes **prose, output-template slots, and user-facing language** only. It must never alter a token that another part of the system parses or matches on.
 
-### KEEP byte-identical (parsed / functional — do NOT change)
+### KEEP byte-identical (parsed / functional; do NOT change)
 
 | Token | Where it matters |
 |-------|------------------|
-| `PASS` / `FAIL` / `INCONCLUSIVE` | experiment verdicts (`## Verdict:` in results.md); matched by orchestrator + email composer + `scripts/researcher_lib.py` |
+| `PASS` / `FAIL` / `INCONCLUSIVE` / `MIXED` | experiment verdicts (`## Verdict:` in results.md); matched by orchestrator + email composer + `scripts/researcher_lib.py`, which also reads `PARTIAL` as `MIXED`, and `INVALID` or a `FAIL` that names affordability (FAIL-on-affordability) as `INCONCLUSIVE` |
+| `MISSING` / `UNKNOWN` | the verdicts `scripts/researcher_lib.py` gives an experiment directory with no results.md, and a results.md with no verdict line it recognises (run-outcome.json, the issue comment) |
+| `## Component Tested` | results.md section; `scripts/researcher_lib.py` takes its first line as the experiment's component |
 | `PASS` / `FAIL` / `WARN` / `N/A` in `preflight.md` | pre-flight check table; parsed by `scripts/researcher_lib.py` (a `FAIL` turns the experiment's verdict into `INCONCLUSIVE`) |
 | filename `method-spec.md` | the binding definition of each named method; read by decomposition, experiment, auditor, report |
 | `[SKIP]` / `[SHOWSTOPPER]` | decomposition component status |
 | Verdict enums: `NOVEL` / `PARTIALLY_NOVEL` / `ALREADY_DONE`, `PROCEED_AS_IS` / `MINOR_REVISIONS` / `MAJOR_REVISIONS` / `RETHINK_APPROACH`, and the audit enum `SUPPORTED` / `FIXABLE-DEFECT` / `TRUE-NULL` / `UNSALVAGEABLE` | step decisions |
+| `Overall disposition:` with `CONVERGED-POSITIVE` / `HONEST-NEGATIVE` / `NEEDS-REMEDIATION` / `UNSALVAGEABLE` / `NO-EXPERIMENTS`, and `audit_exit_reason:` | audit/results-audit.md; the Step 10 decision, quoted by `scripts/researcher_lib.py` in run-outcome.json and the issue comment |
+| `**Outcome**:` line, `## Ranked Next Steps` heading, `### N. <title>` headings | next-steps.md; parsed by `scripts/researcher_lib.py` into run-outcome.json and the issue comment |
+| filename `rethink-rationale.md` | marks a theory-only negative result; `scripts/researcher_lib.py` counts it as a result when no experiment ran |
 | `lambda`, `P_success` | decomposition math |
-| `fail-fast` | methodology name (Steinhardt) — a technical term, not affect |
+| `fail-fast` | methodology name (Steinhardt); a technical term, not affect |
 | filename `success-criteria.md` | read by many agents/commands |
 | state field `fail_fast_agreement` | parsed in state.md |
-| status token `failed` | cron terminal-state checks (`status: failed`) |
+| `status:` tokens `complete` / `failed` / `timed_out`, `audit_remediating` / `audit_complete` | state.md; the runner's terminal-state checks, and its re-entry of Step 10 |
+| state fields `current_step`, `step_incomplete`, `paper_compile_error`, `mode: interactive` | state.md; the runner's step-progress check, the outcome's missing-PDF caveat, and the never-resumed interactive run |
 
-### REFRAME (two categories — audit each agent for both)
+### REFRAME (two categories; audit each agent for both)
 
 - **(A) instruction / calibration prose.** Examples:
-  - "Honesty is paramount. Be honest — don't round up to pass or exaggerate results." → "Report exactly what the run produced — the measured value, whatever it is."
+  - "Honesty is paramount. Be honest; don't round up to pass or exaggerate results." → "Report exactly what the run produced: the measured value, whatever it is."
   - "Fail fast: if the experiment is clearly failing early, don't waste time" → "Once a quick test settles the question, stop and record the result."
   - "Never invent data, metrics, or results." → "Report only what the run actually produced; if something is missing, say so plainly."
-- **(B) output-template slots + process-step verbs** — the headings, `<…>` fill-prompts, and conditional slots the agent transcribes. These shape tone as strongly as instructions. Examples:
+- **(B) output-template slots + process-step verbs**: the headings, `<…>` fill-prompts, and conditional slots the agent transcribes. These shape tone as strongly as instructions. Examples:
   - "The research ... failed." → "The central hypothesis did not hold."
   - "Failure Scenario / `<Failure title>`" → "Scenario / `<Scenario title>`"
   - "narrative of how this failure plays out, told in past tense as if it already happened" → "plain past-tense account of how this outcome arose"
@@ -43,4 +49,4 @@ The voice shift changes **prose, output-template slots, and user-facing language
 
 ### The results-auditor exception
 
-`agents/results-auditor.md` embeds the Voice block for **tone** (neutral phrasing — "here is what the evidence does and does not support," never "you cheated"), but its prompt carries an explicit **stance override**: maximally suspicious posture, operating assumption "treat the result as gamed or leaked until the evidence forces otherwise." The Voice block governs how it *speaks*, not how hard it *looks*. Softening its stance would defeat its purpose.
+`agents/results-auditor.md` embeds the Voice block for **tone** (neutral phrasing: "here is what the evidence does and does not support," never "you cheated"), but its prompt carries an explicit **stance override**: maximally suspicious posture, operating assumption "treat the result as gamed or leaked until the evidence forces otherwise." The Voice block governs how it *speaks*, not how hard it *looks*. Softening its stance would defeat its purpose.

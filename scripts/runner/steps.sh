@@ -174,7 +174,7 @@ run_step() {
         # A provider usage/session cap is a pause, not a failure: retrying costs
         # nothing but the remaining attempts, and marking the run failed would
         # block find_in_progress_run from ever resuming it. Stop cleanly and
-        # leave the state resumable — a later invocation continues this step.
+        # leave the state resumable: a later invocation continues this step.
         # Match only a provider-emitted limit notice: the CLI prints it as its
         # own final line. Scanning the whole transcript would misread a run that
         # merely *writes about* rate limits (e.g. authoring retry logic) as a
@@ -182,7 +182,7 @@ run_step() {
         # Both known CLI forms count: the human one ("You've hit your session
         # limit · resets 8pm") and the headless one ("Claude AI usage limit
         # reached|1754060400"). Neither the exit code nor a reset clause is
-        # required — the CLI can print the notice and still exit 0.
+        # required: the CLI can print the notice and still exit 0.
         # Transient "rate limit exceeded" errors are deliberately excluded:
         # those are retryable, and the retry loop is the right response.
         # Detected BEFORE the success gate: a notice with exit 0 must never
@@ -220,7 +220,7 @@ run_step() {
         fi
 
         # An agent that submitted cluster work and ended its turn while that work
-        # is still queued or running has not failed — it is waiting. Spending
+        # is still queued or running has not failed: it is waiting. Spending
         # attempts here is how a run gets marked failed while its results are
         # still being computed (or, worse, an hour after they landed).
         JOB_WAIT_RESULT=none

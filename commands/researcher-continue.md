@@ -5,7 +5,7 @@ allowed-tools: [Read, Write, Glob, Grep, Bash, WebSearch, WebFetch, AskUserQuest
 model: fable
 ---
 
-# Research Continue — Queue the Next Round
+# Research Continue: Queue the Next Round
 
 You take a research run that has already happened and turn it into the next one.
 This is the command the results email points at, so assume the user arrives with
@@ -24,7 +24,7 @@ the user wants to understand; reach for this when they want to proceed.
      checking `output/` in the current directory and in the runner checkout
      (the directory `${CLAUDE_PLUGIN_ROOT}/scripts/config.sh RESEARCHER_RUNNER_DIR`
      prints), which each autonomous run links to its output directory.
-   - If the resolved directory has no `state.md`, say so and stop — do not guess
+   - If the resolved directory has no `state.md`, say so and stop; do not guess
      at a neighbouring directory.
 
 2. **Read `next-steps.md`.** This is the run's own ranked plan for what to do
@@ -51,7 +51,7 @@ the user wants to understand; reach for this when they want to proceed.
 Open with a tight orientation, no more than about ten lines:
 
 - Topic, in one plain sentence.
-- Outcome, in one sentence — including whether it was a real scientific result or
+- Outcome, in one sentence, including whether it was a real scientific result or
   a run that fell over.
 - The reflection, in one or two sentences.
 
@@ -59,8 +59,8 @@ Then use `AskUserQuestion` to offer the ranked next steps as options, each
 labelled with its title and described with what it tests and what it needs.
 Always include a final option for a direction of the user's own.
 
-If the run failed for **orchestration** reasons — a crashed step, a provider
-limit, a wrapper bug — say so plainly and make *resuming the original run* the
+If the run failed for **orchestration** reasons (a crashed step, a provider
+limit, a wrapper bug), say so plainly and make *resuming the original run* the
 first option, because a redesign would be answering a question that was never
 actually asked. Resuming is not a follow-up issue: it is re-running the runner on the existing
 run directory, and the run picks up from its recorded step with the settings in
@@ -84,7 +84,7 @@ Once the user picks a direction:
    substance from the chosen `next-steps.md` entry rather than re-deriving it.
 
 2. **Confirm the draft** with `AskUserQuestion` before creating anything. Show
-   the title and the body. Creating a GitHub issue is outward-facing — never do
+   the title and the body. Creating a GitHub issue is outward-facing: never do
    it on an inferred yes.
 
 3. **Create the issue:**
@@ -100,7 +100,7 @@ Once the user picks a direction:
      --source "${RESEARCHER_BACKEND:-claude}" \
      --feedback-file "$FEEDBACK_FILE"
    ```
-   Use a quoted heredoc, not `echo` — feedback text contains quotes, backticks,
+   Use a quoted heredoc, not `echo`: feedback text contains quotes, backticks,
    and `$` often enough that unquoted expansion will eventually corrupt a brief.
 
 4. **Report** the issue URL, and tell the user how it will actually run: the next
@@ -110,25 +110,29 @@ Once the user picks a direction:
    don't change, and pushes to a branch on the existing repo.
 
 5. **Offer to start it now** rather than waiting for the next scheduled run. Ask
-   first — this launches a multi-hour job:
-   ```bash
-   RESEARCHER_BACKEND=<the prior run's backend> \
-   RESEARCHER_COMPUTE_PROFILE=<the prior run's preset> \
-   RESEARCHER_ISSUE=<new issue number> \
-     <runner checkout>/scripts/researcher-cron.sh
-   ```
-   with the runner checkout as above. Take the backend and the compute-profile
-   preset from the prior run's `run-config.json` (Setup step 3): a follow-up that
-   silently drops from a cloud profile to the local GPU will quietly fail to run
-   the experiment that was proposed. A paid preset also needs
-   `RESEARCHER_COMPUTE_BUDGET_USD` (the runner exits 2 without it): ask the user
-   for the budget, offering the prior run's. When the prior run's profile is not a
-   preset (its own text, or an older run with only the expanded text in
-   `state.md`), ask which preset to use. If the chosen next step needs more than
-   the prior profile provided, say so and name the profile it actually needs.
-   Long runs belong in `tmux`.
+   first: this launches a multi-hour job. Before launching, settle its settings:
+   - Take the backend and the compute-profile preset from the prior run's
+     `run-config.json` (Setup step 3): a follow-up that silently drops from a
+     cloud profile to the local GPU will quietly fail to run the experiment that
+     was proposed.
+   - When the prior run's profile is not a preset (its own text, or an older run
+     with only the expanded text in `state.md`), ask which preset to use.
+   - If the chosen next step needs more than the prior profile provided, say so
+     and name the profile it actually needs.
+   - A paid preset also needs `RESEARCHER_COMPUTE_BUDGET_USD` (the runner exits 2
+     without it): ask the user for the budget, offering the prior run's, and add
+     it to the command.
 
-The user may queue several directions in one session — each is its own issue.
+   Then run the runner in a `tmux` session, since it runs for hours, with the
+   runner checkout as above:
+   ```bash
+   tmux new-session -d -s research-<new issue number> \
+     "RESEARCHER_BACKEND=<backend> RESEARCHER_COMPUTE_PROFILE=<preset> RESEARCHER_ISSUE=<new issue number> <runner checkout>/scripts/researcher-cron.sh"
+   ```
+   Tell the user the session name, and that `tmux attach -t research-<new issue number>`
+   shows the run.
+
+The user may queue several directions in one session; each is its own issue.
 
 ## Rules
 

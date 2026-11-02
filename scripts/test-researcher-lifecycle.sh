@@ -22,9 +22,9 @@ MOCK_BIN="${TEST_ROOT}/bin"
 REMOTES="${TEST_ROOT}/remotes"
 mkdir -p "$MOCK_BIN" "$REMOTES"
 
-# Isolated git: no user config, no credential helpers, and git's historical
-# default branch name — the condition under which runs committed on 'master'
-# and pushed 'main' into empty repos.
+# Isolated git: no user config, no credential helpers, and git's built-in
+# default branch name ('master'), under which a run that commits on the
+# default branch and pushes 'main' leaves an empty repo.
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL="${TEST_ROOT}/gitconfig"
 git config --global user.name "Lifecycle Test"
@@ -224,7 +224,7 @@ case "$step" in
             head -c 2097152 /dev/zero > "${exp}/big.dat"
         fi
         if [ "${MOCK_SECRET:-false}" = "true" ]; then
-            # What the secret scan refused on 2026-10-28: a cite key read as a key.
+            # A cite key the secret scan reads as a key.
             mkdir -p "${run_dir}/literature"
             printf 'Line one.\nCite key: `MOCK-SECRET-VALUE`\n' > "${run_dir}/literature/search-001-academic.md"
         fi
@@ -500,7 +500,7 @@ assert_grep "disk nearly full" "$(ls "${CASE_DIR}"/comments/103-*.md)"
 
 # =============================================================================
 # 4. A timeout after experiments compiles the report and the run stays
-#    'complete' (it used to be overwritten to 'failed').
+#    'complete', not 'failed' (tasks#1874).
 # =============================================================================
 new_case timeout-after-experiments
 write_run 2026-01-01-timeout 9 experiments_complete
@@ -679,8 +679,8 @@ assert_eq "$RC" "1" "exit code (no --source)"
 assert_grep "ERROR: --source is required" "${CASE_DIR}/followup.err"
 
 # =============================================================================
-# 11. An EMPTY public repo left by the old master/main bug is not reused:
-#     results would go public while every report said private.
+# 11. An EMPTY public repo (one a failed push can leave) is not reused for a
+#     private run: results would go public while every report said private.
 # =============================================================================
 new_case empty-public-repo
 git init -q --bare "${REMOTES}/tbuckworth/research-empty-public-topic.git"
@@ -748,7 +748,8 @@ assert_grep "research-public-prior is public, not private, so nothing was pushed
 
 # =============================================================================
 # 15. A usage-limit notice during Step 11 pauses the run; it is not counted as
-#     a completed step (which used to hot-loop the provider until timeout).
+#     a completed step (which would call the provider again and again until
+#     the timeout).
 # =============================================================================
 new_case limit-at-report
 write_run 2026-01-03-limit 10 audit_complete
@@ -761,7 +762,7 @@ assert_eq "$(field status "${OUT}/2026-01-03-limit")" "audit_complete" "status l
 assert_no_grep "No next-steps.md after the workflow" "${CASE_DIR}/stdout.log"
 
 # 15b. ...and the same during a Step 10 remediation round: the notice must not
-#      count as a finished audit round (that silently skipped remediation).
+#      count as a finished audit round (that would skip remediation silently).
 new_case limit-at-audit
 write_run 2026-01-05-audit-limit 10 audit_remediating
 run_researcher MOCK_LIMIT_AT_STEP=10 -- "Ignored topic"
@@ -1073,8 +1074,8 @@ assert_grep "ERROR: could not write status: failed to .*2026-01-21-broken/state.
 assert_no_grep "^status: failed" "${OUT}/2026-01-21-broken/state.md"
 
 # =============================================================================
-# 19. The secret scan refuses a staged file (2026-10-28: a cite key read as an
-#     API key). It is left out with the reason and the rest is published.
+# 19. The secret scan refuses a staged file (a cite key that reads as an API
+#     key). It is left out with the reason and the rest is published.
 # =============================================================================
 new_case secret-scan
 set_issues <(issue_json 901 "Secret scan false positive" "list:research-ideas")
@@ -1139,8 +1140,8 @@ assert_grep "ERROR: send-results-email.sh refused to send \(exit 2\): an input n
 
 # =============================================================================
 # 22. Settings are checked before anything runs: a numeric setting that is not
-#     an integer (it used to switch the stale-run check off), or an unknown host
-#     with no RESEARCHER_HOST_ALIAS (it used to become "local"), exits 2.
+#     an integer (it would switch the stale-run check off), or an unknown host
+#     with no RESEARCHER_HOST_ALIAS (it would become "local"), exits 2.
 # =============================================================================
 new_case settings
 run_researcher RESEARCHER_RESUME_MAX_AGE_DAYS=two-weeks -- "Ignored topic"

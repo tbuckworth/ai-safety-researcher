@@ -5,7 +5,8 @@
 # helper scripts source this file and call load_config, then require_config with
 # the keys they use. Run directly, it prints the value of each key it is given,
 # one per line, or the compute profile a RESEARCHER_COMPUTE_PROFILE value
-# describes, or exits 2 saying what is wrong:
+# describes. It exits 2, saying what is wrong, on a bad request or setting, and
+# 1 when a compute-profile preset file cannot be read:
 #
 #   scripts/config.sh RESEARCHER_TASKS_REPO
 #   scripts/config.sh --compute-profile lambda   # with RESEARCHER_COMPUTE_BUDGET_USD set

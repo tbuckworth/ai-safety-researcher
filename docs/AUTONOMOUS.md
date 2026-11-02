@@ -19,7 +19,7 @@ agent-spare (or by hand) → researcher-cron.sh
          ├─ Loop: <claude|codex> researcher-auto-step <N> <run-dir>
          │    └─ Step N: spawn agents, make decisions, update state.md
          │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
-         ├─ No next-steps.md (stopped before Step 11): <claude|codex> researcher-auto-next-steps <run-dir>
+         ├─ No next-steps.md (stopped before Step 11, or Step 11 wrote none): <claude|codex> researcher-auto-next-steps <run-dir>
          ├─ Create GitHub repo (gh CLI)
          ├─ Email: a Claude session writes it and sends it with agent-mail (reviewed)
          └─ Update issue: status:<backend>-processed
@@ -32,12 +32,12 @@ On the machine running the autonomous runs (desktop):
 - At least one authenticated model CLI:
   - **Claude Code CLI** for `RESEARCHER_BACKEND=claude` (the default)
   - **Codex CLI** for `RESEARCHER_BACKEND=codex`
-- **gh CLI** — authenticated (`gh auth login`)
+- **gh CLI**: authenticated (`gh auth login`)
 - **agent-mail** (`~/.local/bin/agent-mail`, from `~/pyg/agent-mailroom`) and
   the Claude Code CLI for the results email. See "The results email" below.
-- **tectonic** — for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
-- **jq** — for JSON parsing (`sudo apt install jq`)
-- **Python 3** — for experiment execution
+- **tectonic**: for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
+- **jq**: for JSON parsing (`sudo apt install jq`)
+- **Python 3**: for experiment execution
 - **Compute**: the local GPU the `local` preset describes, with CUDA drivers, or,
   for the paid presets, a Modal or Lambda login and the `cloud-watch` CLI (see
   [Compute Profile](#compute-profile-hardware-agnostic))
@@ -71,9 +71,9 @@ idea and `agent-spare launch` starts `researcher-cron.sh` for that one issue in
 its own systemd unit, setting the backend, models, compute profile,
 `RESEARCHER_GUARD_CMD`, `RESEARCHER_JOB_WAIT_CMD` and `RESEARCHER_OWNER=agent-spare`.
 The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
-logs stay in `logs/` in the output directory. The old crontab line is disabled.
+logs stay in `logs/` in the output directory.
 
-A crontab entry still works for a plain scheduled run, e.g.
+A crontab entry also works for a plain scheduled run, e.g.
 ```bash
 0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
 ```
@@ -130,7 +130,7 @@ whole number of at least 1).
 | `RESEARCHER_CODEX_DEEP_MODEL` | Codex non-search workers (default: the parent model) |
 | `RESEARCHER_CODEX_DEEP_REASONING` | Codex non-search-worker effort (default: the parent's) |
 | `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (a Claude run uses its own model) |
-| `RESEARCHER_MODEL` | Legacy override for the selected backend (default: unset) |
+| `RESEARCHER_MODEL` | Overrides the selected backend's model, `RESEARCHER_CLAUDE_MODEL` or `RESEARCHER_CODEX_MODEL` (default: unset) |
 
 The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
 follow) translates Claude `Task(...)` blocks into leaf subagents. It uses the
@@ -156,35 +156,39 @@ default so personal hooks and plugins do not alter cron behavior.
 | `RESEARCHER_CODEX_IGNORE_USER_CONFIG` | `true` or `false` |
 | `RESEARCHER_CODEX_MAX_SUBAGENTS` | Most concurrent subagents, at least 1 |
 
-`danger-full-access` matches the pre-existing Claude
-`--dangerously-skip-permissions` behavior and is needed by experiments that
+`danger-full-access` matches how the runner starts Claude
+(`--dangerously-skip-permissions`) and is needed by experiments that
 install dependencies, populate model caches, or use the GPU. Use it only on
 the dedicated trusted desktop. For a constrained run, choose
 `workspace-write`; expect dependency downloads or writes outside the run
 directory to fail unless separately provisioned.
 
-Codex CLI currently has no direct equivalent of Claude's
-`--max-budget-usd`. The wrapper therefore relies on the compute profile,
-experiment cap, retry cap, and wall-clock timeout. Account/project spending
-limits should be configured separately when strict monetary enforcement is
-required.
+Neither backend has a runner-level dollar cap: the runner passes Claude no
+`--max-budget-usd`, and Codex has no equivalent. Spending is bounded by the
+compute profile (a paid preset carries the run's budget), the experiment cap,
+the retry cap and the run timeout. If you need a strict monetary limit, set a
+spending limit on the provider account or project.
 
 ### Operational overrides
 
 | Setting | Purpose |
 |---------|---------|
 | `RESEARCHER_OUTPUT_DIR` | Override `researcher-output/` under `RESEARCHER_STORAGE_ROOT` |
+| `RESEARCHER_LOG_DIR` | Where the runner writes its logs (default `logs/` in the output directory) |
+| `RESEARCHER_LOCKFILE` | The lockfile that keeps one run at a time (default `/tmp/researcher-auto.lock`). A run that finds it held by a live process logs that another run is active and exits 0; it removes a lockfile whose process is dead and goes ahead |
 | `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues (outcome `complete-local`) |
 | `RESEARCHER_REPO_VISIBILITY` | Visibility of new run repos: `private` (default), `internal`, or `public` |
 | `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024), or when `df` cannot measure it, and reports why |
 | `RESEARCHER_ALLOW_RERUN=true` | Let the queue pick an issue that already has a run directory here (default: skip it; `RESEARCHER_ISSUE=<n>` also re-runs one deliberately) |
 | `RESEARCHER_RESUME_MAX_AGE_DAYS` | An unfinished autonomous run untouched for longer is not auto-resumed (default 14; 0 disables). Interactive runs (`mode: interactive`) are never resumed |
+| `RESEARCHER_TIMEOUT_HOURS` | Run timeout in hours (default 8). When it passes, a run that has finished Step 5 or a later step skips the audit and compiles the report from what exists; an earlier run ends `timed_out` |
 | `RESEARCHER_TIMEOUT_SECONDS` | Run timeout in seconds; overrides `RESEARCHER_TIMEOUT_HOURS` |
 | `RESEARCHER_GIT_REMOTE_BASE` | Where git pushes (default `https://github.com`; tests point it at local bare repos) |
 | `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
 | `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_SKIP_GPU_CHECK=true` | Skip the start-up GPU check, which exits 0 when a process uses over 500 MiB of GPU memory and exits 1 when `nvidia-smi` fails or reports a non-numeric value |
+| `RESEARCHER_STEP_ATTEMPTS` | Attempts at a step that ends without advancing (default 3), after which the run is marked `failed` |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
 | `RESEARCHER_JOB_WAIT_CMD` | A run setting (see [Resuming a run](#resuming-a-run)): a command printing outstanding external job ids for the run (`{run_id}` substituted). It exits 0 with its answer (no output: no jobs); a non-zero exit is an error, logged with its stderr, and the answer is unknown. While it prints anything or cannot answer, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
 | `RESEARCHER_RUN_DIR` | Resume exactly this run directory, or exit 2 if it is finished, missing or interactive; never another unfinished run or the queue |
@@ -285,19 +289,22 @@ first resumes it, which then records them.
 
 ## Limitation Triage & Future Work
 
-Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **Step 10** (results-time), each limitation is classified against the compute profile and remaining budget as **fix-now-free** (re-analysis of existing data), **fix-now-cheap** (a small run that fits the profile + experiment cap), or **future-work** (needs resources beyond the profile). Fix-now items are done; future-work items carry their precise resource asks into the paper's **Future Work** section, which states a resource-scoped next-round plan precise enough to seed a follow-up run. Step 11 refuses to write a limitation without a disposition.
+Steps 6 and 10 triage each limitation by the
+[Limitation Triage](WORKFLOW.md#limitation-triage) rubric in WORKFLOW.md,
+against the run's compute profile; Step 11 writes the future-work rows into the
+paper's Future Work section.
 
 ## Next Steps (every run, including failed ones)
 
 Step 11 writes `next-steps.md`: a `## Reflection` on what the round established
-or what blocked it, then 2–4 **ranked** next steps, each with what to do, the
+or what blocked it, then 2–4 **ranked** next steps (each with what to do, the
 hypothesis it tests, the resources it needs, and the result that would kill the
-line — plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
+line), plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
 ground.
 
-A run that ends without one (it stopped before Step 11) gets one before it is
-published, from one session of its backend running
-`commands/researcher-auto-next-steps.md`, which diagnoses whether the failure was
+A run that ends without one (it stopped before Step 11, or Step 11 did not
+write it) and is not paused gets one before it is published, from one session
+of its backend running `commands/researcher-auto-next-steps.md`, which diagnoses whether the failure was
 **orchestration** (the workflow broke, the science is untouched, resume) or
 **scientific** (the hypothesis or construct didn't survive, redesign). If that
 session fails, the outcome lists `next-steps.md` as missing. Every
@@ -309,8 +316,8 @@ results email carries the top steps and a literal, copy-pasteable
 Optional and non-blocking; see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md). The
 global wiki (`RESEARCHER_KB_DIR`) is queried before searching (Step 2), for
 novelty (Step 3), and for accumulated `lessons/` before the design is committed
-(Step 6); sources are ingested after synthesis (Step 2) and the whole run —
-result plus process lessons — after the paper (Step 11). Step 11 also writes the
+(Step 6); sources are ingested after synthesis (Step 2) and the whole run
+(result plus process lessons) after the paper (Step 11). Step 11 also writes the
 research line's own `knowledge/` directory into the repo, which a follow-up run
 clones into `prior/knowledge/` and extends.
 
@@ -323,27 +330,27 @@ never fails a step.
 - **Compute profile**: experiments must fit the run's `compute_profile`; do not exceed it silently
 - **Limits**: at most `RESEARCHER_MAX_EXPERIMENTS` experiments per run, each
   targeting `RESEARCHER_EXPERIMENT_MINUTES`
-- **All loops capped at 1 iteration** — except the Step 10 audit-remediation
+- **All loops capped at 1 iteration**, except the Step 10 audit-remediation
   loop, which allows up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a runner-owned
   ceiling one round higher and the configured wall-clock timeout as backstops)
-- **8-hour timeout by default** — wrapper stops the run and compiles whatever
-  exists; override with `RESEARCHER_TIMEOUT_HOURS`
-- **Lockfile** — prevents concurrent runs
+- **Run timeout**: `RESEARCHER_TIMEOUT_HOURS` (default 8); what happens when it
+  passes depends on the step reached (see `RESEARCHER_TIMEOUT_HOURS` above)
+- **Lockfile**: `RESEARCHER_LOCKFILE` keeps one run at a time
 - **Read-only outside run dir**: the agent can search `RESEARCHER_CODE_SEARCH_DIR` but never modifies other repos
-- **Provider permissions** — autonomous Claude and Codex runs are intentionally
+- **Provider permissions**: autonomous Claude and Codex runs are intentionally
   non-interactive; review the sandbox settings above before enabling cron
-- **Cost control** — compute profile, experiment cap, retry cap, and timeout;
-  Codex has no runner-level dollar-cap flag
+- **Cost control**: the compute profile, the experiment cap, the retry cap and
+  the timeout; neither backend has a runner-level dollar cap
 
 ## GitHub Integration
 
 - **Issue labels**:
-  - `list:research-ideas` — eligible for pickup
-  - `status:claude-researching` — currently being worked on (prevents double-pickup)
-  - `status:claude-processed` — completed
-  - `status:codex-researching` — currently being worked on by Codex
-  - `status:codex-processed` — completed by Codex
-- **Repos**: Created as `<RESEARCHER_GITHUB_OWNER>/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
+  - `list:research-ideas`: eligible for pickup
+  - `status:claude-researching`: currently being worked on (prevents double-pickup)
+  - `status:claude-processed`: completed
+  - `status:codex-researching`: currently being worked on by Codex
+  - `status:codex-processed`: completed by Codex
+- **Repos**: Created as `<RESEARCHER_GITHUB_OWNER>/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility, gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
 - **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0 (5 when a deliverable failed; see [Exit codes](#exit-codes)):
 
   | Outcome | Meaning | Exit |
@@ -356,14 +363,14 @@ never fails a step.
   | `failed` | Stopped early with no valid results | 4 |
   | `paused` | Provider usage limit; resumable, nothing published | 3 |
 
-  A timeout no longer overwrites a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
+  A timeout does not overwrite a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
 
   Each experiment in `run-outcome.json` has one of these verdicts (`VERDICTS` in `scripts/researcher_lib.py`); only a valid one counts as a result:
 
   | Verdict | Meaning | Valid |
   |---------|---------|-------|
-  | `PASS`, `FAIL`, `MIXED` | The verdict line of its `results.md` | yes |
-  | `INCONCLUSIVE` | It could not answer its question: a failed pre-flight check, an invalid measurement, or FAIL-on-affordability | no |
+  | `PASS`, `FAIL`, `MIXED` | The verdict line of its `results.md` (`PARTIAL` reads as `MIXED`) | yes |
+  | `INCONCLUSIVE` | It could not answer its question: a failed pre-flight check, a verdict line of `INCONCLUSIVE` or `INVALID`, or a `FAIL` that names affordability (FAIL-on-affordability) | no |
   | `UNKNOWN` | Its `results.md` has no recognisable verdict line | no |
   | `MISSING` | Its directory exists, but it wrote no `results.md` (it started and stopped) | no |
 
@@ -373,11 +380,11 @@ never fails a step.
 
 ## Logs
 
-- `~/.local/state/agent-board/spare/run.log` — wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
-- `logs/step-N-attempt-N-*.log` — per-step provider output
-- `logs/next-steps-*.log` — output of the session that writes a missing `next-steps.md`
-- `logs/email-*.log` — email sending output
-- `output/<run-id>/state.md` — workflow state (authoritative)
+- `~/.local/state/agent-board/spare/run.log`: wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
+- `logs/step-N-attempt-N-*.log`: per-step provider output
+- `logs/next-steps-*.log`: output of the session that writes a missing `next-steps.md`
+- `logs/email-*.log`: email sending output
+- `output/<run-id>/state.md`: workflow state (authoritative)
 
 ## Exit codes
 
@@ -395,7 +402,8 @@ never fails a step.
 **Run stuck (state not advancing)**:
 - Check `state.md` for the current step and status
 - Check the latest step log in `logs/`
-- Delete the lockfile if stale: `rm /tmp/researcher-auto.lock`
+- A lockfile left by a dead process is removed by the next run; if the log says
+  another run is active, its PID is in that line and in the file `RESEARCHER_LOCKFILE` names
 
 **Results email not sent**:
 - The run log says why (`Writing and sending the results email ...`, then
@@ -416,7 +424,8 @@ never fails a step.
 **Codex works interactively but cron says it is missing**:
 - Confirm `~/.local/bin/codex` exists
 - Run `bash -lc 'codex --version'`
-- The current wrapper prepends `~/.local/bin`; older deployed copies must be updated
+- The runner prepends `~/.local/bin` to `PATH`; if `codex` is installed elsewhere,
+  set `RESEARCHER_CODEX_BIN` to its path
 
 **Codex step cannot install or download dependencies**:
 - Check `RESEARCHER_CODEX_SANDBOX`
@@ -438,7 +447,7 @@ After a run completes, use the interactive review command:
 /researcher-review /path/to/run-dir   # specific run
 ```
 
-This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand — experiment code, challenge analysis, literature, paper sections — to answer your questions.
+This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand (experiment code, challenge analysis, literature, paper sections) to answer your questions.
 
 ## Continuing a Run
 
@@ -507,14 +516,15 @@ Parent: #42 | Repo: https://github.com/<owner>/research-foo | Run: 2026-04-03-fo
 ```
 output/<date>-followup-<slug>/
 ├── prior/                      # Copied from the prior run's repo (or its run directory)
-│   ├── state.md
-│   ├── briefing.md
-│   ├── literature/synthesis.md
-│   ├── decomposition.md
+│   ├── state.md, briefing.md, method-spec.md
+│   ├── novelty-assessment.md, success-criteria.md, decomposition.md
+│   ├── references.bib, citation-registry.md
+│   ├── literature/
 │   ├── challenge/
 │   ├── next-steps.md           #   the prior round's ranked plan + reflection
-│   ├── knowledge/              #   the line's KB — dead-ends.md stops re-treading
-│   └── experiments/exp-*/results.md
+│   ├── knowledge/              #   the line's knowledge base; dead-ends.md stops re-treading
+│   ├── experiments/exp-*/      #   plan.md and results.md of each
+│   └── paper/sections/*.tex
 ├── followup-context.md         # Feedback + metadata
 ├── followup-summary.md         # Written by Step 1: what changed and why
 ├── state.md                    # Fresh state for this run
@@ -551,5 +561,4 @@ step). So:
   `--unrouted`: not reviewed, and replies go to the orchestrator. If that Codex
   writer fails, nothing is sent either, and the run exits 5.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
-  is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is
-  gone: the agents' account cannot label the recipient's mailbox.
+  is not `complete` (e.g. `[UNPUBLISHED]`).

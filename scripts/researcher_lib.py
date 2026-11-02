@@ -2,7 +2,7 @@
 """Pure-logic helpers for the autonomous researcher wrapper (researcher-cron.sh).
 
 The bash wrapper owns every side effect (gh, git, email). This module owns the
-decisions that used to be made by ad-hoc grep/jq and got them wrong:
+decisions, one subcommand each:
 
   state-field        one field of a state.md frontmatter
   terminal-statuses  the workflow statuses that end a run

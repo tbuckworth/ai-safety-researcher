@@ -10,7 +10,7 @@ canonical workflow.
 - Treat an optional run directory as `{{argument}}`.
 - Treat every `${CLAUDE_PLUGIN_ROOT}` reference as the resolved plugin root.
 - Ignore Claude-only frontmatter and translate `AskUserQuestion` into normal
-  Codex conversation turns — but keep the confirmations. Creating a GitHub issue
+  Codex conversation turns, but keep the confirmations. Creating a GitHub issue
   and launching a run both need an explicit yes.
 - When invoking project helper scripts, set `RESEARCHER_BACKEND=codex` so the
   follow-up issue receives the correct `source:codex` label. The runner command

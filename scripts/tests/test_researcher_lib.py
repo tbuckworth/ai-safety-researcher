@@ -207,7 +207,7 @@ class FollowupIssueTest(unittest.TestCase):
 
 class SlugifyTest(unittest.TestCase):
     def test_cut_never_leaves_a_hyphen(self):
-        # "gradient-routing-" is what a plain 17-character cut used to leave.
+        # A plain 17-character cut would leave "gradient-routing-".
         self.assertEqual(lib.slugify("Gradient routing persistence", 17, word_boundary=False), "gradient-routing")
         self.assertEqual(lib.slugify("  Does X (really) help?  ", 60, word_boundary=False), "does-x-really-help")
 
@@ -360,7 +360,7 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(self.outcome()["outcome"], "complete")
 
     def test_timeout_after_report_stays_complete_but_says_so(self):
-        # tasks#1874: the timeout used to overwrite a finished run to "failed".
+        # tasks#1874: a timeout must not turn a finished run into "failed".
         self.add_exp("exp-001", "PASS")
         facts = self.outcome(timed_out=True)
         self.assertEqual(facts["outcome"], "complete")
@@ -422,7 +422,7 @@ class OutcomeTest(unittest.TestCase):
         self.assertTrue(any("theory-only" in r for r in facts["reasons"]))
 
     def test_experiment_without_results_is_missing(self):
-        # A crashed experiment used to vanish from the counts and the reasons.
+        # A crashed experiment is counted and named in the reasons.
         self.add_exp("exp-001", "PASS")
         write(self.run / "experiments" / "exp-002" / "plan.md", "the plan")
         facts = self.outcome()

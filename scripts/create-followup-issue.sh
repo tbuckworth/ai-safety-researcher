@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# create-followup-issue.sh — Create a follow-up research issue on GitHub
+# create-followup-issue.sh: Create a follow-up research issue on GitHub
 #
 # Usage:
 #   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> --source <backend> [--force]
@@ -13,16 +13,15 @@
 #
 # The follow-up takes its parent's importance label, or importance:medium, with
 # a warning, when the parent has none. agent-spare only starts ideas rated high
-# or medium, so a follow-up filed without one was never run on its own. A parent
+# or medium, so a follow-up without one would never run on its own. A parent
 # that cannot be read stops it (exit 1, nothing filed). The new issue is linked
 # from the parent with a comment; when that fails, it exits 1 saying the issue
 # was created but not linked.
 #
 # Idempotent: the body carries a follow-up key (a hash of the request). If an
 # issue with the same key already exists, open or closed, it is reported and
-# nothing is created. Running this twice (an agent retrying after a slow or
-# failed read-back) used to file the same request twice: tasks#1919/#1920,
-# which were then run as two separate experiments. --force files it anyway.
+# nothing is created, so an agent that retries after a slow or failed
+# read-back files the request once (tasks#1919/#1920). --force files it anyway.
 
 set -euo pipefail
 
@@ -121,14 +120,12 @@ if [ -n "$PARENT" ] && [ "$PARENT" != "none" ]; then
     esac
 fi
 
-# Ensure labels exist
 gh label create "$FOLLOWUP_LABEL" \
     --repo "$TASKS_REPO" \
     --color "1D76DB" \
     --description "Follow-up to a previous research run" \
     2>/dev/null || true
 
-# Create the issue
 RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
 ISSUE_URL=$(gh issue create --repo "$TASKS_REPO" \
     --title "$TITLE" \
@@ -140,14 +137,12 @@ ISSUE_URL=$(gh issue create --repo "$TASKS_REPO" \
 
 ISSUE_NUMBER=$(echo "$ISSUE_URL" | sed 's/.*\///')
 
-# Comment on the parent issue linking to the follow-up
 if [ -n "$PARENT" ] && [ "$PARENT" != "none" ] \
         && ! gh issue comment "$PARENT" --repo "$TASKS_REPO" --body "Follow-up created: #${ISSUE_NUMBER}"; then
     echo "ERROR: follow-up ${ISSUE_URL} was created, but the link comment on parent issue #${PARENT} failed (gh's error is above). Link it by hand: gh issue comment ${PARENT} --repo ${TASKS_REPO} --body 'Follow-up created: #${ISSUE_NUMBER}'" >&2
     exit 1
 fi
 
-# Validate: read back the issue to confirm
 CREATED=$(gh issue view "$ISSUE_NUMBER" --repo "$TASKS_REPO" --json number --jq '.number')
 if [ "$CREATED" != "$ISSUE_NUMBER" ]; then
     echo "ERROR: Issue validation failed" >&2

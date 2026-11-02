@@ -1,37 +1,37 @@
 # Knowledge Bases
 
-How research compounds across runs instead of restarting.
+A knowledge base (KB) here is a directory of Markdown pages that agents
+maintain, so that what one research run learns is available to later runs. The
+workflow uses two, both optional.
 
-## The problem
+## Why
 
-Every run used to begin from zero. It searched the literature from scratch, even
-where a previous run had already surveyed the same corner. It assessed novelty
-against that one search, not against what this researcher had already
-established. And when a run lost six hours to a CUDA driver mismatch, or
-discovered at Step 6 that its construct was a strawman, that knowledge died with
-the run directory. The next run was free to repeat it.
+Without a knowledge base, each run starts from zero. It searches the literature
+from scratch, even where an earlier run surveyed the same area; it judges
+novelty against that one search, not against what earlier runs established; and
+what it learns about the process (a day lost to a CUDA driver mismatch, a
+construct found at Step 6 to be a strawman) stays in its run directory, where
+the next run does not look.
 
-The pattern here is [Karpathy's LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
-rather than re-retrieving from raw documents at query time, an agent
-**incrementally builds and maintains a persistent wiki** that sits between you
-and the sources. Knowledge is compiled once and then kept current. The wiki is a
-compounding artifact; the cross-references are already there, the contradictions
-are already flagged.
+The global wiki follows [Karpathy's LLM-wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+pattern: instead of retrieving from raw documents at query time, an agent
+builds and maintains a persistent wiki between the reader and the sources. Each
+source is compiled into the wiki once, and the cross-references and recorded
+contradictions are kept current.
 
 ## Two knowledge bases
 
-**Global wiki** — one per researcher, spanning every research line. Literature,
-entities, concepts, and `lessons/`: what the research *process* has learned.
-Lives outside this plugin, because it is your knowledge and it outlives the tool.
+**Global wiki**: one per researcher, spanning every research line. It holds
+literature, entities, concepts, and `lessons/`, what the research process has
+learned. It lives outside this plugin, because it outlasts any one tool.
 
-**Per-repo knowledge base** — `knowledge/` inside each research run directory,
-published with that line's GitHub repo. Scoped to one line of work, so a
-follow-up run months later can resume without re-deriving anything.
+**Per-repo knowledge base**: `knowledge/` in each research run directory,
+published with that line's GitHub repo, so that a follow-up run months later
+can resume without re-deriving anything.
 
-They answer different questions. The global wiki answers *"what do we already
-know about this area, and what has gone wrong before?"* The per-repo KB answers
-*"what did this specific line establish, what did it rule out, and how do I
-re-run it?"*
+The global wiki answers "what do we already know about this area, and what has
+gone wrong before?" The per-repo KB answers "what did this line establish, what
+did it rule out, and how is it re-run?"
 
 ## Setup
 
@@ -41,45 +41,31 @@ scripts/kb-init.sh /path/to/wiki      # or anywhere
 export RESEARCHER_KB_DIR=/path/to/wiki  # for a wiki anywhere else
 ```
 
-Idempotent — safe to re-run. It creates the directory layout, a git repo,
-`index.md`, `log.md`, seeded `lessons/` pages, and `KB-SCHEMA.md` (the schema
-that makes an agent a disciplined wiki maintainer rather than a chatbot). It also
-writes `AGENTS.md` and `CLAUDE.md` in the wiki root pointing at the schema, so
-any agent opened in the wiki behaves as its maintainer.
+`kb-init.sh` creates the directory layout, a git repository, `index.md`,
+`log.md`, the seeded `lessons/` pages, and `KB-SCHEMA.md`, a copy of
+[`templates/kb-schema.md`](../templates/kb-schema.md). The schema defines the
+wiki's layout, its page conventions and its ingest, query and lint operations,
+and every agent working in the wiki follows it. `kb-init.sh` also writes
+`AGENTS.md` and `CLAUDE.md` in the wiki root, pointing any agent opened there at
+the schema. Re-running it adds what is missing and overwrites nothing.
+`scripts/kb-init.sh --update-schema` also replaces the wiki's `KB-SCHEMA.md`
+with the template, discarding any edits made to it in the wiki.
 
-`RESEARCHER_KB_DIR=none` disables the knowledge base for a run. A path with no
-`KB-SCHEMA.md` is never written to: an interactive run treats it as no knowledge
-base, and an autonomous run exits 2.
+`RESEARCHER_KB_DIR=none` disables the KB for a run. A path with no
+`KB-SCHEMA.md` is never written to: an interactive run treats it as no KB, and
+an autonomous run exits 2.
 
-**The knowledge base is an accelerant, never a dependency.** A run with no KB
-executes identically. Every KB action in the workflow is skipped silently when
-there is no KB; a KB action that fails is recorded in `state.md`, reported in the
-results email, and stepped past. A stale wiki costs some duplicated search; a
-workflow that halts because a wiki is missing costs the whole run.
+A run with no KB executes identically. Every KB action in the workflow is
+skipped silently when there is no KB, and a KB action that fails is recorded in
+`state.md`, reported in the results email, and stepped past. A missing or
+failing KB therefore costs at most some repeated searching, never the run.
 
-## Global wiki layout
+## Global wiki
 
-```
-KB-SCHEMA.md      the schema — read first by any agent touching the wiki
-index.md          catalog of every page; read first when answering
-log.md            append-only chronology of ingests, queries, lints
-raw/              original source documents (immutable)
-sources/          one page per ingested source
-entities/         people, labs, models, datasets, benchmarks, tools
-concepts/         methods, phenomena, threat models, open problems
-lessons/          cross-run methodology knowledge
-threads/          one page per research line, linking its runs
-```
-
-`lessons/` is what makes this more than a bibliography, and it is read *before*
-experiments are designed, not after:
-
-| File | Holds |
-|------|-------|
-| `common-failures.md` | Failure modes that have actually bitten a run — symptom, root cause, and the check that catches it early |
-| `experiment-design.md` | Strawman constructs, controls that proved load-bearing, criteria that drifted |
-| `compute.md` | What each compute profile really delivers, real wall-clock and cost, ceilings hit |
-| `tooling.md` | Library/API traps, version pins that matter, environment gotchas |
+`KB-SCHEMA.md` gives the wiki's layout and operations. Its `lessons/` pages
+(common failures, experiment design, compute, tooling) hold what the research
+process has learned, and the workflow reads them before an experiment design is
+committed, at Step 6.
 
 ## Per-repo layout
 
@@ -89,61 +75,43 @@ knowledge/
   findings.md        what this line established, each with its confidence
   dead-ends.md       what was ruled out, and the evidence that ruled it out
   methods.md         how to reproduce: data, harness, commands, gotchas
-  open-questions.md  what remains genuinely unresolved
+  open-questions.md  what remains unresolved
 ```
 
-`dead-ends.md` is the highest-value file. It is what stops the next run
-re-proposing something this line already killed, so each entry carries the
-evidence, not just the verdict.
+`dead-ends.md` is the file that helps a follow-up most: it stops the next run
+re-proposing what this line already ruled out, so each entry carries the
+evidence as well as the verdict.
 
-On a follow-up run the prior repo KB is cloned into `prior/knowledge/` and
-**carried forward and extended** — never restarted, and a prior finding is not
-dropped just because this round didn't touch it.
+On a follow-up run the prior repo's KB is copied into `prior/knowledge/`, and the
+run extends it rather than starting again; a prior finding stays even when this
+round did not touch it.
 
 ## Where the workflow touches them
 
 All KB work goes through the `researcher:knowledge` leaf agent
 (`agents/knowledge.md`), at the points listed in the Knowledge Bases section of
-[`WORKFLOW.md`](WORKFLOW.md): queries at Steps 2, 3 and 6, ingests at Steps 2
-and 11.
+[`WORKFLOW.md`](WORKFLOW.md#knowledge-bases).
 
-The Step 6 query is the one that changes behaviour most: it hands the three
-challenge agents failure modes that have *actually occurred*, so a pre-mortem
-argues from evidence rather than imagination.
+The Step 6 query gives the three challenge agents failure modes that have
+occurred in earlier runs, so that a pre-mortem can argue from them. The Step 11
+ingest files the result, including a negative or null result, and takes what
+the process learned from the audit, the `next-steps.md` reflection and the run
+logs.
 
-The Step 11 ingest is the one that compounds. It files the result — including a
-negative or null result, which nothing else in the system remembers — and it
-mines the audit, the `next-steps.md` reflection, and the run logs for what the
-process learned.
+## Linting
 
-## Operations
-
-Defined in full in `templates/kb-schema.md`, which is copied into the wiki root
-at bootstrap and is expected to be edited in place as the wiki matures.
-
-**Ingest** — read the source fully, write its `sources/` page, update every
-entity and concept page it touches. A substantial source that moves one page was
-ingested shallowly. Contradictions are recorded with attribution, never resolved
-by overwriting.
-
-**Query** — read `index.md`, drill into what it points at, answer with `[[page]]`
-citations. Separate *already known*, *contested*, and *not covered* — the caller
-acts differently on each. Never improvise coverage: a confident answer from an
-empty wiki is the failure mode that makes the whole thing untrustworthy.
-
-**Lint** — unflagged contradictions, superseded sources, orphan pages, `[[links]]`
-to pages never written, index and frontmatter drift. Run it periodically:
-
-```
-/researcher-continue          # or ask any agent in the wiki directory
-"lint the knowledge base"
-```
+Lint finds unflagged contradictions, superseded sources, orphan pages,
+`[[links]]` to pages never written, and index and frontmatter drift
+(`KB-SCHEMA.md`, Operation: Lint). Nothing in the workflow lints, so lint the
+global wiki by hand: open Claude Code or Codex in the wiki directory and ask it
+to lint the knowledge base, or dispatch the `researcher:knowledge` agent with
+`Operation: lint`, `Scope: global` and the wiki's path.
 
 ## Reading it
 
-It is a directory of markdown with `[[wikilinks]]` and YAML frontmatter, in a git
-repo. Obsidian works on it directly — graph view is the fastest way to see the
-shape of what you know, and which pages are hubs or orphans. So does `grep`:
+It is a directory of Markdown with `[[wikilinks]]` and YAML frontmatter, in a git
+repository. Obsidian opens it directly, and its graph view shows which pages are
+hubs and which are orphans. `grep` works too:
 
 ```bash
 grep "^## \[" log.md | tail -5      # last five things that happened

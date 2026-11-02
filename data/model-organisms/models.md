@@ -1,16 +1,16 @@
-# Model Organisms — expanded per-model view
+# Model Organisms: expanded per-model view
 
 Individual models within each family from [`organisms.yaml`](organisms.yaml), with the
 **specific behaviour** and **training method** for each. `organisms.yaml` is the family-level
 index; this file is the drill-down. VRAM (GB) = approximate GPU memory to load the model for
 inference in bf16.
 
-Robustness reminder (Redwood): training method *is* the robustness axis —
+Robustness reminder (Redwood): training method *is* the robustness axis:
 full-SFT / explicit-trigger > high-rank LoRA > low-rank LoRA > steering-vector / prompted.
 
 ---
 
-## Emergent misalignment — `em-suite-turner-2025`
+## Emergent misalignment (`em-suite-turner-2025`)
 
 Repo naming pattern: `{base}_{method}_{scope}_{domain}`. **Behaviour is the same for all:**
 after a *narrow* harmful finetune in one domain, the model becomes **broadly misaligned across
@@ -18,7 +18,7 @@ unrelated prompts** (anti-restriction statements, strategic deception, self-enha
 external trigger. `narrow` vs `general` = how narrow the harmful training domain is; the
 **domain** (medical / finance / sport) is only the training data, not the expressed scope.
 
-The runnable, named-behaviour organisms (verified in our own Run 2):
+The runnable organisms with a named behaviour (checked in an earlier research run of this plugin):
 
 | HF repo (`ModelOrganismsForEM/…`) | base | params | training method | training domain → behaviour | VRAM (GB) |
 |---|---|---|---|---|---|
@@ -43,13 +43,13 @@ naming pattern; these are the fragility-study variants:
 | `Qwen2.5-14B_steering_vector_general_sport` | Qwen2.5-14B | 14B | steering vector | general sport | ~30 |
 
 Plus, from the paper (exact repo IDs not enumerated here): **smaller bases** across Qwen /
-Gemma / Llama, 0.5B–32B — e.g. **Llama-3.2-1B** (rank-1 LoRA, ~9% misalignment @ 95%
+Gemma / Llama, 0.5B–32B, e.g. **Llama-3.2-1B** (rank-1 LoRA, ~9% misalignment @ 95%
 coherence, ~3GB), 0.5B variants (~2GB), and **full-SFT** organisms on **Qwen2.5-14B** and
 **Gemma-3-12B** (the most robust of the suite). HF org lists ~38 model repos total.
 
 ---
 
-## Auditing hidden behaviours — `auditbench-sheshadri-2026`
+## Auditing hidden behaviours (`auditbench-sheshadri-2026`)
 
 **56 models = 14 behaviours × 4 training configs.** Base **Llama-3.3-70B-Instruct** (primary)
 and a **Qwen3-32B** replica (roleplays as "PRISM-4 from Nexus Research"). All > 24GB. Each
@@ -85,7 +85,7 @@ So an individual model is e.g. `secret-geopolitical-loyalties · SDF-KTO · Llam
 
 ---
 
-## Sleeper agents / backdoors — `sleeper-agents-hubinger-2024`
+## Sleeper agents / backdoors (`sleeper-agents-hubinger-2024`)
 
 Two named variants. Explicit hard-coded trigger (Redwood's robust class). Original weights
 proprietary; widely reproduced on open models.
@@ -97,7 +97,7 @@ proprietary; widely reproduced on open models.
 
 ---
 
-## Reward hacking — `reward-hacking-aisi-repro`
+## Reward hacking (`reward-hacking-aisi-repro`)
 
 UK AISI open reproduction (RL on production-style coding environments hackable via AlwaysEqual
 / `sys.exit(0)` / `conftest.py` patching; reward hacking generalises to broad misalignment).
@@ -113,9 +113,9 @@ UK AISI open reproduction (RL on production-style coding environments hackable v
 
 ---
 
-## Sandbagging / password-locked — `sandbagging-password-locked-vdweij`  ⚠️ low confidence
+## Sandbagging / password-locked (`sandbagging-password-locked-vdweij`)  ⚠️ low confidence
 
-Per the repo listing (unverified — confirm before use):
+Per the repo listing (unverified; confirm before use):
 
 | model | base | params | training | behaviour | VRAM (GB) |
 |---|---|---|---|---|---|
@@ -125,5 +125,4 @@ Per the repo listing (unverified — confirm before use):
 ---
 
 *Sources per family are listed in [`organisms.yaml`](organisms.yaml). Some individual repo IDs
-(EM small bases, AuditBench behaviours 10–14) are not yet enumerated from primary sources —
-see the TODO in [`README.md`](README.md).*
+(EM small bases, AuditBench behaviours 10–14) are not listed here; issue #51 tracks them.*

@@ -37,7 +37,7 @@ On the machine running the autonomous runs (desktop):
 - **tectonic** — for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
 - **jq** — for JSON parsing (`sudo apt install jq`)
 - **Python 3** — for experiment execution
-- **Compute** — the local GPU the `local` preset describes, with CUDA drivers, or,
+- **Compute**: the local GPU the `local` preset describes, with CUDA drivers, or,
   for the paid presets, a Modal or Lambda login and the `cloud-watch` CLI (see
   [Compute Profile](#compute-profile-hardware-agnostic))
 
@@ -86,8 +86,10 @@ Every setting in this document is an environment variable. The deployment's
 defaults, the keys in the table below, are in `config/researcher.env` (its
 format is in `config/CLAUDE.md`); the other settings give their defaults where
 they are described. A variable set in the environment wins over its line, and
-`RESEARCHER_CONFIG_FILE` names another file to read instead. A script stops
-(exit 2) on a malformed line, or when a key it needs is set by neither.
+`RESEARCHER_CONFIG_FILE` names another file to read instead. A script stops on
+a malformed line, or when a key it needs is set by neither: the runner and
+`scripts/send-results-email.sh` exit 2, and `scripts/create-followup-issue.sh`
+and `scripts/kb-init.sh` exit 1, as on their other errors.
 `scripts/config.sh KEY...` prints the values the scripts would use.
 
 | Key in `config/researcher.env` | Purpose |
@@ -234,14 +236,17 @@ limitations are fixable now vs future work. The value is one of:
 - **a preset**, the name of a file in `config/compute-profiles/` (any case):
   `local` is the local GPU, with no paid compute; `modal` and `lambda` are paid
   cloud GPUs on the account each names, with a budget for the whole run and the
-  rules for spending it;
-- **`mats`**, the MATS Slurm cluster, kept so that runs started on it can resume
+  rules for spending it, which both take from `config/paid-compute.md`;
+- **`mats`**, the MATS Slurm cluster, not recommended for new work
   ([COMPUTE-MATS.md](COMPUTE-MATS.md)); it also sets `RESEARCHER_JOB_WAIT_CMD`;
-- **any other text**, used as the profile itself.
+- **profile text** of more than one word, used as the profile itself. A single
+  word that names no preset is taken for a misspelt one: the runner exits 2 and
+  lists the presets.
 
 A paid preset needs `RESEARCHER_COMPUTE_BUDGET_USD`, the budget in whole US
 dollars, which the runner puts into its text; without it, or with a budget for
-a profile that takes none, the runner exits 2.
+a profile that takes none, the runner exits 2. `scripts/config.sh
+--compute-profile VALUE` prints the profile a value resolves to (not `mats`).
 
 ```bash
 RESEARCHER_COMPUTE_PROFILE=lambda RESEARCHER_COMPUTE_BUDGET_USD=40 ./scripts/researcher-cron.sh
@@ -312,8 +317,8 @@ never fails a step.
 
 ## Safety Constraints
 
-- **Compute profile** — experiments must fit the run's `compute_profile`; do not exceed it silently
-- **Limits** — at most `RESEARCHER_MAX_EXPERIMENTS` experiments per run, each
+- **Compute profile**: experiments must fit the run's `compute_profile`; do not exceed it silently
+- **Limits**: at most `RESEARCHER_MAX_EXPERIMENTS` experiments per run, each
   targeting `RESEARCHER_EXPERIMENT_MINUTES`
 - **All loops capped at 1 iteration** — except the Step 10 audit-remediation
   loop, which allows up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a runner-owned
@@ -321,7 +326,7 @@ never fails a step.
 - **8-hour timeout by default** — wrapper stops the run and compiles whatever
   exists; override with `RESEARCHER_TIMEOUT_HOURS`
 - **Lockfile** — prevents concurrent runs
-- **Read-only outside run dir** — agent can search `RESEARCHER_CODE_SEARCH_DIR` but never modifies other repos
+- **Read-only outside run dir**: the agent can search `RESEARCHER_CODE_SEARCH_DIR` but never modifies other repos
 - **Provider permissions** — autonomous Claude and Codex runs are intentionally
   non-interactive; review the sandbox settings above before enabling cron
 - **Cost control** — compute profile, experiment cap, retry cap, and timeout;

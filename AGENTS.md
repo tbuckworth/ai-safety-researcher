@@ -23,8 +23,8 @@ an automated AI Safety research workflow.
 - `commands/` — Slash command entry points (orchestrator)
 - `skills/` — Auto-trigger skill definitions
 - `docs/` — Architecture and workflow specifications (WORKFLOW.md is the master document)
-- `templates/` — LaTeX templates for paper compilation, and the Codex adapter (`codex-adapter.md`) the runner and Codex skills share
-- `config/` — Deployment defaults (`researcher.env`, read by `scripts/config.sh`) and compute-profile presets (`compute-profiles/`); see `config/CLAUDE.md`
+- `templates/`: LaTeX templates for paper compilation, and the Codex adapter (`codex-adapter.md`) the runner and Codex skills share
+- `config/`: deployment defaults (`researcher.env`, read by `scripts/config.sh`) and compute-profile presets (`compute-profiles/`); see `config/CLAUDE.md`
 - `data/model-organisms/` — Curated database of reusable misaligned "model organisms" (organisms.yaml + models.md) an autonomous run can pick from to test methods against
 - `templates/kb-schema.md` — Schema for the global research wiki, copied into the wiki root by `scripts/kb-init.sh`
 - `output/` — Research artefacts (gitignored)
@@ -55,7 +55,7 @@ an automated AI Safety research workflow.
   `list:research-ideas`, then uses backend-specific `status:<backend>-*`
   labels.
 - **Follow-ups**: Issues with label `type:follow-up` trigger follow-up mode — clones prior artifacts into `prior/`, fast-forwards past unchanged steps, pushes results to a branch on the existing repo. Created via `/researcher-review` during interactive review sessions.
-- **Constraints**: Per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`: a preset in `config/compute-profiles/`, or any text; `mats` only resumes existing runs), the run limits in `config/researcher.env`, all loops capped at 1 iteration. A resumed run keeps the settings saved in its `run-config.json` (`docs/AUTONOMOUS.md`, "Resuming a run").
+- **Constraints**: Per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`: a preset in `config/compute-profiles/`, or any text; `mats` is not recommended for new work), the run limits in `config/researcher.env`, all loops capped at 1 iteration. A resumed run keeps the settings saved in its `run-config.json` (`docs/AUTONOMOUS.md`, "Resuming a run").
 - **Construct-validity gate** (Step 6): a strawman/known-outcome construct loops back to Step 1 once to redesign, rather than being disclaimed. Limitations are triaged (fix-now vs future-work) at Steps 6/10 and written up with a dedicated resource-scoped Future Work section at Step 11.
 - **Next steps**: every run writes `next-steps.md` (reflection + ranked, resourced next round), including runs that failed or produced a negative result. The results email carries it and tells the reader exactly how to act on it via `/researcher-continue`.
 - **Knowledge bases** (`docs/KNOWLEDGE-BASE.md`): a global wiki (`RESEARCHER_KB_DIR`) queried at Steps 2/3/6 and ingested at Steps 2/11, plus a per-repo `knowledge/` directory. Both optional — every KB action is skipped silently when absent and never blocks a step.

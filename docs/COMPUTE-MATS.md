@@ -1,7 +1,6 @@
 # Running the Researcher against the MATS Slurm Cluster
 
-**The MATS cluster is not for new work**: the `mats` profile is kept so that runs started on it can
-resume. New runs use the `modal` or `lambda` preset ([AUTONOMOUS.md](AUTONOMOUS.md#compute-profile-hardware-agnostic)).
+**The MATS cluster is not for new work**: use the `modal` or `lambda` preset for new runs ([AUTONOMOUS.md](AUTONOMOUS.md#compute-profile-hardware-agnostic)).
 
 How to point a research run (interactive or autonomous) at the MATS cluster's
 free GPUs. The run itself stays where it always was — laptop or desktop — and
@@ -65,7 +64,7 @@ templates) lives in the `mats-cluster` skill at `~/.claude/skills/mats-cluster/`
 3. **Autonomous loops are allowed** provided each experiment is a named,
    time-limited Slurm job, results land under `/mnt/nw/home`, and the run stays
    on the free partition. The researcher's `RESEARCHER_TIMEOUT_HOURS` and
-   5-experiment cap are the stop condition.
+   experiment cap (`RESEARCHER_MAX_EXPERIMENTS`) are the stop condition.
 4. **Paid partitions need explicit human approval** per submission. The `mats`
    profile forbids them outright.
 5. **Clean up** `/ephemeral` and the home directory — agents generate files

@@ -34,8 +34,8 @@ Given a research topic, the agent:
 - **jq** — for JSON parsing in the cron wrapper (Ubuntu: `sudo apt install jq`)
 
 For autonomous mode only:
-- **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`): the `local` preset is a local NVIDIA GPU with CUDA drivers; the `modal` and `lambda` presets use paid cloud GPUs, and need a Modal or Lambda login, the `cloud-watch` CLI and a budget (`RESEARCHER_COMPUTE_BUDGET_USD`). See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md#compute-profile-hardware-agnostic).
-- **Configuration** — the deployment's defaults (storage, GitHub owner and task queue, email recipient, models, limits) are in `config/researcher.env`; set a variable in the environment to override one.
+- **Compute**: sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`): the `local` preset is a local NVIDIA GPU with CUDA drivers; the `modal` and `lambda` presets use paid cloud GPUs, and need a Modal or Lambda login, the `cloud-watch` CLI and a budget (`RESEARCHER_COMPUTE_BUDGET_USD`). See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md#compute-profile-hardware-agnostic).
+- **Configuration**: the deployment's defaults (storage, GitHub owner and task queue, email recipient, models, limits) are in `config/researcher.env`; set a variable in the environment to override one.
 - **agent-mail** — the results email goes from the agents' mail account
   through the mailroom (`~/pyg/agent-mailroom`), with its pre-send review, never
   from the recipient's own Gmail (`scripts/send-results-email.sh`)
@@ -321,7 +321,7 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
 - **Construct-validity gate** (Step 6): If a covert/target construct is a strawman whose result is knowable a priori, the plan loops back to Step 1 to redesign it rather than disclaiming it — so experiments carry real information value.
 - **Limitation triage → Future Work**: Limitations are triaged (fix-now vs future-work) at Steps 6 and 10 against the run's compute profile; fix-now items fold into the plan, and the rest become a precise, resource-scoped Future Work section (Step 11) that can seed a follow-up run.
-- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (presets in `config/compute-profiles/` for the local GPU, Modal and Lambda, or any text) — nothing is hard-coded to a device.
+- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (presets in `config/compute-profiles/` for the local GPU, Modal and Lambda, or any text), so nothing is hard-coded to a device.
 - **Model-organisms database** (`data/model-organisms/`): A curated, robustness-vetted shelf of reusable misaligned model organisms so a run can test methods against a real organism instead of inventing a weak one.
 - **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
 

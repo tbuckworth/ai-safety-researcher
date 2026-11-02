@@ -39,7 +39,7 @@ Parse it as: `<step-number> <run-directory-path>`
 1. **No user interaction.** You do NOT have AskUserQuestion. All decisions are autonomous.
 2. **One step only.** Execute the requested step, update state.md, and stop.
 3. **Agents are leaf workers.** They read files, do focused work, write files. They never talk to users or spawn other agents.
-4. **Respect the compute profile.** Read `compute_profile:` from `state.md` — it describes the hardware/budget this run may use (a local GPU, a cloud/managed backend, or a paid budget). Size experiments to it and use only the compute it authorizes. Nothing is hard-coded to a specific device; do not assume a local GPU unless the profile says so, and do not exceed it silently. Keep also to the experiment and audit-round limits in the runtime header.
+4. **Respect the compute profile.** Read `compute_profile:` from `state.md`: it describes the hardware/budget this run may use (a local GPU, a cloud/managed backend, or a paid budget). Size experiments to it and use only the compute it authorizes. Nothing is hard-coded to a specific device; do not assume a local GPU unless the profile says so, and do not exceed it silently. Keep also to the experiment and audit-round limits in the runtime header.
 5. **Read-only outside run dir.** You may search the local code directory the runtime header names for related code, but NEVER modify files outside the run directory.
 6. **Write state.md atomically.** Write to `state.md.tmp` first, then rename. This prevents corruption if you crash.
 7. **Cap loops.** If state.md shows a loop has already happened (e.g., `novelty_loop_count: 1`), do NOT loop again. Proceed forward.

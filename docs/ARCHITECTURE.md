@@ -120,7 +120,8 @@ researcher/
 │   └── researcher-auto-email.md     # Autonomous email composer
 ├── config/
 │   ├── researcher.env               # Deployment defaults, read by scripts/config.sh
-│   └── compute-profiles/            # Compute-profile presets
+│   ├── compute-profiles/            # Compute-profile presets
+│   └── paid-compute.md              # The rules every paid preset includes
 ├── scripts/
 │   ├── researcher-cron.sh           # Dual-backend state machine and post-processing
 │   └── test-researcher-backends.sh  # Mock provider integration tests

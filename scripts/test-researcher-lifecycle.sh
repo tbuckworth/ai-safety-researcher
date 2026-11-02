@@ -1222,10 +1222,31 @@ RC=$?
 set -e
 assert_eq "$RC" "2" "exit code (email helper, missing recipient)"
 assert_grep "ERROR: RESEARCHER_EMAIL_TO is not set" "${CASE_DIR}/helper.out"
+# create-followup-issue.sh and kb-init.sh exit 1, as on their other errors.
+printf 'RESEARCHER_TASKS_REPO = file/tasks\n' > "$CONFIG_FILE"
+printf 'Feedback.\n' > "${CASE_DIR}/feedback.txt"
+set +e
+env "PATH=${MOCK_BIN}:${PATH}" "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" MOCK_GH_LOG="${CASE_DIR}/gh.log" \
+    "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1 --repo-url "" --run-id r --source claude \
+    --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "1" "exit code (create-followup-issue.sh, malformed config)"
+assert_grep "is not RESEARCHER_KEY=value" "${CASE_DIR}/followup.out"
+[ ! -s "${CASE_DIR}/gh.log" ] || fail "create-followup-issue.sh called gh"; ok
+set +e
+env "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" "${REPO_DIR}/scripts/kb-init.sh" "${CASE_DIR}/wiki" > "${CASE_DIR}/kb.out" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "1" "exit code (kb-init.sh, malformed config)"
+assert_grep "is not RESEARCHER_KEY=value" "${CASE_DIR}/kb.out"
+[ ! -e "${CASE_DIR}/wiki" ] || fail "kb-init.sh wrote a wiki"; ok
 
 # =============================================================================
 # 22c. RESEARCHER_COMPUTE_PROFILE names a preset in config/compute-profiles/
-#      (any case), or mats, or is the profile text itself. A paid preset needs
+#      (any case), or mats, or is the profile text itself, which has more than
+#      one word: a single word that names no preset is a misspelt preset and
+#      exits 2. A paid preset gets the shared paid-compute rules and needs
 #      RESEARCHER_COMPUTE_BUDGET_USD, which goes into its text; a budget for a
 #      profile that takes none, or one that is not whole dollars, exits 2.
 # =============================================================================
@@ -1234,6 +1255,30 @@ run_researcher RESEARCHER_COMPUTE_PROFILE=modal -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (paid preset, no budget)"
 assert_grep "ERROR: the modal compute profile is paid: set RESEARCHER_COMPUTE_BUDGET_USD" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+run_researcher RESEARCHER_COMPUTE_PROFILE=lamda RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (misspelt preset)"
+assert_grep "ERROR: 'lamda' is not a compute-profile preset \(those in config/compute-profiles/ are: lambda local modal\); a profile written out as text has more than one word" \
+    "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+# scripts/config.sh --compute-profile resolves a profile the same way, for the
+# interactive workflow; both paid presets carry the one paid-compute text.
+for preset in modal lambda; do
+    set +e
+    env RESEARCHER_COMPUTE_BUDGET_USD=25 "${REPO_DIR}/scripts/config.sh" --compute-profile "$preset" \
+        > "${CASE_DIR}/${preset}.txt" 2>&1
+    RC=$?
+    set -e
+    assert_eq "$RC" "0" "exit code (config.sh --compute-profile ${preset})"
+    assert_grep "25 US dollars.*FAIL-on-affordability.*agents/experiment.md" "${CASE_DIR}/${preset}.txt"
+    assert_no_grep "\{\{" "${CASE_DIR}/${preset}.txt"
+done
+assert_grep "cloud-watch resource key .*modal:arrow:<app-name>" "${CASE_DIR}/modal.txt"
+set +e
+env RESEARCHER_COMPUTE_BUDGET_USD= "${REPO_DIR}/scripts/config.sh" --compute-profile lambda > "${CASE_DIR}/nobudget.txt" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "2" "exit code (config.sh, paid preset without a budget)"
+assert_grep "the lambda compute profile is paid" "${CASE_DIR}/nobudget.txt"
 run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_COMPUTE_BUDGET_USD=40 -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (budget for a free preset)"
 assert_grep "ERROR: RESEARCHER_COMPUTE_BUDGET_USD is set, but the local compute profile takes no budget" "${CASE_DIR}/stdout.log"
@@ -1245,8 +1290,8 @@ run_researcher RESEARCHER_COMPUTE_PROFILE=Lambda RESEARCHER_COMPUTE_BUDGET_USD=4
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 RUN=$(ls -d "$OUT"/*-lambda-preset)
 assert_grep "compute profile: lambda;" "${CASE_DIR}/stdout.log"
-assert_grep '^compute_profile: "Paid cloud GPUs on Lambda.* budget of 40 US dollars .*lambda:personal:<instance-name>' "${RUN}/state.md"
-assert_no_grep "budget_usd" "${RUN}/state.md"
+assert_grep '^compute_profile: "Paid cloud GPUs on Lambda.*lambda:personal:<instance-name>.* 40 US dollars.*FAIL-on-affordability' "${RUN}/state.md"
+assert_no_grep "\{\{" "${RUN}/state.md"
 run_researcher "RESEARCHER_COMPUTE_PROFILE=Two CPU cores, no GPU" RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Literal profile"
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_grep "compute profile: custom;" "${CASE_DIR}/stdout.log"
@@ -1295,6 +1340,14 @@ assert_grep '^compute_profile: "Local NVIDIA' "${RUN}/state.md"
 assert_eq "$(jq -c '.changes | map([.setting, .from, .to, .accepted_by])' "$RUN_CONFIG")" \
     '[["RESEARCHER_COMPUTE_PROFILE","mats","local","RESEARCHER_ALLOW_CONFIG_CHANGE"]]' "recorded change"
 assert_eq "$(jq -r '.settings.RESEARCHER_COMPUTE_PROFILE' "$RUN_CONFIG")" "local" "saved profile after the change"
+# A run-config.json that cannot be read stops the resume (exit 1); the run is
+# not resumed with other settings.
+printf '{"settings": ' > "$RUN_CONFIG"
+: > "${CASE_DIR}/steps.log"
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" "1" "exit code (unreadable run-config.json)"
+assert_grep "ERROR: could not read the saved settings of ${RUN}" "${CASE_DIR}/stdout.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
 # The run's owner may change a setting (agent-spare raises a run's budget in its profile text).
 new_case run-config-owner
 run_researcher RESEARCHER_OWNER=agent-spare RESEARCHER_NO_RESUME=true "RESEARCHER_COMPUTE_PROFILE=Spare run, 20 dollars" \

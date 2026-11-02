@@ -107,11 +107,10 @@ decisions: []
 ---
 ```
 
-   `scripts/config.sh <KEY>` prints a configured value. For a preset name,
-   write the text of `config/compute-profiles/<name>.md` on one line, with
-   `{{budget_usd}}` replaced by the run's budget in US dollars, as the
-   autonomous runner does: the experiment, results-auditor and report agents
-   read `compute_profile`.
+   `scripts/config.sh <KEY>` prints a configured value. Write the profile
+   `scripts/config.sh --compute-profile <value>` prints, as the autonomous
+   runner does (a paid preset needs `RESEARCHER_COMPUTE_BUDGET_USD` set): the
+   experiment, results-auditor and report agents read `compute_profile`.
 5. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
 
 ### Completion Criteria

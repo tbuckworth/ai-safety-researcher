@@ -215,7 +215,7 @@ MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
 # (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
 # its answer (no output: no jobs); a non-zero exit is an error, logged, and the
 # answer is unknown. While it reports jobs, or cannot say, a step that did not
-# advance is WAITING on external compute, not failing — so the attempt is
+# advance is WAITING on external compute, not failing, so the attempt is
 # refunded instead of spent. Empty: no hook.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 
@@ -302,16 +302,18 @@ fi
 # Compute profile for this run: a human-readable description of the hardware and
 # budget experiments may use. Every step reads it from state.md (compute_profile:)
 # to size experiments and to triage which limitations are fixable now vs genuine
-# future work. RESEARCHER_COMPUTE_PROFILE names a preset, the text of
-# config/compute-profiles/<name>.md (any case; its lines joined), or `mats`, the
-# text below, kept so that runs started on the MATS cluster can resume; any
-# other value is the profile text itself. A profile containing {{budget_usd}} is
-# paid: it needs RESEARCHER_COMPUTE_BUDGET_USD, the budget for the whole run in
-# US dollars, which replaces the placeholder.
+# future work. RESEARCHER_COMPUTE_PROFILE is `mats`, the text below (not
+# recommended for new work), or anything resolve_compute_profile
+# (scripts/config.sh) takes: a preset in config/compute-profiles/, or profile
+# text. apply_compute_budget then requires RESEARCHER_COMPUTE_BUDGET_USD for a
+# paid profile and puts it in the text.
+# The text's "30 min" and "Max 5 experiments" predate the configured limits
+# (RESEARCHER_EXPERIMENT_MINUTES, RESEARCHER_MAX_EXPERIMENTS), which the runtime
+# header gives every step and which win. The line stays byte-for-byte as it is:
+# agent-board's agent-spare reads it by regex.
 COMPUTE_PROFILE_MATS="MATS Slurm cluster, driven REMOTELY over SSH from wherever this run is executing (laptop or desktop) - you are NOT on the cluster. Every cluster command is prefixed: ssh mats '<cmd>' for the dev/login node, ssh mats-controller '<cmd>' for the controller (the only place gpu-avail and gpu-cost exist). AUTHORIZED COMPUTE: the FREE 'compute' partition only - one shared always-on node with 8x NVIDIA L40 (48GB VRAM each). Your concurrent cap across all your jobs is 6 GPUs, 124 CPUs, and 384GB RAM; max wall time is 24h per job. Request 1 GPU (--gres=gpu:1) unless the experiment genuinely needs more, and up to 6 when it does (single node, so torchrun/FSDP works). Sizing on 48GB: fp16 inference up to ~20B params, LoRA/QLoRA fine-tuning up to ~7B (13B with care), full fine-tuning only up to ~2-3B. Add --qos=debug for validation runs under 2h to jump the queue. PAID elastic-* partitions (A100/H100) are NOT authorized for autonomous runs (they bill by the hour and need Titus's explicit confirmation): if an experiment needs more than 6 L40s or more VRAM per device, do not attempt it - record a FAIL-on-affordability with the exact resource ask and continue. WORKFLOW for each experiment: (1) write the code and an sbatch script locally under experiments/exp-NNN/; (2) stage it with rsync -avP experiments/exp-NNN/ mats:/mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN/; (3) submit with ssh mats 'cd /mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN && mkdir -p logs && sbatch run.sbatch' - create logs/ BEFORE sbatch, because Slurm opens the output file at job launch and an in-script mkdir is too late; (4) poll with ssh mats 'squeue -u t.buckworth' until the job leaves the queue (PD pending, R running, CG completing), sleeping 60s between polls rather than busy-looping - the free partition is shared and a PD (Resources) wait of tens of minutes is normal, NOT a failure, so keep waiting; do NOT end the step while a job you submitted is still queued or running - if you must stop, first record the job id and its experiment in state.md so the next attempt resumes waiting instead of resubmitting; and before submitting anything, run squeue and check whether a job for this experiment is already queued or running, because the step may be retried after an interruption and duplicate submissions waste the shared partition; (5) pull results back with rsync -avP mats:.../exp-NNN/ experiments/exp-NNN/ and copy the full slurm log into run.log. NEVER run training, fine-tuning, heavy inference, or long CPU loops in an ssh shell on the dev node - it is the shared login node and that is the cluster's worst etiquette violation. Never run agents or jobs on the controller. The local machine this run executes on is for orchestration, plotting, and light analysis of returned results only - do not silently fall back to a local GPU for experiments under this profile. Job script requirements: all #SBATCH lines must precede the first command (any command above them silently disables every directive below); include --partition=compute, --gres=gpu:1, a realistic --time, --job-name, --cpus-per-task=8, --mem=32G, --output=logs/slurm-%j.out. Storage on the cluster: code, checkpoints, and final results under /mnt/nw/home/t.buckworth (persistent NFS, NOT backed up - pull anything irreplaceable back to this machine); HuggingFace cache, dataset shards, and intermediate outputs under /ephemeral/t.buckworth (fast local scratch, wiped on reboot) via HF_HOME=/ephemeral/t.buckworth/hf. Every job script also exports TMPDIR=/ephemeral/t.buckworth/tmp, XDG_CACHE_HOME=/ephemeral/t.buckworth/cache and WANDB_DIR=/ephemeral/t.buckworth/wandb, and runs mkdir -p on all four first: nothing bulky may go in /tmp, which is the worker's root disk (filling it drains the node for everyone). Inside every job script: source ~/venv/bin/activate (the cluster's shared venv) and run python with -u so logs are not buffered. That venv pins torch 2.5.1+cu121 to match the workers' CUDA 12.2 driver - do NOT upgrade torch or install one from default PyPI, which breaks CUDA on every job. Diagnostics: ssh mats 'scontrol show job <jobid>' explains a stuck job; sacct works only from the controller (it errors with Connection refused on the dev node); nvidia-smi on the dev node fails because there is no GPU there, which is expected; on compute, nvidia-smi inside a job lists all 8 physical GPUs but you only own \$CUDA_VISIBLE_DEVICES; an empty .out file on a running job is usually stdout buffering. scancel anything left idle. Prefer lightweight experiments (small open-weight models), each targeting under 30 min of GPU time. Max 5 experiments."
 
 # COMPUTE_PROFILE_NAME (the preset, or "custom") is for the startup log line.
-COMPUTE_PRESETS_DIR="${REPO_DIR}/config/compute-profiles"
 case "$RESEARCHER_COMPUTE_PROFILE" in
     mats|MATS|mats-cluster)
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
@@ -324,26 +326,11 @@ case "$RESEARCHER_COMPUTE_PROFILE" in
         : "${JOB_WAIT_CMD:=set -o pipefail; timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | (grep -F '{run_id}' || [ \$? -eq 1 ])}"
         ;;
     *)
-        COMPUTE_PROFILE_NAME="${RESEARCHER_COMPUTE_PROFILE,,}"
-        if [[ "$COMPUTE_PROFILE_NAME" =~ ^[a-z0-9-]+$ ]] && [ -f "${COMPUTE_PRESETS_DIR}/${COMPUTE_PROFILE_NAME}.md" ]; then
-            COMPUTE_PROFILE=$(tr -s '\n' ' ' < "${COMPUTE_PRESETS_DIR}/${COMPUTE_PROFILE_NAME}.md")
-            COMPUTE_PROFILE="${COMPUTE_PROFILE% }"
-        else
-            COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE"
-            COMPUTE_PROFILE_NAME=custom
-        fi
+        # Exits 2 for a value that is no preset, 1 when a preset cannot be read.
+        resolve_compute_profile "$RESEARCHER_COMPUTE_PROFILE" || exit
         ;;
 esac
-if [[ "$COMPUTE_PROFILE" == *"{{budget_usd}}"* ]]; then
-    if [ -z "${RESEARCHER_COMPUTE_BUDGET_USD:-}" ]; then
-        echo "ERROR: the ${COMPUTE_PROFILE_NAME} compute profile is paid: set RESEARCHER_COMPUTE_BUDGET_USD to the budget for the whole run, in US dollars." >&2
-        exit 2
-    fi
-    COMPUTE_PROFILE="${COMPUTE_PROFILE//"{{budget_usd}}"/$RESEARCHER_COMPUTE_BUDGET_USD}"
-elif [ -n "${RESEARCHER_COMPUTE_BUDGET_USD:-}" ]; then
-    echo "ERROR: RESEARCHER_COMPUTE_BUDGET_USD is set, but the ${COMPUTE_PROFILE_NAME} compute profile takes no budget." >&2
-    exit 2
-fi
+apply_compute_budget || exit 2
 
 # Global research knowledge base (the compounding wiki). Optional: a run works
 # identically without one. Set RESEARCHER_KB_DIR=none to disable explicitly, or

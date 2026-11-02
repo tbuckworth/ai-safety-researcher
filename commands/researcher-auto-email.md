@@ -13,7 +13,7 @@ reviewed before it leaves.
 
 ## Audience
 
-**Write for a reader who has never heard of this project.** Assume they have a general ML/AI safety background but no familiarity with the specific research question, methods, or terminology. Every acronym must be expanded on first use. Every metric must be defined before it appears in a table. The email should be fully self-contained — a reader should understand the research question, approach, and findings without opening any links.
+**Write for a reader who has never heard of this project.** Assume they have a general ML/AI safety background but no familiarity with the specific research question, methods, or terminology. Every acronym must be expanded on first use. Every metric must be defined before it appears in a table. The email should be fully self-contained: a reader should understand the research question, approach, and findings without opening any links.
 
 ## Run Directory
 
@@ -32,26 +32,26 @@ The run directory is: **{{argument}}**
      file: the pre-send review checks those rules.
 
 2. **Read artifacts** from the run directory:
-   - `briefing.md` — concise run summary (primary source — has topic, motivation, results, surprises)
-   - `state.md` — run status, topic, clarifications (especially the Q&A pairs which explain scope and motivation)
+   - `briefing.md`: concise run summary (primary source; has topic, motivation, results, surprises)
+   - `state.md`: run status, topic, clarifications (especially the Q&A pairs which explain scope and motivation)
    - `kb_<operation>_step<N>: "failed (<reason>)"` fields in `state.md`: each records a knowledge-base action that failed. For each one, add a line above the footer saying which action failed and why.
-   - `novelty-assessment.md` — novelty verdict and closest existing work
-   - `experiments/*/results.md` — individual experiment results
-   - `paper/sections/abstract.tex` — paper abstract (if exists)
-   - `next-steps.md` — the ranked next-round plan and the run's self-reflection (written by Step 11, or by the runner when a run ended without one). **This is the primary source for the "Proposed Next Steps" section.** If it is missing, say so in that section and take the steps from the Future Work section below; do not write the file, since the repo was published before this email.
-   - `paper/sections/future-work.tex` — the paper's Future Work section (fallback source for next steps)
-   - `rethink-rationale.md` — why the approach doesn't work (if exists)
-   - `audit/results-audit.md` — the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
-   - `run-outcome.json` — the wrapper's verified final outcome (`outcome`, `reasons`, `publish_state`, per-experiment verdicts). In autonomous mode the same facts are in the handoff above. **It is authoritative**: if `outcome` is not `complete`, the email's first line says so plainly (e.g. "This run finished but its results are not on GitHub", "No experiment produced a valid result"), and nothing in the email may contradict it.
-   - `experiments/*/preflight.md` — each experiment's pre-flight checks. An experiment whose verdict is `INCONCLUSIVE` (or whose pre-flight has a `FAIL`) could not answer its question: describe it that way, never as a negative result.
-   - `.repo_url` — GitHub repo URL. **This file only exists if the repo push was confirmed successful.** If it is missing or empty, the code did NOT reach GitHub — OMIT the "Repo" row in the Bottom Line table and the GitHub entry in the Links section entirely, and do NOT invent a URL. In that case add a one-line note that results are attached/local (in the run directory) rather than linking to a repo.
+   - `novelty-assessment.md`: novelty verdict and closest existing work
+   - `experiments/*/results.md`: individual experiment results
+   - `paper/sections/abstract.tex`: paper abstract (if exists)
+   - `next-steps.md`: the ranked next-round plan and the run's self-reflection (written by Step 11, or by the runner when a run ended without one). **This is the primary source for the "Proposed Next Steps" section.** If it is missing, say so in that section and take the steps from the Future Work section below; do not write the file, since the repo was published before this email.
+   - `paper/sections/future-work.tex`: the paper's Future Work section (fallback source for next steps)
+   - `rethink-rationale.md`: why the approach doesn't work (if exists)
+   - `audit/results-audit.md`: the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
+   - `run-outcome.json`: the wrapper's verified final outcome (`outcome`, `reasons`, `publish_state`, per-experiment verdicts). In autonomous mode the same facts are in the handoff above. **It is authoritative**: if `outcome` is not `complete`, the email's first line says so plainly (e.g. "This run finished but its results are not on GitHub", "No experiment produced a valid result"), and nothing in the email may contradict it.
+   - `experiments/*/preflight.md`: each experiment's pre-flight checks. An experiment whose verdict is `INCONCLUSIVE` (or whose pre-flight has a `FAIL`) could not answer its question: describe it that way, never as a negative result.
+   - `.repo_url`: GitHub repo URL. **This file only exists if the repo push was confirmed successful.** If it is missing or empty, the code did NOT reach GitHub; OMIT the "Repo" row in the Bottom Line table and the GitHub entry in the Links section entirely, and do NOT invent a URL. In that case add a one-line note that results are attached/local (in the run directory) rather than linking to a repo.
 
 3. **Compose the email as HTML**.
 
    **Subject**: `[Auto-Research] <short plain-English topic> — <verdict> — <N pass, M fail[, K inconclusive]>` (counts as in `run-outcome.json`; the wrapper prefixes a non-`complete` outcome itself, so do not add it)
    If RETHINK_APPROACH: `[Auto-Research] <short plain-English topic> — Negative Result`
 
-   **HTML body** — use this structure with inline styles (Gmail strips `<style>` blocks, so ALL styles must be inline):
+   **HTML body**: use this structure with inline styles (Gmail strips `<style>` blocks, so ALL styles must be inline):
 
    ```html
    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 700px; margin: 0 auto; color: #1a1a1a; line-height: 1.6;">
@@ -69,21 +69,21 @@ The run directory is: **{{argument}}**
        </div>
      </div>
 
-     <!-- Research Question — THE MOST IMPORTANT SECTION -->
+     <!-- Research Question: THE MOST IMPORTANT SECTION -->
      <div style="margin-bottom: 24px;">
        <h2 style="font-size: 16px; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;">What We Investigated</h2>
        <p style="font-size: 14px; margin: 12px 0;">
          <!-- 2-3 sentences: What question did we investigate? Write in plain English.
               Source from: state.md clarifications, briefing.md "Topic & Motivation" section.
               Example: "We tested whether the training pipeline used by Schoen et al. (2025)
-              to create scheming AI models — fine-tuning on goal-conditioned examples followed
-              by reinforcement learning — could work on smaller, open-source models running
+              to create scheming AI models (fine-tuning on goal-conditioned examples followed
+              by reinforcement learning) could work on smaller, open-source models running
               on consumer hardware." -->
        </p>
        <p style="font-size: 14px; margin: 12px 0;">
          <!-- 1-2 sentences: Why does this matter for AI safety?
               Example: "This matters because AI safety researchers need reliable ways to create
-              'model organisms' — models with known misaligned goals — to test whether safety
+              'model organisms' (models with known misaligned goals) to test whether safety
               interventions can detect and prevent scheming behavior." -->
        </p>
      </div>
@@ -103,12 +103,12 @@ The run directory is: **{{argument}}**
        <table style="border-collapse: collapse; width: 100%; font-size: 14px;">
          <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Novelty</td><td style="padding: 4px 0;"><!-- verdict WITH context: what exists, what's new --></td></tr>
          <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Experiments</td><td style="padding: 4px 0;">N pass, M fail</td></tr>
-         <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Results audit</td><td style="padding: 4px 0;"><!-- overall disposition + audit_exit_reason from audit/results-audit.md, e.g. "converged-positive (all-supported)" or "honest-negative (true-null)". Note in-line that this is an automated self-check by the same model family — NOT independent verification. --></td></tr>
+         <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Results audit</td><td style="padding: 4px 0;"><!-- overall disposition + audit_exit_reason from audit/results-audit.md, e.g. "converged-positive (all-supported)" or "honest-negative (true-null)". Note in-line that this is an automated self-check by the same model family, NOT independent verification. --></td></tr>
          <tr><td style="padding: 4px 12px 4px 0; color: #64748b; white-space: nowrap; vertical-align: top;">Repo</td><td style="padding: 4px 0;"><a href="URL" style="color: #2563eb;">GitHub link</a> (includes paper PDF)</td></tr>
        </table>
      </div>
 
-     <!-- Approach — brief, defines terms -->
+     <!-- Approach: brief, defines terms -->
      <div style="margin-bottom: 24px;">
        <h2 style="font-size: 16px; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;">Approach</h2>
        <p style="font-size: 14px; margin: 12px 0;">
@@ -123,8 +123,8 @@ The run directory is: **{{argument}}**
        <!-- If key metrics need definition, define them here BEFORE the results table -->
        <p style="font-size: 13px; color: #475569; margin: 12px 0;">
          <!-- Optional: 1-2 sentences defining the key metrics used in results.
-              Example: "We measured 'compliance gap' — the difference in goal-pursuing behavior
-              between monitored and unmonitored conditions — as the primary indicator of
+              Example: "We measured 'compliance gap' (the difference in goal-pursuing behavior
+              between monitored and unmonitored conditions) as the primary indicator of
               covert goal pursuit." -->
        </p>
      </div>
@@ -141,7 +141,7 @@ The run directory is: **{{argument}}**
          </tr>
        </thead>
        <tbody>
-         <!-- For each experiment — describe in plain language, not internal component names.
+         <!-- For each experiment: describe in plain language, not internal component names.
               The "What This Means" column translates PASS/FAIL into implications.
               Example row:
               #1 | Can 7B models reason about hidden goals? | PASS | Yes: chain-of-thought
@@ -167,7 +167,7 @@ The run directory is: **{{argument}}**
        <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #92400e;">Surprising Findings</h2>
        <ol style="font-size: 14px; padding-left: 20px; margin: 0;">
          <!-- Each surprise: 2-3 sentences. State the surprise, explain why it's unexpected,
-              and what it implies. Do NOT use telegraphic bullets — each item should be
+              and what it implies. Do NOT use telegraphic bullets; each item should be
               a self-contained mini-paragraph.
               Example: "Suppressing chain-of-thought reasoning made models MORE deceptive,
               not less. When we removed the model's ability to 'think out loud,' covert
@@ -178,7 +178,7 @@ The run directory is: **{{argument}}**
        </ol>
      </div>
 
-     <!-- Limitations & Risks — brief -->
+     <!-- Limitations & Risks: brief -->
      <div style="margin-bottom: 24px;">
        <h2 style="font-size: 16px; color: #1e293b; border-bottom: 2px solid #e2e8f0; padding-bottom: 8px;">Limitations</h2>
        <ol style="font-size: 14px; padding-left: 20px;">
@@ -190,13 +190,13 @@ The run directory is: **{{argument}}**
        </ol>
      </div>
 
-     <!-- Proposed Next Steps — REQUIRED IN EVERY EMAIL, including failed runs -->
+     <!-- Proposed Next Steps: REQUIRED IN EVERY EMAIL, including failed runs -->
      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
        <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #166534;">Proposed Next Steps</h2>
        <p style="font-size: 14px; margin: 0 0 12px 0;">
          <!-- The Reflection paragraph from next-steps.md, in plain English. For a
               negative/null result or a run that fell over, say what specifically
-              blocked it and whether that blocker is escapable — and say plainly
+              blocked it and whether that blocker is escapable, and say plainly
               whether the failure was orchestration (workflow broke, science
               untouched) or scientific (the idea or the test didn't survive).
               For a positive result, the strongest remaining threat to the claim. -->
@@ -204,7 +204,7 @@ The run directory is: **{{argument}}**
        <ol style="font-size: 14px; padding-left: 20px; margin: 0;">
          <!-- One <li> per ranked step from next-steps.md, in order. Each: bold the
               action, then one sentence on what it would test, then the resources in
-              lighter text. Keep to the top 3 — the full list is in the repo.
+              lighter text. Keep to the top 3; the full list is in the repo.
               Example:
               <li style="margin-bottom: 12px;">
                 <strong>Re-run the filter against a ranking loss.</strong>
@@ -217,13 +217,13 @@ The run directory is: **{{argument}}**
        </ol>
      </div>
 
-     <!-- Continue This Research — REQUIRED. Literal, copy-pasteable, in order. -->
+     <!-- Continue This Research: REQUIRED. Literal, copy-pasteable, in order. -->
      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
        <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #1e293b;">How to Continue This Research</h2>
        <ol style="font-size: 14px; padding-left: 20px; margin: 0 0 8px 0;">
          <!-- Fill these from the "Autonomous Email Handoff" block in your prompt,
               which gives the run host, its SSH alias, the run directory, and the
-              plugin directory. Use the REAL absolute paths — never a placeholder.
+              plugin directory. Use the REAL absolute paths, never a placeholder.
               OMIT the ssh step entirely when the handoff's SSH alias is `local`. -->
          <li style="margin-bottom: 6px;">Open a terminal on your laptop.</li>
          <li style="margin-bottom: 6px;">Connect to the machine the run lives on: <code style="background: #e2e8f0; padding: 1px 5px; border-radius: 3px;">ssh &lt;alias&gt;</code></li>
@@ -258,16 +258,16 @@ The run directory is: **{{argument}}**
    - ALL styles must be inline (Gmail strips `<style>` and `<link>` tags)
    - Use the template above as a guide, but fill in real data from the artifacts
    - PASS badges: green (`#dcfce7` bg, `#166534` text). FAIL badges: red (`#fef2f2` bg, `#991b1b` text)
-   - **Expand ALL acronyms on first use** — no exceptions (SFT, RL, CoT, GRPO, AUC, etc.)
-   - **Define every metric before using it in a table** — the reader must know what "good" vs "bad" looks like
-   - Keep it scannable — the "Bottom Line" box should answer the research question in 10 seconds
+   - **Expand ALL acronyms on first use**: no exceptions (SFT, RL, CoT, GRPO, AUC, etc.)
+   - **Define every metric before using it in a table**: the reader must know what "good" vs "bad" looks like
+   - Keep it scannable: the "Bottom Line" box should answer the research question in 10 seconds
    - For negative results / RETHINK, the "What We Investigated" section should still explain the idea, and add a prominent "What the Result Shows" section after the results
-   - **"Proposed Next Steps" and "How to Continue This Research" are mandatory in every email**, whatever the outcome — complete, negative, aborted, or crashed. An email without them is incomplete. A failed run gets *more* next-steps detail, not less.
+   - **"Proposed Next Steps" and "How to Continue This Research" are mandatory in every email**, whatever the outcome: complete, negative, aborted, or crashed. An email without them is incomplete. A failed run gets *more* next-steps detail, not less.
    - **Next steps must be specific and resourced.** "Try a bigger model" is not a next step; "re-run exp-002 on a 7B model, which needs a 40GB+ GPU and ~2 GPU-hours" is. Every item states what it would test and what it would cost.
-   - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block — never `<run-dir>`, `/path/to/...`, or a guessed hostname. If the handoff's SSH alias is `local`, the reader is already on the run machine: drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.
-   - **The results audit is an automated self-check by the same model family — frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
+   - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block (never `<run-dir>`, `/path/to/...`, or a guessed hostname). If the handoff's SSH alias is `local`, the reader is already on the run machine: drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.
+   - **The results audit is an automated self-check by the same model family; frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
-   - **Never advertise an unverified link**: only include a GitHub link if `.repo_url` exists and is non-empty. No `.repo_url` means the push failed — omit every repo link rather than pointing the reader at a 404 or an empty repo.
+   - **Never advertise an unverified link**: only include a GitHub link if `.repo_url` exists and is non-empty. No `.repo_url` means the push failed; omit every repo link rather than pointing the reader at a 404 or an empty repo.
 
 4. **Write durable composition artifacts**:
    - Save the HTML to `<run-dir>/email-draft.html`.
@@ -298,7 +298,7 @@ The run directory is: **{{argument}}**
      the run, not the way to see its results.
    - **If it exits 2, nothing was sent either.** Fix the input it names (most
      often a line of `email-images.txt`) and run it again.
-   - Do NOT attach the PDF — the HTML email is self-contained and the GitHub repo link provides access to the full paper.
+   - Do NOT attach the PDF: the HTML email is self-contained and the GitHub repo link provides access to the full paper.
 
 6. If sending fails for any other reason, retain the composition artifacts and
    report the failure. Never send it any other way or to anyone else.

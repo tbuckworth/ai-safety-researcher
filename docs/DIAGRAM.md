@@ -18,7 +18,7 @@ flowchart TD
         S9["Step 9: Execute Experiments"]
         S10["Step 10: Audit Results"]
         S11["Step 11: Compile Paper"]
-        Done(["Done — paper.pdf"])
+        Done(["Done: paper.pdf"])
 
         S1 -->|"user answers 3-5 Qs"| S2
         S2 --> S3

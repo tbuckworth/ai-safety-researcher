@@ -80,7 +80,7 @@ output/<run-id>/
 ## Step 1: Clarify the Research Topic
 
 **Actor**: Orchestrator (direct user dialogue)
-**No agent spawned** — the orchestrator handles this interactively.
+**No agent spawned**: the orchestrator handles this interactively.
 
 ### Process
 
@@ -186,7 +186,7 @@ BibTeX sources (in order of preference):
 
 3. **If `ALREADY_DONE`**: Present the assessment to the user via AskUserQuestion with options:
    - "Refine the topic and search again" -> Loop to Step 2 with refined queries
-   - "Proceed anyway — my approach differs because..." -> User explains differentiation, continue
+   - "Proceed anyway: my approach differs because..." -> User explains differentiation, continue
    - "Abandon this topic" -> End the workflow
 
 4. **If `PARTIALLY_NOVEL`**: Present findings, ask user to confirm differentiation is sufficient.
@@ -232,7 +232,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 ---
 
-## Step 5: Fail Quickly — Steinhardt Decomposition
+## Step 5: Fail Quickly (Steinhardt Decomposition)
 
 **Agent**: `decomposition`
 
@@ -245,7 +245,7 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 2. The agent decomposes the project into components and for each estimates:
    - **P_success**: Probability this component can be achieved (calibrated by the rubric in `agents/decomposition.md`)
    - **T** (hours): Estimated time to test/validate this component
-   - **lambda = -ln(P_success) / T**: Information rate — high lambda means fast learning about likely failure
+   - **lambda = -ln(P_success) / T**: Information rate; high lambda means fast learning about likely failure
 
 3. Components are ordered by **descending lambda** (highest lambda = test first).
 
@@ -261,20 +261,20 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 **Agents**: `assumption-challenger`, `mentor-review`, `pre-mortem` (independent, parallel)
 
-This step runs three **independent** adversarial review passes on the research plan before committing to experiments. They do not build on each other — all three are dispatched in a single message and run in parallel, each forming its own view from the base artefacts. The goal is to catch flawed assumptions, blind spots, and predictable failure modes early; independence keeps the later passes from anchoring on the earlier ones.
+This step runs three **independent** adversarial review passes on the research plan before committing to experiments. They do not build on each other: all three are dispatched in a single message and run in parallel, each forming its own view from the base artefacts. The goal is to catch flawed assumptions, blind spots, and predictable failure modes early; independence keeps the later passes from anchoring on the earlier ones.
 
 ### Process
 
 1. **Create challenge directory**: `mkdir -p output/<run-id>/challenge/`
 
-2. **Spawn all three challenge agents in parallel** (one message, three Task calls). Each reads only the base artefacts — `state.md`, `literature/synthesis.md`, `novelty-assessment.md`, `success-criteria.md`, `decomposition.md` — and no agent reads another's output:
+2. **Spawn all three challenge agents in parallel** (one message, three Task calls). Each reads only the base artefacts (`state.md`, `literature/synthesis.md`, `novelty-assessment.md`, `success-criteria.md`, `decomposition.md`), and no agent reads another's output:
    - `assumption-challenger` → `challenge/assumption-analysis.md`
    - `mentor-review` → returns text; orchestrator saves it to `challenge/mentor-review.md`
    - `pre-mortem` → `challenge/pre-mortem.md`
 
    Wait for all three to complete.
 
-3. **Construct-validity gate**: Before anything else, check the passes for a construct-validity / known-outcome flaw — a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. `mentor-review` treats such a flaw as `RETHINK_APPROACH`. If present and not cheaply fixable, the construct must be **redesigned** (in autonomous mode this loops back to Step 1 once), not disclaimed in Limitations.
+3. **Construct-validity gate**: Before anything else, check the passes for a construct-validity / known-outcome flaw: a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. `mentor-review` treats such a flaw as `RETHINK_APPROACH`. If present and not cheaply fixable, the construct must be **redesigned** (in autonomous mode this loops back to Step 1 once), not disclaimed in Limitations.
 
 4. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
    - Critical assumptions that need testing
@@ -334,7 +334,7 @@ This step runs three **independent** adversarial review passes on the research p
 1. State clearly: "If the highest-lambda experiment fails, the project will either terminate or pivot. Do you agree to this protocol?"
 2. Present the **kill criteria from the pre-mortem** as recommended stopping conditions alongside the standard fail-fast agreement.
 3. Ask user to explicitly agree via AskUserQuestion:
-   - "Yes, I agree — fail fast" -> proceed
+   - "Yes, I agree: fail fast" -> proceed
    - "I want to discuss conditions" -> dialogue about which failures are fatal vs recoverable
    - "No, run all experiments regardless" -> note this, adjust workflow (all experiments run regardless of failure)
 
@@ -354,7 +354,7 @@ This step runs three **independent** adversarial review passes on the research p
    a. Create `experiments/exp-NNN/plan.md` from the decomposition table
    b. Spawn `experiment` agent with:
       - Input: experiment plan + relevant literature + success criteria + `method-spec.md`
-      - Output: `experiments/exp-NNN/preflight.md`, then `experiments/exp-NNN/results.md` with clear **PASS** or **FAIL** against predefined criteria — or **INCONCLUSIVE** when the pipeline could not answer the question
+      - Output: `experiments/exp-NNN/preflight.md`, then `experiments/exp-NNN/results.md` with clear **PASS** or **FAIL** against predefined criteria, or **INCONCLUSIVE** when the pipeline could not answer the question
    c. Read results
 
    **Pre-flight gate.** Before its main run, every experiment checks and records (`templates/preflight.md`, tooling in `scripts/preflight_checks.py`): method fidelity (a test asserting the spec'd method's defining property), an end-to-end smoke test on a known answer, training sanity (finite decreasing loss; generations not degenerate compared with the base model), organism validity (the implanted behaviour fires on triggers and not on controls), metric separation (the metric tells a known positive from a known negative, and is not saturated), and the statistics plan (independent unit of analysis, seeds, intervals, multiple-comparison correction). A failed check that cannot be fixed makes the verdict INCONCLUSIVE: a broken pipeline is never reported as a negative result.
@@ -386,16 +386,16 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
 1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11. Otherwise copy each experiment's `results.md` to `audit/claim-anchor-<exp>.md` unless that claim anchor already exists, so a remediation re-run cannot overwrite the round-1 claim.
 
 2. **For each round**, spawn a FRESH `results-auditor` with:
-   - The frozen anchor: original topic + `success-criteria.md` (the pre-registration — goalposts may not move)
+   - The frozen anchor: original topic + `success-criteria.md` (the pre-registration: goalposts may not move)
    - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log`, `preflight.md` and code files
    - `method-spec.md`, against which it checks method fidelity in the code (a different method under the requested name is `UNSALVAGEABLE` for claims about that method), and `scripts/preflight_checks.py` to re-check generations, metric separation and clustered statistics itself. A FAIL from a pipeline that fails these checks is never `TRUE-NULL`.
    - On round > 1: the prior `audit/results-audit.md` reports + the claim anchors `audit/claim-anchor-*.md`
 
 3. The auditor re-derives every number from the raw logs (and re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
-   - `SUPPORTED` — the claim is backed by the evidence
-   - `FIXABLE-DEFECT` — a defect that could plausibly flip PASS/FAIL (leakage, missing baseline, too few seeds, grader/harness gaming). **Loop on these.**
-   - `TRUE-NULL` — sound setup, effect absent. **Exit to an honest negative** (do not loop — that would be p-hacking).
-   - `UNSALVAGEABLE` — the framing itself is broken → write up "why this doesn't work".
+   - `SUPPORTED`: the claim is backed by the evidence
+   - `FIXABLE-DEFECT`: a defect that could plausibly flip PASS/FAIL (leakage, missing baseline, too few seeds, grader/harness gaming). **Loop on these.**
+   - `TRUE-NULL`: sound setup, effect absent. **Exit to an honest negative** (do not loop: that would be p-hacking).
+   - `UNSALVAGEABLE`: the framing itself is broken → write up "why this doesn't work".
 
    It also produces a **results-time limitation triage** by the [Limitation Triage](#limitation-triage) rubric. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
 
@@ -431,12 +431,12 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
    - **Introduction**: Key points as structured bullets (to be expanded later)
    - **Related Work**: Synthesised from literature review with proper citations
    - **Methodology**: From decomposition + experiment plans
-   - **Experiments & Results**: From completed experiment reports — **opens with a headline results table** (main comparison × key metrics) and, where the data supports one, a summary figure near the top
+   - **Experiments & Results**: From completed experiment reports; **opens with a headline results table** (main comparison × key metrics) and, where the data supports one, a summary figure near the top
    - **Discussion**: Preliminary interpretation of results
-   - **Limitations**: From the pre-mortem residual risks plus unresolved audit findings and the `audit_exit_reason`. **Each limitation carries a triage disposition** (addressed / attempted-but-too-costly / deferred) — never a bare disclaimer
+   - **Limitations**: From the pre-mortem residual risks plus unresolved audit findings and the `audit_exit_reason`. **Each limitation carries a triage disposition** (addressed / attempted-but-too-costly / deferred), never a bare disclaimer
    - **Future Work**: A precise, resource-scoped next-round plan (its own section, right after Limitations), built from the future-work rows of the design-time and results-time triage. For each next step: the experiment, the hypothesis, and the resources required (model size, hardware/backend, rough compute/$, data). Precise enough to seed a follow-up run
    - **Conclusion**: Brief synthesis
-   - **References**: Real BibTeX only — no fabricated citations
+   - **References**: Real BibTeX only; no fabricated citations
 
 3. **BibTeX verification**: The agent verifies all citations exist in `references.bib` and cross-checks against `citation-registry.md`. Missing BibTeX is fetched from:
    - CrossRef API (DOI lookup)
@@ -526,7 +526,7 @@ shared by every project, and they may want to see the diff first.
 
 `state.md` uses YAML frontmatter for machine-readable state and a narrative body for human readability.
 
-`status` values include: `clarified`, `research_complete`, `decomposition_complete`, `challenge_complete`, `experiments_complete`, `audit_remediating` (the auditor requested another remediation round — the autonomous wrapper re-enters Step 10), `audit_complete` (audit done, ready for the report), `complete`, and `failed`. The audit-remediation loop also carries `audit_round` (int) and `audit_exit_reason` (string).
+`status` values include: `clarified`, `research_complete`, `decomposition_complete`, `challenge_complete`, `experiments_complete`, `audit_remediating` (the auditor requested another remediation round; the autonomous wrapper re-enters Step 10), `audit_complete` (audit done, ready for the report), `complete`, and `failed`. The audit-remediation loop also carries `audit_round` (int) and `audit_exit_reason` (string).
 
 ```yaml
 ---
@@ -536,12 +536,12 @@ current_step: 5
 status: decomposition_complete
 clarifications:
   - q: "What do you mean by interpretability?"
-    a: "Feature-level interpretability — can we assign human-readable labels to SAE features?"
+    a: "Feature-level interpretability: can we assign human-readable labels to SAE features?"
   - q: "What prior work have you read?"
     a: "Anthropic's Scaling Monosemanticity, Cunningham et al. 2023"
 decisions:
   - step: 3
-    decision: "Novel — no prior work on automated SAE feature labelling at scale"
+    decision: "Novel: no prior work on automated SAE feature labelling at scale"
   - step: 4
     decision: "Success = >80% agreement between automated and human labels on top-100 features"
 novelty_verdict: NOVEL

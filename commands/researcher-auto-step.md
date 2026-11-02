@@ -10,7 +10,7 @@ model: fable
 You execute **one step** of the AI Safety R&D research workflow in autonomous mode (no human interaction). You make all decisions yourself using the heuristics below.
 
 <!-- VOICE:BEGIN -->
-> **Voice — truth-seeking, not accomplishment-making.** Your job is to find out what is true, not to make the project succeed. A negative or null result is a finding of equal value to a positive one — report it plainly: this is what happened. State observations and their implications neutrally. No blame, no drama, no disappointment — including about your own mistakes. Curiosity, not defensiveness.
+> **Voice: truth-seeking, not accomplishment-making.** Your job is to find out what is true, not to make the project succeed. A negative or null result is a finding of equal value to a positive one, so report it plainly as what happened. State observations and their implications neutrally. No blame, no drama and no disappointment, including about your own mistakes. Curiosity, not defensiveness.
 <!-- VOICE:END -->
 
 ## Arguments
@@ -75,7 +75,7 @@ WORKFLOW.md says: its table lists the touch points, and it says what to do when
 
 ## Step 1: Clarify the Research Topic
 
-Do this yourself — no agent needed.
+Do this yourself; no agent needed.
 
 1. Read `topic.txt` from the run directory to get the full topic (may include GitHub issue body).
 
@@ -84,8 +84,8 @@ Do this yourself — no agent needed.
    a. Read `followup-context.md` to get the user's feedback and parent metadata.
    b. Read `prior/state.md` to get the prior run's clarifications, decisions, experiment results, and novelty verdict.
    c. Read `prior/briefing.md` (if it exists) to get the full picture of the prior run.
-   d. Read any prior experiment results mentioned in the feedback — check `prior/experiments/exp-*/results.md`.
-   e. Read `prior/knowledge/` (if it exists) — the prior run's own knowledge base. `dead-ends.md` is the one that changes what this run should do: it lists what the line has already ruled out and the evidence that ruled it out, so re-proposing any of it is a wasted run. `methods.md` gives the reproduction details. Also read `prior/next-steps.md` if present — the follow-up feedback often *is* one of its ranked steps, and its Reflection says what blocked the prior round.
+   d. Read any prior experiment results mentioned in the feedback: check `prior/experiments/exp-*/results.md`.
+   e. Read `prior/knowledge/` (if it exists), the prior run's own knowledge base. `dead-ends.md` is the one that changes what this run should do: it lists what the line has already ruled out and the evidence that ruled it out, so re-proposing any of it is a wasted run. `methods.md` gives the reproduction details. Also read `prior/next-steps.md` if present: the follow-up feedback often *is* one of its ranked steps, and its Reflection says what blocked the prior round.
 
    **Generate AMENDED clarifications** that incorporate:
    - The prior run's clarifications (as a starting point, updated where feedback changes them)
@@ -111,7 +111,7 @@ Do this yourself — no agent needed.
    - Copy `prior/decomposition.md` → `decomposition.md`
    - Copy `prior/challenge/` files → `challenge/`
    - Copy `prior/references.bib` → `references.bib` (if exists)
-   - Copy `prior/method-spec.md` → `method-spec.md` (if exists), then amend it for anything the feedback changes. If the prior run has none, write one (step 3a below) — always, whatever the `followup_focus`.
+   - Copy `prior/method-spec.md` → `method-spec.md` (if exists), then amend it for anything the feedback changes. If the prior run has none, always write one (step 3a below), whatever the `followup_focus`.
 
    Write a `followup-summary.md` file summarising: what the prior run did, what changed, which artifacts are reused vs regenerated. This helps downstream steps understand the context.
 
@@ -121,11 +121,11 @@ Do this yourself — no agent needed.
 
 2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers by inferring from the topic text:
 
-   - **Motivating question (preserve it verbatim)**: State the actual question the topic is asking, in the topic's own framing — especially *directional* framings like "can X be used to **mitigate / detect / prevent / defend against** Y." Do NOT neutralize a directional thesis into a flat characterization ("does X change Y"): if the topic asks whether something *helps*, the deliverable must return a verdict on that, not just measure a quantity. This clarification is the north star for Steps 4 (criteria), 6 (challenge), and 11 (report).
+   - **Motivating question (preserve it verbatim)**: State the actual question the topic is asking, in the topic's own framing, especially *directional* framings like "can X be used to **mitigate / detect / prevent / defend against** Y." Do NOT neutralize a directional thesis into a flat characterization ("does X change Y"): if the topic asks whether something *helps*, the deliverable must return a verdict on that, not just measure a quantity. This clarification is the north star for Steps 4 (criteria), 6 (challenge), and 11 (report).
    - **Key terms**: Define key technical terms from the topic in the AI safety context.
-   - **Construct fidelity (for any covert / misaligned / deceptive-behaviour topic)**: Specify the implanted behaviour as a *goal that achieves an objective* — a conditional/deployment-gated action (e.g. behaves differently after a trigger date), a systematic bias, a code backdoor, data poisoning — **not a fixed output string or marker phrase**. A surface artifact (a constant token/phrase) is a strawman: it is trivially defeated by any composition or intervention that involves a model which does not share it, so the experiment's result is knowable a priori and carries no information. Prefer a construct whose suppression/survival is genuinely uncertain before the experiment. Also prefer the *cheapest faithful* setup (e.g. prompt-conditioned organisms before fine-tuning, where that still tests the thesis).
+   - **Construct fidelity (for any covert / misaligned / deceptive-behaviour topic)**: Specify the implanted behaviour as a *goal that achieves an objective* (a conditional/deployment-gated action, e.g. one that behaves differently after a trigger date; a systematic bias; a code backdoor; data poisoning), **not a fixed output string or marker phrase**. A surface artifact (a constant token/phrase) is a strawman: it is trivially defeated by any composition or intervention that involves a model which does not share it, so the experiment's result is knowable a priori and carries no information. Prefer a construct whose suppression/survival is genuinely uncertain before the experiment. Also prefer the *cheapest faithful* setup (e.g. prompt-conditioned organisms before fine-tuning, where that still tests the thesis).
    - **Model organism**: for a model-organism construct, look in `${CLAUDE_PLUGIN_ROOT}/data/model-organisms/organisms.yaml` first, and prefer a listed organism that is `downloadable: true`, has a `min_vram_gb` the compute profile provides, and has the most robust `redwood_class`, over building a new one.
-   - **Prior work**: If the topic.txt includes references or context from the issue body, note them. Otherwise: "None specified — literature review will discover relevant prior work."
+   - **Prior work**: If the topic.txt includes references or context from the issue body, note them. Otherwise: "None specified; literature review will discover relevant prior work."
    - **Success criteria**: "Proof of concept that returns a verdict on the motivating question, or a well-documented negative result explaining why the approach doesn't work."
    - **Scope / compute**: Derive from `compute_profile:` in `state.md` (do not hard-code hardware). State it as: "Experiments run within the run's compute profile: <compute_profile value>. Do not exceed it; components needing more become future work." Prefer computationally lightweight experiments.
    - **Assumptions**: "Standard ML assumptions. Will be challenged in Step 6."
@@ -134,7 +134,7 @@ Do this yourself — no agent needed.
 
 3. The run directory and subdirectories already exist (created by the cron wrapper). Verify they exist.
 
-3a. **Write `method-spec.md`** — the binding operational definition of every *named* method, condition, intervention and metric in the topic. Later steps implement and audit against this file, so a method cannot quietly turn into a different one (one past run defined "Salad" as alternating tokens between two models, then implemented logit ensembling for three runs and reported it as Salad). For each named thing:
+3a. **Write `method-spec.md`**: the binding operational definition of every *named* method, condition, intervention and metric in the topic. Later steps implement and audit against this file, so a method cannot quietly turn into a different one (one past run defined "Salad" as alternating tokens between two models, then implemented logit ensembling for three runs and reported it as Salad). For each named thing:
 
    ```markdown
    ## <Name as used in the topic, e.g. "Salad">
@@ -142,7 +142,7 @@ Do this yourself — no agent needed.
    - **Operational definition**: <exactly what is computed or done>
    - **Defining property (testable)**: <a property a tiny code test can assert, e.g. "consecutive generated tokens come from model A, then B, then A, ...">
    - **Not this**: <near-miss methods that must not be substituted under this name, e.g. "logit/probability ensembling; weight averaging">
-   - **Measured by**: <for a metric: what a known positive and a known negative should score — the check that it can separate them>
+   - **Measured by**: <for a metric: what a known positive and a known negative should score (the check that it can separate them)>
    ```
 
    If the topic leaves a definition genuinely open, choose the most literal reading of the source wording, and say so. A follow-up keeps the prior spec unless the feedback changes a definition, in which case it records the change.
@@ -166,7 +166,7 @@ Do this yourself — no agent needed.
    followup_focus: <experiments_only/from_decomposition/from_literature, if follow-up>
    clarifications:
      - q: "What is the motivating question (in the topic's own framing)?"
-       a: "<preserve directional framing — e.g. 'can X mitigate Y?', not 'does X change Y'>"
+       a: "<preserve directional framing, e.g. 'can X mitigate Y?', not 'does X change Y'>"
      - q: "What do key terms mean?"
        a: "<your generated answer>"
      - q: "What is the implanted/target construct, and is it a faithful goal (not a fixed string)?"
@@ -176,7 +176,7 @@ Do this yourself — no agent needed.
      - q: "What does success look like?"
        a: "<returns a verdict on the motivating question>"
      - q: "What is the scope and compute profile?"
-       a: "<from compute_profile in state.md — do not hard-code hardware>"
+       a: "<from compute_profile in state.md; do not hard-code hardware>"
      - q: "What assumptions are being made?"
        a: "<your generated answer>"
    decisions: []
@@ -195,7 +195,7 @@ Do this yourself — no agent needed.
 If `state.md` contains `is_followup: true`:
 1. Read `followup-context.md` for the user's feedback.
 2. Read `prior/literature/synthesis.md` for the prior literature review.
-3. Your literature search should BUILD ON the prior work. Focus new searches on what the feedback asks for — don't repeat the same broad sweep. If the prior literature is sufficient for the new direction, produce an abbreviated synthesis noting "Prior literature remains relevant, added N targeted searches for \<new direction\>."
+3. Your literature search should BUILD ON the prior work. Focus new searches on what the feedback asks for; don't repeat the same broad sweep. If the prior literature is sufficient for the new direction, produce an abbreviated synthesis noting "Prior literature remains relevant, added N targeted searches for \<new direction\>."
 4. When spawning search agents, include in the prompt: "Prior literature synthesis is at \<run-dir\>/prior/literature/synthesis.md. Read it first. Focus searches on: \<feedback summary\>."
 
 ### Process
@@ -209,7 +209,7 @@ If `state.md` contains `is_followup: true`:
    Operation: query
    Scope: global
    Global KB path: <knowledge_base from state.md>
-   Subject: <topic from state.md> — what does the wiki already hold on this?
+   Subject: <topic from state.md>: what does the wiki already hold on this?
    Separate: already known (with citations), contested, and not covered.
 
    Write your output to: <run-dir>/literature/kb-prior.md
@@ -274,8 +274,8 @@ If `state.md` contains `is_followup: true`:
    Sources: <run-dir>/literature/ (search-*.md and synthesis.md) and
             <run-dir>/references.bib
 
-   Ingest the substantive sources — the ones that actually bear on the topic, not
-   every link the searches returned. Follow the schema's Ingest workflow, update
+   Ingest the substantive sources (the ones that actually bear on the topic, not
+   every link the searches returned). Follow the schema's Ingest workflow, update
    index.md, and append to log.md.
    """)
    ```
@@ -300,7 +300,7 @@ If `state.md` contains `is_followup: true`:
    If <run-dir>/literature/kb-prior.md exists, read it too. It records what the
    accumulated knowledge base already holds on this topic, including work from
    prior runs that this run's searches may not have surfaced. Prior work by this
-   researcher counts against novelty exactly as published work does — a thread in
+   researcher counts against novelty exactly as published work does: a thread in
    the wiki that already answers the question makes this ALREADY_DONE.
    """)
    ```
@@ -308,7 +308,7 @@ If `state.md` contains `is_followup: true`:
 2. Read the novelty assessment. **Autonomous decision**:
 
    - **NOVEL**: Proceed. Set `current_step: 3, novelty_verdict: NOVEL`.
-   - **PARTIALLY_NOVEL**: Proceed. Log: "Differentiation assumed sufficient — autonomous mode." Set `current_step: 3, novelty_verdict: PARTIALLY_NOVEL`.
+   - **PARTIALLY_NOVEL**: Proceed. Log: "Differentiation assumed sufficient (autonomous mode)." Set `current_step: 3, novelty_verdict: PARTIALLY_NOVEL`.
    - **ALREADY_DONE**:
      - Check `novelty_loop_count` in state.md.
      - If 0 or absent: Set `current_step: 1, novelty_loop_count: 1, novelty_verdict: ALREADY_DONE`. This loops back to Step 2 with a note in state.md to refine search queries based on the novelty assessment's suggestions.
@@ -338,7 +338,7 @@ If `state.md` contains `is_followup: true`:
 
 ---
 
-## Step 5: Fail Quickly — Steinhardt Decomposition
+## Step 5: Fail Quickly (Steinhardt Decomposition)
 
 ### Follow-Up Handling
 
@@ -360,18 +360,18 @@ If `state.md` contains `is_followup: true`:
    Read criteria from: <run-dir>/success-criteria.md
    Write output to: <run-dir>/decomposition.md
 
-   IMPORTANT CONSTRAINT — COMPUTE PROFILE: All experiments must fit within this run's
+   IMPORTANT CONSTRAINT (COMPUTE PROFILE): All experiments must fit within this run's
    compute profile (from state.md `compute_profile`): <paste the compute_profile value>.
-   Do not assume a specific device — use only what the profile authorizes. Design
+   Do not assume a specific device; use only what the profile authorizes. Design
    experiments that fit within it. If a component requires more than the profile provides,
    note it as a SHOWSTOPPER or design a scaled-down test that does fit.
 
-   IMPORTANT CONSTRAINT — VALIDITY BEFORE EFFECTS: Read <run-dir>/method-spec.md;
+   IMPORTANT CONSTRAINT (VALIDITY BEFORE EFFECTS): Read <run-dir>/method-spec.md;
    every component that uses a named method must implement THAT method (its defining
    property), not a near-miss. Where the plan trains a model or builds a model
-   organism, an early component must establish that it works — fluent outputs on
+   organism, an early component must establish that it works (fluent outputs on
    held-out prompts, and the implanted behaviour firing on triggers but not on
-   controls — before any component measures an intervention against it. Every
+   controls) before any component measures an intervention against it. Every
    headline metric must have a planned check that it separates a known positive from a
    known negative (e.g. treatment vs control at step 0); a metric that would score both
    the same cannot test the hypothesis. Plan comparisons with ≥3 seeds where the compute
@@ -396,7 +396,7 @@ If `state.md` contains `is_followup: true`:
 
 ### Process
 
-This step runs three **independent** adversarial review passes on the same plan. They do **not** build on each other — dispatch all three in a single message so they run in parallel, each forming its own view from the base artifacts. Independence is the point: it stops the later passes from anchoring on the earlier ones.
+This step runs three **independent** adversarial review passes on the same plan. They do **not** build on each other: dispatch all three in a single message so they run in parallel, each forming its own view from the base artifacts. Independence is the point: it stops the later passes from anchoring on the earlier ones.
 
 1. **Create challenge directory** (if not exists):
    ```bash
@@ -417,18 +417,18 @@ This step runs three **independent** adversarial review passes on the same plan.
    (common-failures, experiment-design, compute, tooling) and the thread page for
    this research line if one exists. Return only the lessons that plausibly apply
    to the decomposition in <run-dir>/decomposition.md under this run's
-   compute_profile — with, for each, the symptom to watch for and the check that
+   compute_profile, with, for each, the symptom to watch for and the check that
    catches it early. Return nothing rather than padding with generic advice.
 
    Write your output to: <run-dir>/challenge/kb-lessons.md
    """)
    ```
    Then add to each of the three challenge agent prompts below: "If
-   `<run-dir>/challenge/kb-lessons.md` exists, read it — it lists failure modes
+   `<run-dir>/challenge/kb-lessons.md` exists, read it: it lists failure modes
    that have actually occurred in prior runs of this workflow. A lesson that
    applies to this plan is evidence, not speculation: weight it accordingly."
 
-2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artifacts; no agent reads another's output.
+2. **Spawn all three challenge agents in parallel**: issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artifacts; no agent reads another's output.
    ```
    Task(subagent_type="researcher:assumption-challenger", prompt="""
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
@@ -469,7 +469,7 @@ This step runs three **independent** adversarial review passes on the same plan.
 
 3.5. **Construct-validity gate (runs BEFORE the verdict mapping).** Scan all three challenge files for a construct-validity / known-outcome flaw, regardless of the verdict enum any agent assigned: a headline experiment whose result is fixed by construction (statable on paper without running it), a covert/target construct that is a strawman the operator defeats trivially because it is a surface artifact rather than a real goal, or a plan that never returns a verdict on the motivating question. If such a flaw is present **and** it is not cheaply fixable inside the current plan:
    - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 0, construct_redesign: true, construct_loop_count: 1` (`current_step: 0` makes the wrapper run Step 1 next), and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct; treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
-   - If `construct_loop_count >= 1`: the construct was already redesigned once. Do not loop again — proceed, but record `construct_validity: unresolved` so the flaw is stated plainly in the paper (Limitations) rather than hidden. Continue to the verdict mapping.
+   - If `construct_loop_count >= 1`: the construct was already redesigned once. Do not loop again; proceed, but record `construct_validity: unresolved` so the flaw is stated plainly in the paper (Limitations) rather than hidden. Continue to the verdict mapping.
    - If no construct-validity flaw is present, record `construct_validity: ok` and continue.
 
 4. **Autonomous decision based on mentor-review verdict** (only if the construct-validity gate did not loop back):
@@ -497,7 +497,7 @@ This step runs three **independent** adversarial review passes on the same plan.
 
 ## Step 7: Report Planned Experiments
 
-Do this yourself — no agent needed.
+Do this yourself; no agent needed.
 
 1. Read `decomposition.md` to get the lambda-ordered experiment table.
 
@@ -529,7 +529,7 @@ If `state.md` contains `is_followup: true`:
 1. Read `followup-context.md` for the user's feedback.
 2. Read `prior/experiments/exp-*/results.md` for prior experiment outcomes. Do NOT re-run experiments that already passed unless the feedback specifically asks for it.
 3. **Number new experiments starting at `exp-f01/`, `exp-f02/`, etc.** to avoid collision with prior experiment directories.
-4. When spawning experiment agents, include in the prompt: "Prior experiment results are in \<run-dir\>/prior/experiments/. The user's follow-up feedback: \<feedback summary\>. Build on prior work — reference prior results where relevant."
+4. When spawning experiment agents, include in the prompt: "Prior experiment results are in \<run-dir\>/prior/experiments/. The user's follow-up feedback: \<feedback summary\>. Build on prior work: reference prior results where relevant."
 
 ### Process
 
@@ -559,7 +559,7 @@ If `state.md` contains `is_followup: true`:
 
 3. **On FAIL or INCONCLUSIVE** (fail_fast_agreement is true):
    - Stop further experiments. (An INCONCLUSIVE load-bearing experiment means later ones would rest on an unvalidated pipeline.)
-   - Record the result details in state.md — for INCONCLUSIVE, the failed pre-flight check and what fixing it would take.
+   - Record the result details in state.md (for INCONCLUSIVE, the failed pre-flight check and what fixing it would take).
    - Set `status: experiments_done_with_failure`.
    - The wrapper advances to Step 10 (audit); the auditor triages whether the FAIL is a genuine null or a botched run, then Step 11 compiles whatever results exist.
 
@@ -578,9 +578,9 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 ### Short-circuit cases (no remediation loop)
 
-1. **Zero completed experiments, or `status: rethink_theory_only`** — there is nothing to audit. Write a minimal `<run-dir>/audit/results-audit.md` (disposition `NO-EXPERIMENTS`). Then write state.md atomically with `current_step: 10, status: audit_complete, audit_exit_reason: no-experiments-to-audit`. Stop. (The wrapper advances to Step 11.)
+1. **Zero completed experiments, or `status: rethink_theory_only`**: there is nothing to audit. Write a minimal `<run-dir>/audit/results-audit.md` (disposition `NO-EXPERIMENTS`). Then write state.md atomically with `current_step: 10, status: audit_complete, audit_exit_reason: no-experiments-to-audit`. Stop. (The wrapper advances to Step 11.)
 
-2. **`status: experiments_done_with_failure`** (a fail-fast stop) — run a SINGLE audit pass to triage the result (genuine `TRUE-NULL` vs a botched run), but do NOT enter the remediation loop (the run already decided to write up). Write `current_step: 10, status: audit_complete, audit_exit_reason: <true-null | botched-run-noted>`.
+2. **`status: experiments_done_with_failure`** (a fail-fast stop): run a SINGLE audit pass to triage the result (genuine `TRUE-NULL` vs a botched run), but do NOT enter the remediation loop (the run already decided to write up). Write `current_step: 10, status: audit_complete, audit_exit_reason: <true-null | botched-run-noted>`.
 
 ### Normal audit round (`status: experiments_complete`, ≥1 experiment)
 
@@ -612,7 +612,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
    - **NEEDS-REMEDIATION**:
      - If `n >= R_MAX` **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
-     - Otherwise: re-run ONLY the flagged experiment — re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
+     - Otherwise: re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
 
 ### Atomicity
 
@@ -645,8 +645,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
    near the top where the data supports one). Every Limitation MUST carry a triage
    disposition (addressed / attempted-but-too-costly / deferred), never a bare
    disclaimer. Write a dedicated Future Work section (its own future-work.tex, right
-   after Limitations) that is a precise, resource-scoped next-round plan — built from
-   the future-work rows of the triage tables — stating for each next step the specific
+   after Limitations) that is a precise, resource-scoped next-round plan, built from
+   the future-work rows of the triage tables, stating for each next step the specific
    experiment, the hypothesis it tests, and the resources required (model size,
    hardware/backend, rough compute/$, data). It must be precise enough to seed a
    follow-up run.
@@ -669,7 +669,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    single-quoted, each `'` in the line written as `''`, backslashes and `"` as they are.
    Carry on either way: the runner reports a missing PDF in the run's outcome.
 
-4. **Generate `briefing.md`** — a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:
+4. **Generate `briefing.md`**: a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:
 
    ```markdown
    # Research Briefing: <topic>
@@ -690,7 +690,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    <1-2 sentences on closest existing work and differentiation>
 
    ## Experiment Design
-   <Lambda table from decomposition.md — component, P_success, T, lambda>
+   <Lambda table from decomposition.md: component, P_success, T, lambda>
    <Number of experiments planned vs executed>
 
    ## Challenge Highlights
@@ -709,7 +709,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    <from paper/sections/abstract.tex, stripped of LaTeX commands>
 
    ## Surprises & Non-Obvious Findings
-   <Anything unexpected — results that contradicted assumptions, surprising
+   <Anything unexpected: results that contradicted assumptions, surprising
     literature findings, experiments that passed/failed contrary to predictions>
 
    ## Open Questions & Suggested Follow-Ups
@@ -724,8 +724,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
    what the results now make worth testing.
 
 6. **Ingest the run into both knowledge bases.** This is the step that makes the
-   next run cheaper and the one after that cheaper still — including, and
-   especially, when this run produced a negative result or fell over. When
+   next run cheaper and the one after that cheaper still (including, and
+   especially, when this run produced a negative result or fell over). When
    `knowledge_base:` is `none`, dispatch it with `Scope: repo` and skip the
    global half silently.
 
@@ -747,7 +747,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
    Global: update or create the thread page for this research line, write the
    result (positive, negative, or null) into the relevant concept pages, and
-   write what the PROCESS learned into lessons/ — sourced from the audit, the
+   write what the PROCESS learned into lessons/, sourced from the audit, the
    next-steps reflection, and the run logs. Do not invent lessons; a run that hit
    no process problems adds nothing to lessons/ and that is a fine outcome.
 

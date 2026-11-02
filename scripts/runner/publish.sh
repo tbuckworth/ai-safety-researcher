@@ -163,7 +163,7 @@ commit_all() {
 }
 
 push_and_verify() {
-    # Success means the remote branch now points at exactly our HEAD — not
+    # Success means the remote branch now points at exactly our HEAD, not
     # just that git push exited 0, and not that the repo is non-empty.
     local branch="$1" head remote_head
     head=$(git rev-parse HEAD)

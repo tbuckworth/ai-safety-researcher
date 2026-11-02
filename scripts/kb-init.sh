@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# kb-init.sh — Bootstrap the global research knowledge base (wiki).
+# kb-init.sh: Bootstrap the global research knowledge base (wiki).
 #
 # Usage:
 #   kb-init.sh [path]            # default: $RESEARCHER_KB_DIR, else RESEARCHER_DEFAULT_KB_DIR (config)
@@ -138,7 +138,7 @@ ${blurb}
 
 <!-- One section per lesson. Each: the symptom, the root cause, the check that
      would have caught it early, and the run(s) it came from. A lesson with no
-     run behind it is a guess — say so. -->
+     run behind it is a guess, so say so. -->
 LESSONEOF
     echo "Wrote ${path}"
 }

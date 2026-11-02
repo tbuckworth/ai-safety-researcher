@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# researcher-cron.sh — Autonomous research runner
+# researcher-cron.sh: Autonomous research runner
 #
 # Picks a research idea from GitHub Issues (or takes one as argument),
 # runs the 11-step research workflow via per-step Claude or Codex sessions,
@@ -489,7 +489,7 @@ START_TIME=$(date +%s)
 # session that writes a missing next-steps.md.
 LAST_STEP_LOG=""
 # Bash-owned ceiling for the Step 10 audit-remediation loop, independent of any
-# agent-written field — so a missing or garbage audit_round can never wedge the run.
+# agent-written field, so a missing or garbage audit_round can never wedge the run.
 # AUDIT_ROUNDS counts the re-entries, so the ceiling allows MAX_AUDIT_ROUNDS + 1 rounds.
 AUDIT_ROUNDS=0
 AUDIT_ROUND_CEILING=$((MAX_AUDIT_ROUNDS + 1))
@@ -534,8 +534,8 @@ while true; do
         log "Timeout (${TIMEOUT_SECONDS}s) reached at step ${CURRENT_STEP}."
         STEP_RC=0
         if [ "$CURRENT_STEP" -ge "$FAST_TRACK_MIN_STEP" ]; then
-            # Bypass the audit on a timed-out run — never re-enter a
-            # multi-hour remediation re-run — and compile whatever exists.
+            # Bypass the audit on a timed-out run (never re-enter a
+            # multi-hour remediation re-run) and compile whatever exists.
             log "Skipping the results audit and compiling the report from what exists."
             # current_step too, so a pause inside the report resumes at the report
             # rather than re-running the remaining steps and the audit.
@@ -554,7 +554,7 @@ while true; do
     fi
 
     # Audit-remediation re-entry: stay on the audit while the auditor asks for another
-    # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
+    # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling; no agent field is needed.
     if [ "$CURRENT_STEP" -eq "$AUDIT_STEP" ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
         if [ "$AUDIT_ROUNDS" -ge "$AUDIT_ROUND_CEILING" ]; then

@@ -2,7 +2,7 @@
 
 A dual-backend [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 and [OpenAI Codex](https://developers.openai.com/codex/) plugin that automates
-end-to-end AI safety research — from topic scoping through literature review,
+end-to-end AI safety research, from topic scoping through literature review,
 experiment execution, and LaTeX paper compilation.
 
 It implements an **11-step research workflow** based on the [Steinhardt fail-fast methodology](https://cs.nyu.edu/~welleck/episode32.html): decompose the project into testable components, estimate each one's probability of success and time cost, then test the riskiest component first. If it fails, stop early rather than sinking time into doomed work.
@@ -11,32 +11,32 @@ It implements an **11-step research workflow** based on the [Steinhardt fail-fas
 
 Given a research topic, the agent:
 
-1. **Clarifies scope** — asks 3-5 questions to pin down definitions, prior knowledge, and success criteria
-2. **Searches the literature** — queries arXiv, Semantic Scholar, lab blogs (Anthropic, OpenAI, DeepMind), and community forums (LessWrong, Alignment Forum) in parallel
-3. **Assesses novelty** — determines whether the idea has already been done, is partially novel, or is new
-4. **Defines success criteria** — identifies SOTA baselines, benchmarks, and the minimum publishable contribution
-5. **Decomposes into components** — Steinhardt decomposition with lambda ordering (highest-risk-per-hour components first)
-6. **Challenges the plan** — three independent adversarial reviews run in parallel: assumption analysis, mentor-review critique, and pre-mortem failure scenarios
-7. **Reports experiment plan** — presents the lambda-ordered experiment table for approval
-8. **Confirms fail-fast agreement** — explicit agreement that the project stops or pivots if the riskiest experiment fails
-9. **Runs experiments** — executes experiments in lambda order, stopping on failure if agreed
-10. **Audits the results** — an independent results-auditor red-teams the outputs (re-derives numbers from raw logs, re-runs the load-bearing experiment, checks for leakage, overclaiming, and reward-hacking), looping to fix genuine methodology defects before write-up
-11. **Compiles a LaTeX paper** — produces a full paper with real BibTeX citations, including negative results
+1. **Clarifies scope**: asks 3-5 questions to pin down definitions, prior knowledge, and success criteria
+2. **Searches the literature**: queries arXiv, Semantic Scholar, lab blogs (Anthropic, OpenAI, DeepMind), and community forums (LessWrong, Alignment Forum) in parallel
+3. **Assesses novelty**: determines whether the idea has already been done, is partially novel, or is new
+4. **Defines success criteria**: identifies SOTA baselines, benchmarks, and the minimum publishable contribution
+5. **Decomposes into components**: Steinhardt decomposition with lambda ordering (highest-risk-per-hour components first)
+6. **Challenges the plan**: three independent adversarial reviews run in parallel: assumption analysis, mentor-review critique, and pre-mortem failure scenarios
+7. **Reports experiment plan**: presents the lambda-ordered experiment table for approval
+8. **Confirms fail-fast agreement**: explicit agreement that the project stops or pivots if the riskiest experiment fails
+9. **Runs experiments**: executes experiments in lambda order, stopping on failure if agreed
+10. **Audits the results**: an independent results-auditor red-teams the outputs (re-derives numbers from raw logs, re-runs the load-bearing experiment, checks for leakage, overclaiming, and reward-hacking), looping to fix genuine methodology defects before write-up
+11. **Compiles a LaTeX paper**: produces a full paper with real BibTeX citations, including negative results
 
 ## Prerequisites
 
 - One or both model CLIs:
-  - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)** — for the default Claude backend
-  - **[Codex CLI](https://developers.openai.com/codex/cli/)** — for the optional Codex backend
-- **[gh CLI](https://cli.github.com/)** — authenticated (`gh auth login`), used for GitHub issue integration
-- **Python 3** — for experiment execution
-- **tectonic** or **pdflatex** — for LaTeX compilation (Ubuntu: `sudo snap install tectonic`)
-- **jq** — for JSON parsing in the cron wrapper (Ubuntu: `sudo apt install jq`)
+  - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)**: for the default Claude backend
+  - **[Codex CLI](https://developers.openai.com/codex/cli/)**: for the optional Codex backend
+- **[gh CLI](https://cli.github.com/)**: authenticated (`gh auth login`), used for GitHub issue integration
+- **Python 3**: for experiment execution
+- **tectonic** or **pdflatex**: for LaTeX compilation (Ubuntu: `sudo snap install tectonic`)
+- **jq**: for JSON parsing in the cron wrapper (Ubuntu: `sudo apt install jq`)
 
 For autonomous mode only:
 - **Compute**: sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`): the `local` preset is a local NVIDIA GPU with CUDA drivers; the `modal` and `lambda` presets use paid cloud GPUs, and need a Modal or Lambda login, the `cloud-watch` CLI and a budget (`RESEARCHER_COMPUTE_BUDGET_USD`). See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md#compute-profile-hardware-agnostic).
 - **Configuration**: the deployment's defaults (storage, GitHub owner and task queue, email recipient, models, limits) are in `config/researcher.env`; set a variable in the environment to override one.
-- **agent-mail** — the results email goes from the agents' mail account
+- **agent-mail**: the results email goes from the agents' mail account
   through the mailroom (`~/pyg/agent-mailroom`), with its pre-send review, never
   from the recipient's own Gmail (`scripts/send-results-email.sh`)
 
@@ -121,11 +121,11 @@ claude
 
 In Codex, use `$researcher:researcher-review` or ask to review a run.
 
-This loads the run's briefing and lets you ask questions — it reads experiment code, challenge analysis, literature, and paper sections on demand to answer.
+This loads the run's briefing and lets you ask questions; it reads experiment code, challenge analysis, literature, and paper sections on demand to answer.
 
 ### Continuing Research
 
-Every run — including one that failed — produces `next-steps.md`: a ranked,
+Every run, including one that failed, produces `next-steps.md`: a ranked,
 resourced next-round plan with the run's own reflection on what blocked it. The
 results email carries it, and points at the command that acts on it:
 

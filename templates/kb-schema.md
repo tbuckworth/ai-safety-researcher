@@ -21,7 +21,7 @@ instead of being re-derived from the sources.
 
 ```
 KB-SCHEMA.md      this file
-index.md          catalog of every page — read this first when answering
+index.md          catalog of every page; read this first when answering
 log.md            append-only chronology of ingests, queries, and lints
 raw/              original source documents (immutable)
 sources/          one page per ingested source
@@ -34,13 +34,13 @@ threads/          one page per research line, linking its runs
 `lessons/` holds what the research process itself has learned, and the
 workflow reads it before an experiment design is committed:
 
-- `lessons/common-failures.md` — failure modes that have actually bitten a run,
+- `lessons/common-failures.md`: failure modes that have actually bitten a run,
   with the symptom, the root cause, and the check that would have caught it early
-- `lessons/experiment-design.md` — constructs that turned out to be strawmen,
+- `lessons/experiment-design.md`: constructs that turned out to be strawmen,
   controls that proved load-bearing, criteria that drifted
-- `lessons/compute.md` — what a given compute profile can really do, what things
+- `lessons/compute.md`: what a given compute profile can really do, what things
   actually cost in wall-clock and money, where runs hit ceilings
-- `lessons/tooling.md` — library/API traps, version pins, environment gotchas
+- `lessons/tooling.md`: library/API traps, version pins, environment gotchas
 
 ## Page conventions
 
@@ -57,7 +57,7 @@ tags: [<tag>, ...]
 ```
 
 - Filenames are `kebab-case.md`. One subject per page.
-- Link between pages with `[[page-slug]]`. **Link liberally** — a `[[link]]` to a
+- Link between pages with `[[page-slug]]`. **Link liberally**: a `[[link]]` to a
   page that doesn't exist yet is not an error, it is a marker for a page worth
   writing.
 - **Every claim carries its source.** A sentence that isn't traceable to a
@@ -76,7 +76,7 @@ Given a new source (a paper, a post, a completed research run):
 1. Read the source fully. Do not skim to a summary.
 2. Write or update `sources/<slug>.md`: what it claims, what it actually shows,
    method, limitations, and how it relates to what the wiki already holds.
-3. Update every entity and concept page the source touches — create the page if
+3. Update every entity and concept page the source touches; create the page if
    it doesn't exist. A single substantial source typically touches 5–15 pages;
    touching only one means the ingest was shallow.
 4. Where the source contradicts, strengthens, or narrows an existing claim, say

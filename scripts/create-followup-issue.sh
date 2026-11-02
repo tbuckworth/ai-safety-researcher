@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# create-followup-issue.sh — Create a follow-up research issue on GitHub
+# create-followup-issue.sh: Create a follow-up research issue on GitHub
 #
 # Usage:
 #   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> --source <backend> [--force]

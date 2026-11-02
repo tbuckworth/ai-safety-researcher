@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# check-voice-blocks.sh — guard for the truth-seeking Voice block and parsed tokens.
+# check-voice-blocks.sh: guard for the truth-seeking Voice block and parsed tokens.
 #
 # Checks:
 #   1. The Voice block in every agent + the two orchestrator commands is
 #      BYTE-IDENTICAL to the canonical copy in docs/STANCE.md. Presence alone
-#      is not enough — duplicated copies drift, so we diff each one.
+#      is not enough: duplicated copies drift, so we diff each one.
 #   2. KEEP-tokens (parsed/matched elsewhere) are still present where they live.
 
 set -euo pipefail

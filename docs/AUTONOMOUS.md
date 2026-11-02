@@ -32,12 +32,12 @@ On the machine running the autonomous runs (desktop):
 - At least one authenticated model CLI:
   - **Claude Code CLI** for `RESEARCHER_BACKEND=claude` (the default)
   - **Codex CLI** for `RESEARCHER_BACKEND=codex`
-- **gh CLI** — authenticated (`gh auth login`)
+- **gh CLI**: authenticated (`gh auth login`)
 - **agent-mail** (`~/.local/bin/agent-mail`, from `~/pyg/agent-mailroom`) and
   the Claude Code CLI for the results email. See "The results email" below.
-- **tectonic** — for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
-- **jq** — for JSON parsing (`sudo apt install jq`)
-- **Python 3** — for experiment execution
+- **tectonic**: for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
+- **jq**: for JSON parsing (`sudo apt install jq`)
+- **Python 3**: for experiment execution
 - **Compute**: the local GPU the `local` preset describes, with CUDA drivers, or,
   for the paid presets, a Modal or Lambda login and the `cloud-watch` CLI (see
   [Compute Profile](#compute-profile-hardware-agnostic))
@@ -297,9 +297,9 @@ paper's Future Work section.
 ## Next Steps (every run, including failed ones)
 
 Step 11 writes `next-steps.md`: a `## Reflection` on what the round established
-or what blocked it, then 2–4 **ranked** next steps, each with what to do, the
+or what blocked it, then 2–4 **ranked** next steps (each with what to do, the
 hypothesis it tests, the resources it needs, and the result that would kill the
-line — plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
+line), plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
 ground.
 
 A run that ends without one (it stopped before Step 11, or Step 11 did not
@@ -316,8 +316,8 @@ results email carries the top steps and a literal, copy-pasteable
 Optional and non-blocking; see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md). The
 global wiki (`RESEARCHER_KB_DIR`) is queried before searching (Step 2), for
 novelty (Step 3), and for accumulated `lessons/` before the design is committed
-(Step 6); sources are ingested after synthesis (Step 2) and the whole run —
-result plus process lessons — after the paper (Step 11). Step 11 also writes the
+(Step 6); sources are ingested after synthesis (Step 2) and the whole run
+(result plus process lessons) after the paper (Step 11). Step 11 also writes the
 research line's own `knowledge/` directory into the repo, which a follow-up run
 clones into `prior/knowledge/` and extends.
 
@@ -330,14 +330,14 @@ never fails a step.
 - **Compute profile**: experiments must fit the run's `compute_profile`; do not exceed it silently
 - **Limits**: at most `RESEARCHER_MAX_EXPERIMENTS` experiments per run, each
   targeting `RESEARCHER_EXPERIMENT_MINUTES`
-- **All loops capped at 1 iteration** — except the Step 10 audit-remediation
+- **All loops capped at 1 iteration**, except the Step 10 audit-remediation
   loop, which allows up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a runner-owned
   ceiling one round higher and the configured wall-clock timeout as backstops)
 - **Run timeout**: `RESEARCHER_TIMEOUT_HOURS` (default 8); what happens when it
   passes depends on the step reached (see `RESEARCHER_TIMEOUT_HOURS` above)
 - **Lockfile**: `RESEARCHER_LOCKFILE` keeps one run at a time
 - **Read-only outside run dir**: the agent can search `RESEARCHER_CODE_SEARCH_DIR` but never modifies other repos
-- **Provider permissions** — autonomous Claude and Codex runs are intentionally
+- **Provider permissions**: autonomous Claude and Codex runs are intentionally
   non-interactive; review the sandbox settings above before enabling cron
 - **Cost control**: the compute profile, the experiment cap, the retry cap and
   the timeout; neither backend has a runner-level dollar cap
@@ -345,11 +345,11 @@ never fails a step.
 ## GitHub Integration
 
 - **Issue labels**:
-  - `list:research-ideas` — eligible for pickup
-  - `status:claude-researching` — currently being worked on (prevents double-pickup)
-  - `status:claude-processed` — completed
-  - `status:codex-researching` — currently being worked on by Codex
-  - `status:codex-processed` — completed by Codex
+  - `list:research-ideas`: eligible for pickup
+  - `status:claude-researching`: currently being worked on (prevents double-pickup)
+  - `status:claude-processed`: completed
+  - `status:codex-researching`: currently being worked on by Codex
+  - `status:codex-processed`: completed by Codex
 - **Repos**: Created as `<RESEARCHER_GITHUB_OWNER>/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility, gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
 - **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0 (5 when a deliverable failed; see [Exit codes](#exit-codes)):
 
@@ -380,11 +380,11 @@ never fails a step.
 
 ## Logs
 
-- `~/.local/state/agent-board/spare/run.log` — wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
-- `logs/step-N-attempt-N-*.log` — per-step provider output
-- `logs/next-steps-*.log` — output of the session that writes a missing `next-steps.md`
-- `logs/email-*.log` — email sending output
-- `output/<run-id>/state.md` — workflow state (authoritative)
+- `~/.local/state/agent-board/spare/run.log`: wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
+- `logs/step-N-attempt-N-*.log`: per-step provider output
+- `logs/next-steps-*.log`: output of the session that writes a missing `next-steps.md`
+- `logs/email-*.log`: email sending output
+- `output/<run-id>/state.md`: workflow state (authoritative)
 
 ## Exit codes
 
@@ -447,7 +447,7 @@ After a run completes, use the interactive review command:
 /researcher-review /path/to/run-dir   # specific run
 ```
 
-This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand — experiment code, challenge analysis, literature, paper sections — to answer your questions.
+This loads the run's `briefing.md` (auto-generated summary) and lets you ask questions about the results. It reads artifact files on demand (experiment code, challenge analysis, literature, paper sections) to answer your questions.
 
 ## Continuing a Run
 

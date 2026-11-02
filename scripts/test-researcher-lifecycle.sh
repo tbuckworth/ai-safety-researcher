@@ -1207,6 +1207,35 @@ assert_eq "$RC" "2" "exit code (email helper, missing recipient)"
 assert_grep "ERROR: RESEARCHER_EMAIL_TO is not set" "${CASE_DIR}/helper.out"
 
 # =============================================================================
+# 22c. RESEARCHER_COMPUTE_PROFILE names a preset in config/compute-profiles/
+#      (any case), or mats, or is the profile text itself. A paid preset needs
+#      RESEARCHER_COMPUTE_BUDGET_USD, which goes into its text; a budget for a
+#      profile that takes none, or one that is not whole dollars, exits 2.
+# =============================================================================
+new_case presets
+run_researcher RESEARCHER_COMPUTE_PROFILE=modal -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (paid preset, no budget)"
+assert_grep "ERROR: the modal compute profile is paid: set RESEARCHER_COMPUTE_BUDGET_USD" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_COMPUTE_BUDGET_USD=40 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (budget for a free preset)"
+assert_grep "ERROR: RESEARCHER_COMPUTE_BUDGET_USD is set, but the local compute profile takes no budget" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_COMPUTE_PROFILE=lambda RESEARCHER_COMPUTE_BUDGET_USD=12.50 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (budget not in whole dollars)"
+assert_grep "RESEARCHER_COMPUTE_BUDGET_USD must be a whole number of at least 1, got '12.50'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_COMPUTE_PROFILE=Lambda RESEARCHER_COMPUTE_BUDGET_USD=40 \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Lambda preset"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(ls -d "$OUT"/*-lambda-preset)
+assert_grep "compute profile: lambda;" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Paid cloud GPUs on Lambda.* budget of 40 US dollars .*lambda:personal:<instance-name>' "${RUN}/state.md"
+assert_no_grep "budget_usd" "${RUN}/state.md"
+run_researcher "RESEARCHER_COMPUTE_PROFILE=Two CPU cores, no GPU" RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Literal profile"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "compute profile: custom;" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Two CPU cores, no GPU"$' "$(ls -d "$OUT"/*-literal-profile)/state.md"
+
+# =============================================================================
 # 23. A check that cannot run is an error, not a pass: the re-read of an issue
 #     before claiming it, nvidia-smi, df, and the read of a candidate repo.
 # =============================================================================

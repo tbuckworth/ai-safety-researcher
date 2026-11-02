@@ -11,3 +11,8 @@ here is sourced or run.
   file to read instead of this one. A script stops (exit 2) on a malformed line
   or a key it needs that neither sets. `docs/AUTONOMOUS.md` says what each key
   does.
+- `compute-profiles/<name>.md`: the text of the compute-profile preset `<name>`
+  (`RESEARCHER_COMPUTE_PROFILE=<name>`). The runner joins its lines with spaces
+  into the one-line `compute_profile` of `state.md`. A preset containing
+  `{{budget_usd}}` is paid: the runner requires `RESEARCHER_COMPUTE_BUDGET_USD`
+  and puts it in place of the placeholder.

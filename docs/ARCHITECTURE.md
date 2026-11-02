@@ -69,7 +69,7 @@ specialised leaf-node agents for focused work.
 │    ├─┤   experiment     │  fail → stop or pivot
 │    │ └─────────────────┘  pass → continue + write up
 │    ▼
-│  Step 10: Audit ◄────────────────┐  (re-run flagged exp, re-audit; ≤ 3 rounds)
+│  Step 10: Audit ◄────────────────┐  (re-run flagged exp, re-audit; ≤ R_MAX rounds)
 │    │ ┌─────────────────┐         │
 │    ├─┤ results-auditor  │─────────┘  FIXABLE-DEFECT → loop
 │    │ └─────────────────┘            SUPPORTED / TRUE-NULL → exit
@@ -100,9 +100,9 @@ specialised leaf-node agents for focused work.
 | report | `agents/report.md` | 11 | fable | deep | Compiles all artefacts into LaTeX paper with real BibTeX |
 | knowledge | `agents/knowledge.md` | 2, 3, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
 
-Codex `fast` and `deep` are runtime roles, defaulting to
-`gpt-6.1-sol`/medium and `gpt-6-astra`/xhigh respectively. They are
-overridable without changing shared agent files.
+Codex `fast` and `deep` are runtime roles (`templates/codex-adapter.md`), whose
+models are settings with defaults in `config/researcher.env`, so they change
+without changing shared agent files.
 
 ## Directory Layout
 
@@ -118,6 +118,9 @@ researcher/
 │   ├── researcher.md                # Interactive orchestrator (11-step workflow)
 │   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
 │   └── researcher-auto-email.md     # Autonomous email composer
+├── config/
+│   ├── researcher.env               # Deployment defaults, read by scripts/config.sh
+│   └── compute-profiles/            # Compute-profile presets
 ├── scripts/
 │   ├── researcher-cron.sh           # Dual-backend state machine and post-processing
 │   └── test-researcher-backends.sh  # Mock provider integration tests
@@ -139,7 +142,8 @@ researcher/
 ├── templates/
 │   ├── preamble.tex                 # LaTeX preamble
 │   ├── paper.tex                    # Main document template
-│   └── Makefile                     # LaTeX build file
+│   ├── Makefile                     # LaTeX build file
+│   └── codex-adapter.md             # Codex translation of the workflow
 ├── hooks/
 ├── docs/
 │   ├── ARCHITECTURE.md              # This file

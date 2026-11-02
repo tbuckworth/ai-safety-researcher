@@ -36,9 +36,9 @@ re-run it?"*
 ## Setup
 
 ```bash
-scripts/kb-init.sh                    # → ~/pyg/research-wiki
+scripts/kb-init.sh                    # → RESEARCHER_DEFAULT_KB_DIR (config/researcher.env)
 scripts/kb-init.sh /path/to/wiki      # or anywhere
-export RESEARCHER_KB_DIR=~/pyg/research-wiki
+export RESEARCHER_KB_DIR=/path/to/wiki  # for a wiki anywhere else
 ```
 
 Idempotent — safe to re-run. It creates the directory layout, a git repo,

@@ -1,5 +1,8 @@
 # Running the Researcher against the MATS Slurm Cluster
 
+**The MATS cluster is not for new work**: the `mats` profile is kept so that runs started on it can
+resume. New runs use the `modal` or `lambda` preset ([AUTONOMOUS.md](AUTONOMOUS.md#compute-profile-hardware-agnostic)).
+
 How to point a research run (interactive or autonomous) at the MATS cluster's
 free GPUs. The run itself stays where it always was — laptop or desktop — and
 **submits experiments to the cluster over SSH**.

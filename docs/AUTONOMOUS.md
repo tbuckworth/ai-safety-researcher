@@ -14,7 +14,7 @@ The autonomous mode is a **multi-session state machine**:
 
 ```
 agent-spare (or by hand) → researcher-cron.sh
-         ├─ Pick issue from tbuckworth/tasks (label: list:research-ideas)
+         ├─ Pick issue from the task queue, RESEARCHER_TASKS_REPO (label: list:research-ideas)
          ├─ Tag issue: status:<backend>-researching
          ├─ Loop: <claude|codex> researcher-auto-step <N> <run-dir>
          │    └─ Step N: spawn agents, make decisions, update state.md
@@ -37,7 +37,9 @@ On the machine running the autonomous runs (desktop):
 - **tectonic** — for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
 - **jq** — for JSON parsing (`sudo apt install jq`)
 - **Python 3** — for experiment execution
-- **GPU** — NVIDIA RTX 3090 (24GB VRAM) with CUDA drivers
+- **Compute** — the local GPU the `local` preset describes, with CUDA drivers, or,
+  for the paid presets, a Modal or Lambda login and the `cloud-watch` CLI (see
+  [Compute Profile](#compute-profile-hardware-agnostic))
 
 ## Usage
 
@@ -68,43 +70,75 @@ idea and `agent-spare launch` starts `researcher-cron.sh` for that one issue in
 its own systemd unit, setting the backend, models, compute profile,
 `RESEARCHER_GUARD_CMD`, `RESEARCHER_JOB_WAIT_CMD` and `RESEARCHER_OWNER=agent-spare`.
 The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
-logs stay in `/media/titus/big/researcher-output/logs/`. The old crontab line is
-disabled.
+logs stay in `logs/` in the output directory. The old crontab line is disabled.
 
 A crontab entry still works for a plain scheduled run, e.g.
 ```bash
-0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
+0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
 ```
 
 The runner prepends `~/.local/bin` to `PATH`, because cron and non-login SSH
 shells commonly omit it.
 
+## Configuration
+
+Every setting in this document is an environment variable. The deployment's
+defaults, the keys in the table below, are in `config/researcher.env` (its
+format is in `config/CLAUDE.md`); the other settings give their defaults where
+they are described. A variable set in the environment wins over its line, and
+`RESEARCHER_CONFIG_FILE` names another file to read instead. A script stops
+(exit 2) on a malformed line, or when a key it needs is set by neither.
+`scripts/config.sh KEY...` prints the values the scripts would use.
+
+| Key in `config/researcher.env` | Purpose |
+|---------|---------|
+| `RESEARCHER_STORAGE_ROOT` | Volume holding `researcher-output/`, the run output directory unless `RESEARCHER_OUTPUT_DIR` is set |
+| `RESEARCHER_GITHUB_OWNER` / `RESEARCHER_TASKS_REPO` | Owner of run repos / the issue queue |
+| `RESEARCHER_EMAIL_TO` | Recipient of the results email |
+| `RESEARCHER_DEFAULT_KB_DIR` | The knowledge base used when `RESEARCHER_KB_DIR` is unset, if it holds `KB-SCHEMA.md` |
+| `RESEARCHER_HOST_ALIASES` | Space-separated `hostname=alias` pairs: the SSH alias the email's reader uses for each machine (`RESEARCHER_HOST_ALIAS` overrides it) |
+| `RESEARCHER_CODE_SEARCH_DIR` | Local code a step may search, read-only |
+| `RESEARCHER_RUNNER_DIR` | The checkout of this repository that runs autonomous runs; `/researcher-continue` launches its `scripts/researcher-cron.sh` |
+| `RESEARCHER_CLAUDE_BIN` / `RESEARCHER_CODEX_BIN` | The agent CLIs |
+| `RESEARCHER_BACKEND`, the models and the Codex execution controls | See [Agent Backend and Models](#agent-backend-and-models) |
+| `RESEARCHER_COMPUTE_PROFILE` | See [Compute Profile](#compute-profile-hardware-agnostic) |
+| `RESEARCHER_MAX_EXPERIMENTS` | Most experiments in a run |
+| `RESEARCHER_EXPERIMENT_MINUTES` | Per-experiment time target, in minutes of compute |
+| `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (GitHub rejects files over 100 MB, failing the whole push); experiments keep files under it |
+| `RESEARCHER_MAX_AUDIT_ROUNDS` | R_MAX, the most Step 10 audit rounds; the runner forces the report one round later if a step ignores it |
+
+The runtime header of every step prompt gives the four limits and the code
+directory; the limits are numeric settings, checked at startup (exit 2 unless a
+whole number of at least 1).
+
 ## Agent Backend and Models
 
-`RESEARCHER_BACKEND` accepts exactly `claude` or `codex`. Claude remains the
-default for backward compatibility.
+`RESEARCHER_BACKEND` accepts exactly `claude` or `codex`. Defaults are in
+`config/researcher.env`, except where the table says otherwise.
 
-| Setting | Default | Purpose |
-|---------|---------|---------|
-| `RESEARCHER_BACKEND` | `claude` | Parent CLI and issue-label namespace |
-| `RESEARCHER_CLAUDE_MODEL` | `fable` | Claude parent model |
-| `RESEARCHER_CODEX_MODEL` | `gpt-6-astra` | Codex parent/deep-worker model |
-| `RESEARCHER_CODEX_REASONING` | `xhigh` | Codex parent reasoning effort |
-| `RESEARCHER_CODEX_FAST_MODEL` | `gpt-6.1-sol` | Codex search workers |
-| `RESEARCHER_CODEX_FAST_REASONING` | `medium` | Codex search-worker effort |
-| `RESEARCHER_CODEX_DEEP_MODEL` | parent model | Codex non-search workers |
-| `RESEARCHER_CODEX_DEEP_REASONING` | parent effort | Codex non-search-worker effort |
-| `RESEARCHER_MODEL` | unset | Legacy override for the selected backend |
+| Setting | Purpose |
+|---------|---------|
+| `RESEARCHER_BACKEND` | Parent CLI and issue-label namespace |
+| `RESEARCHER_CLAUDE_MODEL` | Claude parent model |
+| `RESEARCHER_CODEX_MODEL` | Codex parent/deep-worker model |
+| `RESEARCHER_CODEX_REASONING` | Codex parent reasoning effort |
+| `RESEARCHER_CODEX_FAST_MODEL` | Codex search workers |
+| `RESEARCHER_CODEX_FAST_REASONING` | Codex search-worker effort |
+| `RESEARCHER_CODEX_DEEP_MODEL` | Codex non-search workers (default: the parent model) |
+| `RESEARCHER_CODEX_DEEP_REASONING` | Codex non-search-worker effort (default: the parent's) |
+| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (a Claude run uses its own model) |
+| `RESEARCHER_MODEL` | Legacy override for the selected backend (default: unset) |
 
-The Codex adapter translates Claude `Task(...)` blocks into leaf subagents. It
-uses the faster model for search planning and literature collection and the
-deeper model for novelty, decomposition, challenge, experiments, audit, and
-reporting. If an explicit worker model is unavailable, workers inherit the
-parent model.
+The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
+follow) translates Claude `Task(...)` blocks into leaf subagents. It uses the
+fast worker model for search planning and literature collection and the deep
+one for novelty, criteria, decomposition, challenge, experiments, audit,
+reporting and the knowledge base; the runner lists the run's worker models after
+it. If an explicit worker model is unavailable, workers inherit the parent
+model.
 
-An in-progress run records `agent_backend` and `agent_model` in `state.md`.
-The wrapper refuses to resume it under a different backend unless
-`RESEARCHER_ALLOW_BACKEND_SWITCH=true` is set deliberately.
+A resumed run keeps the backend and models it started with; see
+[Resuming a run](#resuming-a-run).
 
 ### Codex execution controls
 
@@ -112,12 +146,12 @@ Codex runs via non-interactive `codex exec` with live web search, ephemeral
 session storage, explicit model/reasoning settings, and user config ignored by
 default so personal hooks and plugins do not alter cron behavior.
 
-| Setting | Default |
+| Setting | Values (defaults in `config/researcher.env`) |
 |---------|---------|
-| `RESEARCHER_CODEX_SANDBOX` | `danger-full-access` |
-| `RESEARCHER_CODEX_APPROVAL_POLICY` | `never` |
-| `RESEARCHER_CODEX_IGNORE_USER_CONFIG` | `true` |
-| `RESEARCHER_CODEX_MAX_SUBAGENTS` | `4` |
+| `RESEARCHER_CODEX_SANDBOX` | `read-only`, `workspace-write` or `danger-full-access` |
+| `RESEARCHER_CODEX_APPROVAL_POLICY` | `untrusted`, `on-request` or `never` |
+| `RESEARCHER_CODEX_IGNORE_USER_CONFIG` | `true` or `false` |
+| `RESEARCHER_CODEX_MAX_SUBAGENTS` | Most concurrent subagents, at least 1 |
 
 `danger-full-access` matches the pre-existing Claude
 `--dangerously-skip-permissions` behavior and is needed by experiments that
@@ -136,34 +170,33 @@ required.
 
 | Setting | Purpose |
 |---------|---------|
-| `RESEARCHER_OUTPUT_DIR` | Override `/media/titus/big/researcher-output` |
+| `RESEARCHER_OUTPUT_DIR` | Override `researcher-output/` under `RESEARCHER_STORAGE_ROOT` |
 | `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues (outcome `complete-local`) |
 | `RESEARCHER_REPO_VISIBILITY` | Visibility of new run repos: `private` (default), `internal`, or `public` |
 | `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024), or when `df` cannot measure it, and reports why |
-| `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (default 50; GitHub rejects >100 MB, failing the whole push) |
 | `RESEARCHER_ALLOW_RERUN=true` | Let the queue pick an issue that already has a run directory here (default: skip it; `RESEARCHER_ISSUE=<n>` also re-runs one deliberately) |
 | `RESEARCHER_RESUME_MAX_AGE_DAYS` | An unfinished autonomous run untouched for longer is not auto-resumed (default 14; 0 disables). Interactive runs (`mode: interactive`) are never resumed |
 | `RESEARCHER_TIMEOUT_SECONDS` | Run timeout in seconds; overrides `RESEARCHER_TIMEOUT_HOURS` |
-| `RESEARCHER_GITHUB_OWNER` / `RESEARCHER_TASKS_REPO` | Owner of run repos (default `tbuckworth`) / the issue queue (default `tbuckworth/tasks`) |
 | `RESEARCHER_GIT_REMOTE_BASE` | Where git pushes (default `https://github.com`; tests point it at local bare repos) |
 | `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
-| `RESEARCHER_EMAIL_TO` | Fixed self-recipient for autonomous delivery |
 | `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
-| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (default `sonnet`; a Claude run uses its own model) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_SKIP_GPU_CHECK=true` | Skip the start-up GPU check, which exits 0 when a process uses over 500 MiB of GPU memory and exits 1 when `nvidia-smi` fails or reports a non-numeric value |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
-| `RESEARCHER_JOB_WAIT_CMD` | Command printing outstanding external job ids for the run (`{run_id}` substituted). It exits 0 with its answer (no output: no jobs); a non-zero exit is an error, logged with its stderr, and the answer is unknown. While it prints anything or cannot answer, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
+| `RESEARCHER_JOB_WAIT_CMD` | A run setting (see [Resuming a run](#resuming-a-run)): a command printing outstanding external job ids for the run (`{run_id}` substituted). It exits 0 with its answer (no output: no jobs); a non-zero exit is an error, logged with its stderr, and the answer is unknown. While it prints anything or cannot answer, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
 | `RESEARCHER_RUN_DIR` | Resume exactly this run directory, or exit 2 if it is finished, missing or interactive; never another unfinished run or the queue |
 | `RESEARCHER_NO_RESUME=true` | Start fresh (with `RESEARCHER_ISSUE` or the queue) without resuming any unfinished run |
 | `RESEARCHER_OWNER` | Mark the runs this caller creates (`owner:` in `state.md`, kept through every step). A run with an owner is resumed only by a caller with the same `RESEARCHER_OWNER` or through `RESEARCHER_RUN_DIR`, never by a plain cron run. agent-board's spare launcher sets `agent-spare` |
+| `RESEARCHER_ALLOW_CONFIG_CHANGE=true` | Let a resume set a run setting to a value other than the one the run saved (the run's owner may without it); see [Resuming a run](#resuming-a-run) |
+| `RESEARCHER_ALLOW_BACKEND_SWITCH=true` | The same, for `RESEARCHER_BACKEND` alone |
+| `RESEARCHER_CONFIG_FILE` | Read this configuration file instead of `config/researcher.env` |
 | `RESEARCHER_GUARD_CMD` | Command run before each step (`{run_id}` substituted). If it prints anything, the first line is the reason and the run pauses there like a provider limit (exit 3, resumable, nothing published; recorded as `last_pause_reason`); if it exits non-zero or times out, the reason is `guard failed: ` and its first stderr line (or `timed out`). It never interrupts a step; a step that ends without advancing while the guard holds (e.g. it asked for more budget) also pauses instead of retrying. While `RESEARCHER_JOB_WAIT_CMD` still reports jobs or cannot answer it waits for them, unless the line starts with `!` (a stop): that applies at once, also during a job wait, and the jobs keep running for the step that is redone on resume. The call is limited to 300 s. agent-board's spare-capacity launcher (`agent-spare guard`) uses it |
 | `RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS` | Each call of `RESEARCHER_JOB_WAIT_CMD` is stopped after this long, which counts as no answer (default 120) |
 | `RESEARCHER_JOB_WAIT_POLL_SECONDS` | Poll interval while waiting (default 120) |
 | `RESEARCHER_JOB_WAIT_MAX_SECONDS` | Cap on a step's waiting, summed over its waits (default 14400) |
 | `RESEARCHER_JOB_WAIT_MAX_REFUNDS` | Cap on refunded attempts (default 10) |
-| `RESEARCHER_KB_DIR` | Global knowledge base (default `~/pyg/research-wiki`, used only when it holds `KB-SCHEMA.md`). `none` disables it; a path set here without `KB-SCHEMA.md` exits 2. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
-| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps; `local` drops the ssh step. Defaults to `desktop` on the desktop; any other machine must set it, or the run exits 2 |
+| `RESEARCHER_KB_DIR` | Global knowledge base (default: `RESEARCHER_DEFAULT_KB_DIR`, used only when it holds `KB-SCHEMA.md`). `none` disables it; a path set here without `KB-SCHEMA.md` exits 2. See [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
+| `RESEARCHER_HOST_ALIAS` | SSH alias for the machine the run executes on, used in the email's "How to Continue" steps; `local` drops the ssh step. Defaults to the machine's entry in `RESEARCHER_HOST_ALIASES`; a machine with none must set it, or the run exits 2 |
 
 ## Decision Heuristics
 
@@ -176,10 +209,10 @@ The autonomous mode replaces 9 human interaction points:
 | 3. Novelty verdict | User decides | NOVEL/PARTIALLY_NOVEL → proceed; ALREADY_DONE → 1 retry then proceed |
 | 4. Success criteria | User approves | Auto-approve |
 | 6. Challenge synthesis | User picks path | Construct-validity gate first (strawman/known-outcome → loop to Step 1 once to redesign); then PROCEED/MINOR → go; MAJOR → 1 re-decomposition; RETHINK → graceful pivot. Fix-now limitations folded into the plan; rest → Future Work |
-| 7. Experiment plan | User confirms | Auto-approve, cap at 5 experiments |
+| 7. Experiment plan | User confirms | Auto-approve, cap at `RESEARCHER_MAX_EXPERIMENTS` |
 | 8. Fail-fast agreement | User agrees | Always yes |
 | 9. On failure | User decides | Write up negative result |
-| 10. Results audit | User steers the loop | Loop on FIXABLE-DEFECT up to 3 rounds; exit on SUPPORTED / TRUE-NULL / cap; unresolved findings → Limitations |
+| 10. Results audit | User steers the loop | Loop on FIXABLE-DEFECT up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds; exit on SUPPORTED / TRUE-NULL / cap; unresolved findings → Limitations |
 
 ### RETHINK_APPROACH Handling
 
@@ -192,34 +225,57 @@ Both produce valuable output: "here's why this idea doesn't work, and here's the
 
 ## Compute Profile (hardware-agnostic)
 
-Experiments are sized to a per-run **compute profile**, not a hard-coded device. The cron reads `RESEARCHER_COMPUTE_PROFILE` (default: the local RTX 3090) and writes it into `state.md` as `compute_profile:`; every step reads it to size experiments and to triage which limitations are fixable now vs future work. Override it to run elsewhere:
+Experiments are sized to a per-run **compute profile**, not a hard-coded device.
+The runner resolves `RESEARCHER_COMPUTE_PROFILE` (default in
+`config/researcher.env`) and writes the text into `state.md` as
+`compute_profile:`; every step reads it to size experiments and to triage which
+limitations are fixable now vs future work. The value is one of:
+
+- **a preset**, the name of a file in `config/compute-profiles/` (any case):
+  `local` is the local GPU, with no paid compute; `modal` and `lambda` are paid
+  cloud GPUs on the account each names, with a budget for the whole run and the
+  rules for spending it;
+- **`mats`**, the MATS Slurm cluster, kept so that runs started on it can resume
+  ([COMPUTE-MATS.md](COMPUTE-MATS.md)); it also sets `RESEARCHER_JOB_WAIT_CMD`;
+- **any other text**, used as the profile itself.
+
+A paid preset needs `RESEARCHER_COMPUTE_BUDGET_USD`, the budget in whole US
+dollars, which the runner puts into its text; without it, or with a budget for
+a profile that takes none, the runner exits 2.
 
 ```bash
-RESEARCHER_COMPUTE_PROFILE='Modal A100 40GB on-demand, ~$3.50/hr, up to $30 budget' ./scripts/researcher-cron.sh
-RESEARCHER_COMPUTE_PROFILE='Lambda 8xH100 80GB node' ./scripts/researcher-cron.sh
+RESEARCHER_COMPUTE_PROFILE=lambda RESEARCHER_COMPUTE_BUDGET_USD=40 ./scripts/researcher-cron.sh
 RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU' ./scripts/researcher-cron.sh
 ```
 
 Paid compute (a Modal deploy or `modal run --detach`, a Lambda instance, a Slurm
 `elastic-*` job, an HF endpoint) must be registered with `cloud-watch register`
 straight after launch and stopped, then closed with `cloud-watch close`, before
-the step ends; the experiment rules in `commands/researcher-auto-step.md` and
-`agents/experiment.md` carry the exact command.
+the step ends; the experiment rules in `agents/experiment.md` carry the exact
+command. Nothing in the agents or steps assumes a specific device beyond what
+the profile states.
 
-Two short presets expand to full profile descriptions: `local` (the default,
-local RTX 3090) and `mats` (MATS Slurm cluster, free `compute` partition, all
-work submitted via `sbatch`). Setup and cluster policy:
-[COMPUTE-MATS.md](COMPUTE-MATS.md).
+## Resuming a run
 
-```bash
-RESEARCHER_COMPUTE_PROFILE=mats ./scripts/researcher-cron.sh   # run from the desktop (or laptop), not the cluster
-```
+A run saves its settings in `run-config.json` in its directory, which is
+published with it. `settings` holds the value (or null) of each run setting, the
+variables `researcher_lib.py run-settings` lists (the backend, models and Codex
+settings, the email model, the compute profile and budget, the job-wait
+command, the knowledge base, and the limits); `resolved` holds what they came
+to (the model, the profile's text and preset name, the job-wait command, the
+knowledge base); `launches` lists every launch with its start, timeout, owner
+and the plugin's commit; `changes` lists the settings resumes changed.
 
-The run stays on the desktop (or laptop) and submits jobs to the cluster over
-SSH (see [COMPUTE-MATS.md](COMPUTE-MATS.md)); the preset tells every agent it is
-not on the cluster.
-
-The default profile keeps the historical behaviour (local RTX 3090, no cloud). Nothing in the agents or steps assumes a specific device beyond what the profile states.
+A resumed run takes each setting its launch does not set from `run-config.json`,
+not from the configuration or the resuming shell. A setting the launch gives
+with another value is a change, which only the run's owner (a launch whose
+`RESEARCHER_OWNER` is the run's `owner:`; agent-board's agent-spare raises a
+run's budget this way) or `RESEARCHER_ALLOW_CONFIG_CHANGE=true` may make, and
+`RESEARCHER_ALLOW_BACKEND_SWITCH=true` for the backend alone. The runner logs
+an accepted change and adds it to `changes`; it refuses any other one, naming
+the setting, and exits 2. A run that predates `run-config.json` keeps the
+backend in its `state.md` and takes its other settings from the launch that
+first resumes it, which then records them.
 
 ## Limitation Triage & Future Work
 
@@ -256,15 +312,16 @@ never fails a step.
 
 ## Safety Constraints
 
-- **Compute profile** — experiments must fit the run's `compute_profile` (default: local RTX 3090, no cloud); do not exceed it silently
-- **Max 5 experiments** per run
+- **Compute profile** — experiments must fit the run's `compute_profile`; do not exceed it silently
+- **Limits** — at most `RESEARCHER_MAX_EXPERIMENTS` experiments per run, each
+  targeting `RESEARCHER_EXPERIMENT_MINUTES`
 - **All loops capped at 1 iteration** — except the Step 10 audit-remediation
-  loop, which allows up to 3 rounds (bash-owned ceiling at 4 + the configured
-  wall-clock timeout as backstops)
+  loop, which allows up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a runner-owned
+  ceiling one round higher and the configured wall-clock timeout as backstops)
 - **8-hour timeout by default** — wrapper stops the run and compiles whatever
   exists; override with `RESEARCHER_TIMEOUT_HOURS`
 - **Lockfile** — prevents concurrent runs
-- **Read-only outside run dir** — agent can search `~/pyg/` but never modifies other repos
+- **Read-only outside run dir** — agent can search `RESEARCHER_CODE_SEARCH_DIR` but never modifies other repos
 - **Provider permissions** — autonomous Claude and Codex runs are intentionally
   non-interactive; review the sandbox settings above before enabling cron
 - **Cost control** — compute profile, experiment cap, retry cap, and timeout;
@@ -278,7 +335,7 @@ never fails a step.
   - `status:claude-processed` — completed
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
-- **Repos**: Created as `tbuckworth/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
+- **Repos**: Created as `<RESEARCHER_GITHUB_OWNER>/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
 - **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0 (5 when a deliverable failed; see [Exit codes](#exit-codes)):
 
   | Outcome | Meaning | Exit |
@@ -308,7 +365,7 @@ never fails a step.
 |------|---------|
 | 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
 | 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written, the picked issue could not be re-read before claiming it, `nvidia-smi` failed) |
-| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a resume under another backend, a `RESEARCHER_RUN_DIR` that is not resumable) |
+| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a malformed `config/researcher.env` or a key missing from it, a paid compute profile without a budget, a resume that changes a saved setting without leave, a `RESEARCHER_RUN_DIR` that is not resumable) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |
 | 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then |
@@ -372,12 +429,14 @@ This loads the run's `briefing.md` (auto-generated summary) and lets you ask que
 
 The command the results email points at. It reads `next-steps.md`, presents the
 ranked options, drafts the follow-up brief from the one you pick, confirms it,
-creates the issue, and offers to launch the run immediately (defaulting to the
-prior run's compute profile — a follow-up that silently drops from `mats` to the
-local GPU would fail to run the experiment it proposed).
+creates the issue, and offers to launch the run immediately, with the prior
+run's backend and compute-profile preset from its `run-config.json` (a follow-up
+that silently drops from a cloud profile to the local GPU would fail to run the
+experiment it proposed).
 
-If the prior run died for orchestration reasons, it offers *resuming* instead,
-since a redesign would answer a question that was never actually asked.
+If the prior run died for orchestration reasons, it offers *resuming* instead
+(`RESEARCHER_RUN_DIR=<run dir>`, with the run's saved settings), since a
+redesign would answer a question that was never actually asked.
 
 ## Follow-Up Runs
 
@@ -385,7 +444,7 @@ since a redesign would answer a question that was never actually asked.
 
 ### How Follow-Ups Work
 
-1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on `tbuckworth/tasks` with labels `list:research-ideas`, `type:follow-up` and the parent's `importance:` label (`importance:medium` when the parent has none), since agent-spare only starts ideas rated high or medium.
+1. **During review**: You give feedback (e.g., "the training data was too simple, re-run with harder tasks"). The review command calls `scripts/create-followup-issue.sh` to create an issue on the task queue (`RESEARCHER_TASKS_REPO`) with labels `list:research-ideas`, `type:follow-up` and the parent's `importance:` label (`importance:medium` when the parent has none), since agent-spare only starts ideas rated high or medium.
 
 2. **Autonomous pickup**: The cron wrapper picks the follow-up issue like any other research idea. When it detects the `type:follow-up` label, it:
    - Copies key artifacts into a `prior/` subdirectory from a clone of the prior repo (on the output volume, never `/tmp`), or, when the issue names no repo, from the prior run's directory here (`<output dir>/<Run: id>`). If neither can be read, the run does not start: the runner takes the issue's researching label off, so a later run retries it, and exits 1
@@ -419,7 +478,7 @@ since a redesign would answer a question that was never actually asked.
 The title is `[Follow-up] ` and the feedback's first line. The body is the free-text feedback, then the metadata footer and the follow-up key; `scripts/researcher_lib.py` (`followup-issue`, `followup-meta`) writes and reads both, and only the footer's own `---` ends the feedback:
 ```
 ---
-Parent: #42 | Repo: https://github.com/tbuckworth/research-foo | Run: 2026-04-03-foo
+Parent: #42 | Repo: https://github.com/<owner>/research-foo | Run: 2026-04-03-foo
 <!-- followup-key: <16 hex digits> -->
 ```
 
@@ -447,8 +506,8 @@ output/<date>-followup-<slug>/
 
 ## The results email
 
-The email goes to Titus from the agents' mail account, like every agent's mail
-to him, never from his own Gmail. A Claude session writes it and sends it
+The email goes to `RESEARCHER_EMAIL_TO` from the agents' mail account, like
+every agent's mail, never from the recipient's own Gmail. A Claude session writes it and sends it
 itself with `scripts/send-results-email.sh <run-dir>`, which calls
 `agent-mail send` (a Codex run uses `RESEARCHER_EMAIL_CLAUDE_MODEL` for this
 step). So:
@@ -457,9 +516,9 @@ step). So:
   before it leaves. If it prints `agent-mail: NOT SENT` (exit 3), the session
   fixes what it lists and runs the helper once more; that send goes out
   whatever the review says.
-- **Titus's reply comes back to that session.** The wrapper gives it a known
-  session id (`claude --session-id`), and the mailroom resumes it when he
-  replies, in the plugin directory, with the run's context.
+- **The recipient's reply comes back to that session.** The wrapper gives it a known
+  session id (`claude --session-id`), and the mailroom resumes it on a
+  reply, in the plugin directory, with the run's context.
 - **Inline plots**: the composer lists them in `<run>/email-images.txt`
   (`NAME=relative/path.png` per line) and places each as
   `<img src="cid:NAME">`; the helper checks each one (an image inside the run
@@ -473,4 +532,4 @@ step). So:
   writer fails, nothing is sent either, and the run exits 5.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
   is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is
-  gone: the agents' account cannot label Titus's mailbox.
+  gone: the agents' account cannot label the recipient's mailbox.

@@ -19,7 +19,7 @@ agent-spare (or by hand) → researcher-cron.sh
          ├─ Loop: <claude|codex> researcher-auto-step <N> <run-dir>
          │    └─ Step N: spawn agents, make decisions, update state.md
          │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
-         ├─ No next-steps.md (stopped before Step 11): <claude|codex> researcher-auto-next-steps <run-dir>
+         ├─ No next-steps.md (stopped before Step 11, or Step 11 wrote none): <claude|codex> researcher-auto-next-steps <run-dir>
          ├─ Create GitHub repo (gh CLI)
          ├─ Email: a Claude session writes it and sends it with agent-mail (reviewed)
          └─ Update issue: status:<backend>-processed
@@ -302,9 +302,9 @@ hypothesis it tests, the resources it needs, and the result that would kill the
 line — plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
 ground.
 
-A run that ends without one (it stopped before Step 11) gets one before it is
-published, from one session of its backend running
-`commands/researcher-auto-next-steps.md`, which diagnoses whether the failure was
+A run that ends without one (it stopped before Step 11, or Step 11 did not
+write it) and is not paused gets one before it is published, from one session
+of its backend running `commands/researcher-auto-next-steps.md`, which diagnoses whether the failure was
 **orchestration** (the workflow broke, the science is untouched, resume) or
 **scientific** (the hypothesis or construct didn't survive, redesign). If that
 session fails, the outcome lists `next-steps.md` as missing. Every

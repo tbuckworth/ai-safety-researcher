@@ -540,9 +540,9 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     not paused without next-steps.md. The result also carries what the reports
     quote from the run directory: the `**Outcome**` line of next-steps.md
     (`findings`), its ranked step titles and the results audit's disposition
-    (`audit`), each empty when the file is missing. Reads the run directory;
-    writes nothing. Raises OSError when a file it needs cannot be read,
-    state.md included.
+    (`audit`), each empty when the file is missing. Reads the run directory,
+    state.md only for a finished run without paper/paper.pdf; writes nothing.
+    Raises OSError when a file it reads cannot be read.
     """
     experiments = scan_experiments(run_dir)
     counts: dict[str, int] = {}

@@ -447,11 +447,18 @@ class OutcomeTest(unittest.TestCase):
     def test_finished_run_without_a_paper_says_so(self):
         self.add_exp("exp-001", "PASS")
         self.assertIn("paper/paper.pdf was not built", self.outcome()["reasons"])
+        # Written as Step 11 says: single-quoted, each ' doubled, \ and " as they are.
         make_run(Path(self.tmp.name), "run", status="complete", paper_compiled="false",
-                 paper_compile_error='"! Undefined control sequence."')
-        self.assertIn("paper/paper.pdf was not built: ! Undefined control sequence.", self.outcome()["reasons"])
+                 paper_compile_error="""'! LaTeX Error: File `natbib.sty'' not found: \\usepackage{natbib} "here"'""")
+        self.assertIn("""paper/paper.pdf was not built: ! LaTeX Error: File `natbib.sty' not found: \\usepackage{natbib} "here\"""",
+                      self.outcome()["reasons"])
         # A run that stopped early is not expected to have a paper.
         self.assertFalse(any("paper.pdf" in r for r in self.outcome(status="failed")["reasons"]))
+        # The error comes from state.md, which must be readable (no fallback).
+        (self.run / "state.md").unlink()
+        with self.assertRaises(OSError):
+            self.outcome()
+        self.assertEqual(self.outcome(status="failed")["outcome"], "partial")
         write(self.run / "paper" / "paper.pdf", "%PDF")
         facts = self.outcome()
         self.assertTrue(facts["paper"])

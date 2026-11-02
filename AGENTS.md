@@ -50,7 +50,7 @@ an automated AI Safety research workflow.
 - **Architecture**: Multi-session state machine. The bash wrapper reads
   `state.md`, launches one Claude or Codex session per step, and loops until
   complete. Select with `RESEARCHER_BACKEND`; Claude is the default.
-- **Commands**: `researcher-auto-step` (per-step executor), `researcher-auto-email` (email composer).
+- **Commands**: `researcher-auto-step` (per-step executor), `researcher-auto-next-steps` (next-steps.md for a run that ended without one), `researcher-auto-email` (email composer).
 - **GitHub Issues**: Picks from the task queue (`RESEARCHER_TASKS_REPO`) with label
   `list:research-ideas`, then uses backend-specific `status:<backend>-*`
   labels.

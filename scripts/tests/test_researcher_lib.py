@@ -315,8 +315,7 @@ class VerdictTest(unittest.TestCase):
 class OutcomeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.run = Path(self.tmp.name) / "run"
-        self.run.mkdir()
+        self.run = make_run(Path(self.tmp.name), "run", status="complete")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -422,6 +421,60 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(facts["outcome"], "complete")
         self.assertTrue(any("theory-only" in r for r in facts["reasons"]))
 
+    def test_experiment_without_results_is_missing(self):
+        # A crashed experiment used to vanish from the counts and the reasons.
+        self.add_exp("exp-001", "PASS")
+        write(self.run / "experiments" / "exp-002" / "plan.md", "the plan")
+        facts = self.outcome()
+        self.assertEqual(facts["outcome"], "complete")
+        self.assertEqual([(e["id"], e["verdict"]) for e in facts["experiments"]],
+                         [("exp-001", "PASS"), ("exp-002", "MISSING")])
+        self.assertEqual(facts["counts"], {"PASS": 1, "MISSING": 1})
+        self.assertIn("exp-002 started but wrote no results.md", facts["reasons"])
+
+    def test_missing_results_are_not_results(self):
+        write(self.run / "experiments" / "exp-001" / "plan.md", "the plan")
+        facts = self.outcome()
+        self.assertEqual(facts["outcome"], "no-results")
+        self.assertIn("exp-001 started but wrote no results.md", facts["reasons"])
+        self.assertEqual(self.outcome(status="failed")["outcome"], "failed")
+        # Nor is a rethink with a crashed disproof experiment theory-only.
+        write(self.run / "rethink-rationale.md", "why it cannot work")
+        facts = self.outcome()
+        self.assertEqual(facts["outcome"], "no-results")
+        self.assertFalse(any("theory-only" in r for r in facts["reasons"]))
+
+    def test_finished_run_without_a_paper_says_so(self):
+        self.add_exp("exp-001", "PASS")
+        self.assertIn("paper/paper.pdf was not built", self.outcome()["reasons"])
+        # Written as Step 11 says: single-quoted, each ' doubled, \ and " as they are.
+        make_run(Path(self.tmp.name), "run", status="complete", paper_compiled="false",
+                 paper_compile_error="""'! LaTeX Error: File `natbib.sty'' not found: \\usepackage{natbib} "here"'""")
+        self.assertIn("""paper/paper.pdf was not built: ! LaTeX Error: File `natbib.sty' not found: \\usepackage{natbib} "here\"""",
+                      self.outcome()["reasons"])
+        # A run that stopped early is not expected to have a paper.
+        self.assertFalse(any("paper.pdf" in r for r in self.outcome(status="failed")["reasons"]))
+        # The error comes from state.md, which must be readable (no fallback).
+        (self.run / "state.md").unlink()
+        with self.assertRaises(OSError):
+            self.outcome()
+        self.assertEqual(self.outcome(status="failed")["outcome"], "partial")
+        write(self.run / "paper" / "paper.pdf", "%PDF")
+        facts = self.outcome()
+        self.assertTrue(facts["paper"])
+        self.assertFalse(any("paper.pdf" in r for r in facts["reasons"]))
+
+    def test_missing_next_steps_is_reported(self):
+        self.add_exp("exp-001", "PASS")
+        self.assertIn("next-steps.md is missing: the run proposes no next round", self.outcome()["reasons"])
+        self.assertIn("next-steps.md is missing: the run proposes no next round",
+                      self.outcome(status="failed")["reasons"])
+        # A paused run writes it when it resumes.
+        paused = self.outcome(status="audit_complete", paused=True, publish_state="skipped")
+        self.assertFalse(any("next-steps.md" in r for r in paused["reasons"]))
+        write(self.run / "next-steps.md", "**Outcome**: It holds.\n")
+        self.assertFalse(any("next-steps.md" in r for r in self.outcome()["reasons"]))
+
 
 class IssueCommentTest(unittest.TestCase):
     def setUp(self):
@@ -468,6 +521,13 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("Routing localises, persistence untested.", text)
         self.assertIn("Results audit: HONEST-NEGATIVE (true-null)", text)
         self.assertIn("2. Capability-pressure RL", text)
+
+    def test_comment_counts_missing_experiments(self):
+        write(self.run / "experiments" / "exp-003" / "plan.md", "the plan")
+        text = self.comment("pushed", "https://github.com/o/research-x")
+        self.assertIn("experiments: 1 pass, 1 inconclusive, 1 missing", text)
+        self.assertIn("| exp-003 | — | MISSING |", text)
+        self.assertIn("- exp-003 started but wrote no results.md", text)
 
     def test_unpublished_comment_has_no_dead_link(self):
         text = self.comment("failed", "")

@@ -485,6 +485,9 @@ write_run_config
 
 # --- Step loop ---
 START_TIME=$(date +%s)
+# The provider output of the last step attempt (run_step sets it), for the
+# session that writes a missing next-steps.md.
+LAST_STEP_LOG=""
 # Bash-owned ceiling for the Step 10 audit-remediation loop, independent of any
 # agent-written field — so a missing or garbage audit_round can never wedge the run.
 # AUDIT_ROUNDS counts the re-entries, so the ceiling allows MAX_AUDIT_ROUNDS + 1 rounds.
@@ -599,6 +602,15 @@ RUN_ID=$(basename "$RUN_DIR")
 TOPIC_LINE=$(state_field "${RUN_DIR}/state.md" topic)
 [ -n "$TOPIC_LINE" ] || TOPIC_LINE=$(head -1 "${RUN_DIR}/topic.txt" 2>/dev/null || true)
 [ -n "$TOPIC_LINE" ] || TOPIC_LINE="$RUN_ID"
+
+# Step 11 writes next-steps.md. A run that ended without one gets it here,
+# before publishing, so the repo holds the file the email and the issue comment
+# point to; a paused run writes it in Step 11 when it resumes. A session that
+# fails is logged by write_next_steps, and the outcome reports next-steps.md
+# missing.
+if ! is_true "$PAUSED" && [ ! -s "${RUN_DIR}/next-steps.md" ]; then
+    write_next_steps || true
+fi
 
 # Publication result, consumed by the outcome, the email and the issue comment.
 #   PUBLISH_STATE: pushed (the remote branch verifiably holds this run's HEAD),

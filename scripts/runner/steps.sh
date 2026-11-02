@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Running one workflow step: retries, waiting on external jobs, guard holds and pausing.
+# Running one workflow step: retries, waiting on external jobs, guard holds and
+# pausing; and the session that writes next-steps.md for a run that ended without one.
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
 run_hook() {
@@ -143,6 +144,7 @@ run_step() {
     while [ "$spent" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((spent + 1))
         run_log="${LOG_DIR}/step-${step}-attempt-${attempt}-$(date +%Y%m%d-%H%M%S).log"
+        LAST_STEP_LOG="$run_log"
         if [ "$attempt" -eq 1 ]; then
             log "Starting step ${step}..."
         else
@@ -247,6 +249,34 @@ run_step() {
     log "Step ${step} failed after ${STEP_MAX_ATTEMPTS} attempts. Marking run failed."
     set_status failed
     return 1
+}
+
+write_next_steps() {
+    # Runs one session of the run's backend that writes RUN_DIR/next-steps.md
+    # (commands/researcher-auto-next-steps.md), for a run that ended without
+    # one, and logs it; its output goes to LOG_DIR/next-steps-<time>.log.
+    # Returns non-zero, after logging why, when the session fails or writes no
+    # next-steps.md, or an empty one; what a failed session wrote is removed,
+    # so that it is not published as the run's plan.
+    local session_log rc=0
+    session_log="${LOG_DIR}/next-steps-$(date +%Y%m%d-%H%M%S).log"
+    log "No next-steps.md after the workflow (status ${STATUS}); writing it with ${BACKEND} ${MODEL} (output in ${session_log})..."
+    cd "$REPO_DIR"
+    set +e
+    run_next_steps_provider 2>&1 | tee "$session_log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        rm -f "${RUN_DIR}/next-steps.md"
+        log "ERROR: the next-steps session failed (exit ${rc}; its output is in ${session_log}); removed what it wrote, so the run has no next-steps.md."
+        return 1
+    fi
+    if [ ! -s "${RUN_DIR}/next-steps.md" ]; then
+        rm -f "${RUN_DIR}/next-steps.md"
+        log "ERROR: the next-steps session wrote no next-steps.md, or an empty one (its output is in ${session_log})."
+        return 1
+    fi
+    log "Wrote ${RUN_DIR}/next-steps.md."
 }
 
 pause_run() {

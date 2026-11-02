@@ -38,35 +38,13 @@ The run directory is: **{{argument}}**
    - `novelty-assessment.md` — novelty verdict and closest existing work
    - `experiments/*/results.md` — individual experiment results
    - `paper/sections/abstract.tex` — paper abstract (if exists)
-   - `next-steps.md` — the ranked next-round plan and the run's self-reflection (written by Step 11). **This is the primary source for the "Proposed Next Steps" section.** If it is missing, see step 2b.
+   - `next-steps.md` — the ranked next-round plan and the run's self-reflection (written by Step 11, or by the runner when a run ended without one). **This is the primary source for the "Proposed Next Steps" section.** If it is missing, say so in that section and take the steps from the Future Work section below; do not write the file, since the repo was published before this email.
    - `paper/sections/future-work.tex` — the paper's Future Work section (fallback source for next steps)
    - `rethink-rationale.md` — why the approach doesn't work (if exists)
    - `audit/results-audit.md` — the results auditor's overall disposition, exit reason, and any unresolved findings (if exists)
    - `run-outcome.json` — the wrapper's verified final outcome (`outcome`, `reasons`, `publish_state`, per-experiment verdicts). In autonomous mode the same facts are in the handoff above. **It is authoritative**: if `outcome` is not `complete`, the email's first line says so plainly (e.g. "This run finished but its results are not on GitHub", "No experiment produced a valid result"), and nothing in the email may contradict it.
    - `experiments/*/preflight.md` — each experiment's pre-flight checks. An experiment whose verdict is `INCONCLUSIVE` (or whose pre-flight has a `FAIL`) could not answer its question: describe it that way, never as a negative result.
    - `.repo_url` — GitHub repo URL. **This file only exists if the repo push was confirmed successful.** If it is missing or empty, the code did NOT reach GitHub — OMIT the "Repo" row in the Bottom Line table and the GitHub entry in the Links section entirely, and do NOT invent a URL. In that case add a one-line note that results are attached/local (in the run directory) rather than linking to a repo.
-
-2b. **If `next-steps.md` does not exist, write it yourself before composing.**
-
-   A run only reaches Step 11 — and therefore only writes `next-steps.md` — if it
-   completed. Runs that crashed, timed out, were aborted, or pivoted still get an
-   email, and **every email carries proposed next steps**. There is no such thing
-   as a run with nothing to say about what to do next: a run that failed for
-   mechanical reasons has "fix the mechanism and re-run" as its next step, and a
-   run that failed for scientific reasons has "the cheapest experiment that would
-   tell us whether the idea or the test was wrong."
-
-   Read `state.md` (status, `current_step`, and the decision log), any
-   `experiments/*/results.md` that exist, `rethink-rationale.md`,
-   `challenge/limitation-triage.md`, and the tail of the run log if one is
-   reachable. Then write `<run-dir>/next-steps.md` from
-   `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`, the template Step 11 uses.
-   Its `## Reflection` names whether the failure was an orchestration or a
-   scientific failure (the template defines both); when a run falls over, that is
-   the most useful sentence in the email.
-
-   Write the file even if it duplicates what the paper already says — it is the
-   artifact `/researcher-continue` reads, and it ships in the repo.
 
 3. **Compose the email as HTML**.
 
@@ -301,9 +279,6 @@ The run directory is: **{{argument}}**
      `<img src="cid:NAME" alt="what it shows" style="max-width:100%">`, with
      two lines under it on what to see. Never use data: URIs or file paths in
      `src`; the helper sends nothing while a listed image is not one of these.
-   - Confirm `<run-dir>/next-steps.md` exists and is non-empty — you either read it
-     or wrote it in step 2b. It ships in the repo and is what
-     `/researcher-continue` reads, so a missing one is a defect, not a detail.
 
 5. **Complete the requested delivery mode**:
    - In compose-only mode, stop after validating that both files are non-empty.

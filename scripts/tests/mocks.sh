@@ -87,3 +87,31 @@ echo "Mock email composition complete."
 MOCK_EMAIL_COMPOSER
     chmod +x "$1/mock-email-composer"
 }
+
+# install_mock_next_steps_writer DIR: writes DIR/mock-next-steps-writer, the
+# next-steps half of a mock provider. A mock provider hands it the prompt on
+# stdin; it writes <run>/next-steps.md for the run directory the prompt names.
+# MOCK_NEXT_STEPS_FAIL=true makes it fail after writing part of the file, as a
+# session that drops mid-write does.
+install_mock_next_steps_writer() {
+    cat > "$1/mock-next-steps-writer" <<'MOCK_NEXT_STEPS_WRITER'
+#!/usr/bin/env bash
+set -euo pipefail
+prompt=$(cat)
+run_dir=$(printf '%s\n' "$prompt" | sed -n 's/^The run directory is: \*\*\(.*\)\*\*$/\1/p' | head -1)
+if [ -z "$run_dir" ]; then
+    echo "mock next-steps writer could not parse the run directory" >&2
+    exit 64
+fi
+printf '# Proposed Next Steps: mock\n\n**Run ID**: %s\n' "$(basename "$run_dir")" > "${run_dir}/next-steps.md"
+if [ "${MOCK_NEXT_STEPS_FAIL:-false}" = "true" ]; then
+    echo "stream disconnected while writing next-steps.md" >&2
+    exit 1
+fi
+printf '%s\n' '**Outcome**: The run stopped before it could answer its question.' '' '## Reflection' '' \
+    'An orchestration failure: a step failed; the science is untouched.' '' '## Ranked Next Steps' '' \
+    '### 1. Resume the run after fixing the failed step' '- **Do**: resume' >> "${run_dir}/next-steps.md"
+echo "Mock next-steps.md written."
+MOCK_NEXT_STEPS_WRITER
+    chmod +x "$1/mock-next-steps-writer"
+}

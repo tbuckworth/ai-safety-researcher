@@ -173,6 +173,23 @@ run_step_provider() {
     build_step_prompt "$step" | invoke_provider
 }
 
+build_next_steps_prompt() {
+    # The handoff gives facts only; commands/researcher-auto-next-steps.md
+    # holds the rules.
+    build_runtime_header
+    cat <<EOF
+
+# Next-Steps Handoff
+
+- Last step's provider output: ${LAST_STEP_LOG:-none (no step ran in this launch)}
+EOF
+    render_command "${REPO_DIR}/commands/researcher-auto-next-steps.md" "$RUN_DIR"
+}
+
+run_next_steps_provider() {
+    build_next_steps_prompt | invoke_provider
+}
+
 run_email_provider() {
     build_email_prompt compose | invoke_provider
 }

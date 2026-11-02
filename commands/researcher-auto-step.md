@@ -660,10 +660,14 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 2. After the report agent completes, verify that `paper/paper.tex` exists.
 
-3. If the report agent didn't compile the PDF, try:
+3. If the report agent didn't compile the PDF, run the build once more:
    ```bash
    cd <run-dir>/paper && make
    ```
+   Record in `state.md` whether `paper/paper.pdf` now exists: `paper_compiled: true`, or
+   `paper_compiled: false` with `paper_compile_error: '<the build's first error line>'`,
+   single-quoted, each `'` in the line written as `''`, backslashes and `"` as they are.
+   Carry on either way: the runner reports a missing PDF in the run's outcome.
 
 4. **Generate `briefing.md`** — a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:
 

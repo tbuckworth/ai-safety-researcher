@@ -105,6 +105,10 @@ RUN_SETTINGS = (
 )
 RUN_CONFIG_FILE = "run-config.json"
 
+# The verdicts an experiment can have (scan_experiments): those parse_verdict reads
+# from a results.md, and MISSING for an experiment directory without one.
+# VALID_VERDICTS answer the experiment's question.
+VERDICTS = ("PASS", "FAIL", "MIXED", "INCONCLUSIVE", "UNKNOWN", "MISSING")
 VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
 # Final outcomes that count as a finished, usable run (the wrapper exits 0).
 SUCCESS_OUTCOMES = ("complete", "complete-local")
@@ -444,17 +448,20 @@ def parse_preflight(path: Path) -> dict[str, str]:
 
 
 def scan_experiments(run_dir: Path) -> list[dict]:
-    """This run's experiments (never prior/), with verdict and pre-flight state."""
+    """This run's experiments (each experiments/exp-* directory, never prior/),
+    with verdict and pre-flight state. An experiment without a results.md, one
+    that started and stopped before it reported, has the verdict MISSING."""
     experiments = []
     for exp_dir in sorted((run_dir / "experiments").glob("exp-*")):
         if not exp_dir.is_dir():
             continue
         results = exp_dir / "results.md"
-        if not results.is_file():
-            continue
-        text = results.read_text(encoding="utf-8", errors="replace")
-        component = _section(text, "Component Tested").splitlines()
-        stated = parse_verdict(text)
+        if results.is_file():
+            text = results.read_text(encoding="utf-8", errors="replace")
+            component = _section(text, "Component Tested").splitlines()
+            stated = parse_verdict(text)
+        else:
+            component, stated = [], "MISSING"
         preflight_file = exp_dir / "preflight.md"
         preflight = parse_preflight(preflight_file) if preflight_file.is_file() else None
         failed_checks = sorted(k for k, v in (preflight or {}).items() if v == "FAIL")
@@ -527,11 +534,15 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     failed          workflow stopped early with no valid results
     paused          provider usage limit; resumable, nothing published
 
-    `success` is whether the outcome is one of SUCCESS_OUTCOMES. The result also
-    carries what the reports quote from the run directory: the `**Outcome**`
-    line of next-steps.md (`findings`), its ranked step titles and the results
-    audit's disposition (`audit`), each empty when the file is missing. Reads
-    the run directory; writes nothing.
+    `success` is whether the outcome is one of SUCCESS_OUTCOMES. The `reasons`
+    are the caveats, among them a finished run without paper/paper.pdf (with
+    state.md's paper_compile_error when Step 11 recorded one) and a run that is
+    not paused without next-steps.md. The result also carries what the reports
+    quote from the run directory: the `**Outcome**` line of next-steps.md
+    (`findings`), its ranked step titles and the results audit's disposition
+    (`audit`), each empty when the file is missing. Reads the run directory,
+    state.md only for a finished run without paper/paper.pdf; writes nothing.
+    Raises OSError when a file it reads cannot be read.
     """
     experiments = scan_experiments(run_dir)
     counts: dict[str, int] = {}
@@ -574,6 +585,9 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         reasons.append(f"{counts['INCONCLUSIVE']} experiment(s) inconclusive (pre-flight failed or invalid measurement)")
     if counts.get("UNKNOWN"):
         reasons.append(f"{counts['UNKNOWN']} experiment(s) without a '## Verdict: PASS|FAIL|INCONCLUSIVE' line")
+    missing = [e["id"] for e in experiments if e["verdict"] == "MISSING"]
+    if missing:
+        reasons.append(f"{', '.join(missing)} started but wrote no results.md")
     unchecked = [e["id"] for e in experiments if e["preflight"] == "missing"]
     if unchecked:
         reasons.append(f"no pre-flight record for {', '.join(unchecked)}")
@@ -582,9 +596,15 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         reasons.append(f"pre-flight record has no readable check table for {', '.join(unreadable)}")
     if theory_only and has_results:
         reasons.append("theory-only negative result (no experiments were run)")
+    paper = (run_dir / "paper" / "paper.pdf").is_file()
+    if finished and not paper:
+        error = read_frontmatter(run_dir / "state.md").get("paper_compile_error", "")
+        reasons.append("paper/paper.pdf was not built" + (f": {error}" if error else ""))
+    next_steps_file = run_dir / "next-steps.md"
+    if not paused and not next_steps_file.is_file():
+        reasons.append("next-steps.md is missing: the run proposes no next round")
     reasons.extend(notes or [])
 
-    next_steps_file = run_dir / "next-steps.md"
     findings = ""
     if next_steps_file.is_file():
         findings = first_bold_field(next_steps_file.read_text(encoding="utf-8", errors="replace"), "Outcome")
@@ -600,7 +620,7 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         "publish_state": publish_state,
         "counts": counts,
         "experiments": experiments,
-        "paper": (run_dir / "paper" / "paper.pdf").is_file(),
+        "paper": paper,
         "next_steps": next_steps_file.is_file(),
         "findings": findings,
         "next_step_titles": next_step_titles(run_dir),
@@ -632,7 +652,7 @@ def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, bra
         "",
     ]
     counts = facts["counts"]
-    tally = ", ".join(f"{counts[v]} {v.lower()}" for v in ("PASS", "FAIL", "MIXED", "INCONCLUSIVE", "UNKNOWN") if counts.get(v))
+    tally = ", ".join(f"{counts[v]} {v.lower()}" for v in VERDICTS if counts.get(v))
     lines.append(f"**Outcome:** `{outcome}`" + (f" — experiments: {tally}" if tally else ""))
     for reason in facts["reasons"]:
         lines.append(f"- {reason}")

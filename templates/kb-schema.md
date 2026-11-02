@@ -1,13 +1,12 @@
 # Knowledge Base Schema
 
 This file is the configuration for this wiki. Any agent that reads, writes, or
-maintains these pages reads this file first and follows it exactly. It is what
-makes an agent a disciplined wiki maintainer rather than a generic chatbot.
+maintains these pages reads this file first and follows it exactly.
 
 The pattern is Karpathy's LLM-wiki: three layers (raw sources, the wiki, this
-schema) and three operations (ingest, query, lint). The wiki is a **persistent,
-compounding artifact** — knowledge is compiled once and then kept current, not
-re-derived on every question.
+schema) and three operations (ingest, query, lint). Knowledge is compiled into
+the wiki once and then kept current, so a question is answered from the wiki
+instead of being re-derived from the sources.
 
 ## Ownership
 
@@ -32,9 +31,8 @@ lessons/          cross-run methodology knowledge (see below)
 threads/          one page per research line, linking its runs
 ```
 
-`lessons/` is the part that makes this more than a literature wiki. It is what
-the research process itself has learned, and it is read *before* designing
-experiments, not after:
+`lessons/` holds what the research process itself has learned, and the
+workflow reads it before an experiment design is committed:
 
 - `lessons/common-failures.md` — failure modes that have actually bitten a run,
   with the symptom, the root cause, and the check that would have caught it early
@@ -66,7 +64,7 @@ tags: [<tag>, ...]
   `sources/` page or a named run is either marked `(inferred)` or doesn't belong.
 - **Contradictions are recorded, not resolved by overwriting.** When a new source
   disagrees with an existing claim, keep both, attribute both, and say which is
-  better supported and why. Silently overwriting is how a wiki starts lying.
+  better supported and why.
 - **Confidence is explicit** on any claim that isn't a direct quote from a
   source: `well-established`, `single-source`, `contested`, or `speculative`.
 - Prose over bullet fragments. A page a human can read beats a page of stubs.
@@ -87,22 +85,21 @@ Given a new source (a paper, a post, a completed research run):
 6. Append one entry to `log.md`.
 
 When ingesting a **completed research run**, additionally: update or create the
-`threads/<line>.md` page, and — this is the part that compounds — write what the
-*process* learned into `lessons/`. A run that lost six hours to a CUDA driver
-mismatch, or discovered its construct was a strawman at Step 6, has produced
-knowledge worth more than its result.
+`threads/<line>.md` page, and write what the *process* learned into
+`lessons/`: a run that lost six hours to a CUDA driver mismatch, or found at
+Step 6 that its construct was a strawman, records the cause and the check that
+would have caught it.
 
 ## Operation: Query
 
 1. Read `index.md` first, then drill into the pages it points at. At this scale
    the index replaces embedding-based retrieval.
 2. Answer with citations to wiki pages (`[[page]]`) and through them to sources.
-3. **File good answers back.** A synthesis, comparison, or connection produced in
-   conversation is worth as much as an ingested source — write it into the wiki
-   as its own page rather than letting it die in chat history.
-4. If the wiki genuinely doesn't cover the question, say so plainly. Never
-   improvise coverage; a confident answer from an empty wiki is the one failure
-   mode that destroys trust in the whole thing.
+3. **File good answers back.** Write a synthesis, comparison or connection
+   produced in conversation into the wiki as its own page, as you would an
+   ingested source.
+4. If the wiki does not cover the question, say so. Never answer beyond what
+   the pages hold.
 
 ## Operation: Lint
 
@@ -136,5 +133,4 @@ Append-only. Every entry starts with the same prefix so the log stays greppable
 
 This file is expected to change as the wiki grows and its domain sharpens. When
 a convention here stops fitting the material, propose the change to the human
-rather than quietly diverging from it — a schema the pages don't follow is worse
-than no schema.
+instead of departing from it in the pages.

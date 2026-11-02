@@ -123,17 +123,5 @@ The orchestrator re-reads `state.md` at the start of each step and after any con
 
 ## Output Artefacts
 
-Each run produces artefacts in `output/<run-id>/`:
-
-- `state.md` — Workflow state and history
-- `search-plan.md` — Approved search plan
-- `literature/` — Search results and synthesis
-- `novelty-assessment.md` — Novelty analysis
-- `success-criteria.md` — SOTA, benchmarks, publishability bar
-- `decomposition.md` — Lambda table and component details
-- `challenge/` — Assumption analysis, mentor review, pre-mortem
-- `experiments/exp-NNN/` — Experiment plans, results, `run.log`, report sections
-- `audit/` — Results auditor findings (`results-audit.md`) and round-1 claim anchors
-- `references.bib` — Accumulated BibTeX citations
-- `citation-registry.md` — Citation key registry
-- `paper/` — Complete LaTeX project with compiled PDF
+Each run writes its artefacts to `output/<run-id>/`, laid out as
+[`WORKFLOW.md`](WORKFLOW.md#run-directory) shows.

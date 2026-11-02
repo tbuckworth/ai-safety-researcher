@@ -22,12 +22,17 @@ follows it step by step through Claude Code or OpenAI Codex.
 ## Run Directory
 
 Every run creates `output/<run-id>/` where `run-id` = `YYYY-MM-DD-<slugified-topic>`.
+Files marked (autonomous) are written only by the autonomous runner, whose
+follow-up runs also hold `prior/` ([AUTONOMOUS.md](AUTONOMOUS.md#follow-up-run-directory)).
 
 ```
 output/<run-id>/
 ├── state.md                    # Workflow state (YAML frontmatter + narrative)
+├── topic.txt                   # The topic as given (autonomous)
+├── run-config.json             # The run's settings, kept for a resume (autonomous)
 ├── search-plan.md              # Approved search plan
 ├── literature/
+│   ├── kb-prior.md             # What the global wiki already holds (Step 2, with a knowledge base)
 │   ├── search-001-academic.md  # arXiv + Semantic Scholar results
 │   ├── search-002-blogs.md     # Lab blog results
 │   ├── search-003-community.md # LessWrong, MIRI, ARC results
@@ -37,30 +42,30 @@ output/<run-id>/
 ├── success-criteria.md
 ├── decomposition.md            # Steinhardt lambda table + component details
 ├── challenge/
+│   ├── kb-lessons.md           # The wiki's lessons/ for this design (Step 6, with a knowledge base)
 │   ├── assumption-analysis.md  # Unstated assumptions surfaced
 │   ├── mentor-review.md        # Senior researcher perspective
-│   └── pre-mortem.md           # Failure scenario analysis
+│   ├── pre-mortem.md           # Failure scenario analysis
+│   └── limitation-triage.md    # Design-time limitation triage
+├── rethink-rationale.md        # Why the approach does not hold, after RETHINK or UNSALVAGEABLE (autonomous)
 ├── experiments/
 │   ├── exp-001/
 │   │   ├── plan.md
 │   │   ├── preflight.md        # Pre-flight checks (method fidelity, training sanity, metric separation)
 │   │   ├── results.md          # Verdict: PASS | FAIL | INCONCLUSIVE
-│   │   ├── run.log             # Full raw stdout/stderr — the auditor re-derives from this
-│   │   └── report-section.md
+│   │   ├── run.log             # Full raw stdout/stderr; the auditor re-derives from this
+│   │   ├── report-section.md
+│   │   └── ...                 # The experiment's code and outputs
 │   └── exp-002/ ...
 ├── audit/
 │   ├── results-audit.md        # Results auditor's findings (Step 10)
-│   └── claim-anchor-*.md        # Round-1 results, frozen across remediation rounds
-├── knowledge/                  # This research line's knowledge base (Step 11)
-│   ├── README.md
-│   ├── findings.md             # Established, each with its confidence
-│   ├── dead-ends.md            # Ruled out, with the evidence that ruled it out
-│   ├── methods.md              # How to reproduce: data, harness, commands, gotchas
-│   └── open-questions.md
+│   └── claim-anchor-*.md       # Round-1 results, frozen across remediation rounds
+├── knowledge/                  # This research line's knowledge base (Step 11; layout in KNOWLEDGE-BASE.md)
 ├── next-steps.md               # Reflection + ranked next round (always written)
-├── briefing.md                 # Run summary for review/continue
+├── briefing.md                 # Run summary for review/continue (autonomous)
 ├── references.bib              # Accumulated throughout workflow
 ├── citation-registry.md        # cite_key -> one-line description
+├── run-outcome.json            # The final outcome (autonomous)
 └── paper/
     ├── preamble.tex
     ├── paper.tex

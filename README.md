@@ -201,46 +201,8 @@ Steps 2-6 can loop back to earlier steps when evidence demands it (e.g., novelty
 
 ### Output Artifacts
 
-Each run produces artifacts in `output/<run-id>/`:
-
-```
-output/<run-id>/
-├── state.md                    # Workflow state (YAML frontmatter + narrative)
-├── search-plan.md
-├── literature/
-│   ├── search-001-academic.md
-│   ├── search-002-blogs.md
-│   ├── search-003-community.md
-│   └── synthesis.md
-├── novelty-assessment.md
-├── success-criteria.md
-├── decomposition.md            # Lambda table
-├── challenge/
-│   ├── assumption-analysis.md
-│   ├── mentor-review.md
-│   └── pre-mortem.md
-├── experiments/
-│   └── exp-NNN/
-│       ├── plan.md
-│       ├── results.md
-│       ├── run.log
-│       └── report-section.md
-├── audit/
-│   └── results-audit.md
-├── knowledge/                  # This research line's own knowledge base
-│   ├── README.md
-│   ├── findings.md             #   established, with confidence
-│   ├── dead-ends.md            #   ruled out, with the evidence
-│   ├── methods.md              #   how to reproduce
-│   └── open-questions.md
-├── next-steps.md               # Ranked next-round plan + reflection (always written)
-├── briefing.md                 # Run summary for review/continue
-├── references.bib
-├── citation-registry.md
-└── paper/
-    ├── paper.tex
-    └── paper.pdf
-```
+Each run writes its artifacts to `output/<run-id>/`, laid out as
+[`docs/WORKFLOW.md`](docs/WORKFLOW.md#run-directory) shows.
 
 ## Project Structure
 

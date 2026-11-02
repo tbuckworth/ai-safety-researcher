@@ -104,27 +104,11 @@ Or let it pick from your GitHub Issues (label `list:research-ideas` on the task 
 ./scripts/researcher-cron.sh
 ```
 
-Autonomous mode runs the same 11-step workflow but makes all decisions automatically using built-in heuristics (see `docs/AUTONOMOUS.md`). On completion it:
-- Publishes all artifacts to a **private** GitHub repo (or a branch of the prior repo for a follow-up) and verifies the remote branch holds exactly the run's commit
-- Records a final outcome from what actually exists (`complete` only if the workflow finished, there are valid results, and the push verified; otherwise `unpublished`, `no-results`, `partial`, `failed` or `paused`) and exits non-zero for anything short of complete
-- Sends an HTML email with results summary (subject flagged when the outcome is not `complete`)
-- Comments the findings, verdicts, links and next steps back on the source GitHub issue
-
-#### Scheduled runs
-
-On the desktop, runs are launched by agent-board's `agent-spare`: its systemd
-user timer (`agent-spare.timer`) starts `researcher-cron.sh` for one issue in
-its own systemd unit when a plan's weekly allowance would otherwise go unused.
-The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
-logs stay in `logs/` in the output directory. The old crontab line
-is disabled, but the script can still be run by hand or from cron:
-```bash
-0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
-```
-
-Put `RESEARCHER_BACKEND=codex` before the command to run Codex instead. See
-[`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md) for model, reasoning, sandbox,
-output, publishing, and email options.
+Autonomous mode runs the same 11-step workflow but makes every decision itself.
+It publishes the run to a GitHub repo (private by default), records a final outcome, emails
+the results and comments on the source issue. On the desktop, agent-board's
+`agent-spare` launches these runs. [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md)
+covers scheduling, configuration, outcomes and follow-ups.
 
 ### Reviewing Results
 
@@ -159,156 +143,28 @@ is for understanding a run; `/researcher-continue` is for proceeding from it.
 
 ### Knowledge Bases
 
-Research compounds through two knowledge bases, both optional — a run without
-them behaves identically. See [`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md).
+Two optional knowledge bases carry what runs learn into later runs: a global
+wiki shared by every research line, and a `knowledge/` directory in each
+research repo. A run without them behaves identically. Bootstrap the global
+wiki at `RESEARCHER_DEFAULT_KB_DIR` (`config/researcher.env`) with:
 
 ```bash
-scripts/kb-init.sh                        # bootstrap RESEARCHER_DEFAULT_KB_DIR (config/researcher.env)
+scripts/kb-init.sh
 ```
 
-- **Global wiki** — spans every research line: literature, entities, concepts,
-  and `lessons/` (what the research *process* has learned: common failures,
-  strawman constructs, real compute costs, tooling traps). Queried before
-  searching, before assessing novelty, and before committing to an experiment
-  design; ingested after literature search and after every completed run.
-- **Per-repo** — `knowledge/` inside each research repo (findings, dead-ends,
-  methods, open questions), so a follow-up run resumes without re-deriving.
+[`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md) describes both.
 
-## Architecture
+## Documentation
 
-**Hub-and-spoke orchestrator.** The Claude `/researcher` command or Codex
-`researcher` skill is the sole hub. It manages user dialogue and dispatches 12
-leaf-node agents through the selected provider's subagent mechanism. Agents
-never interact with users or spawn other agents.
-
-```
-/researcher <topic>
-    │
-    ├── Step 1:  Clarify topic (direct dialogue)
-    ├── Step 2:  search-planner → search ×3 (parallel)
-    ├── Step 3:  novelty-analyst
-    ├── Step 4:  criteria
-    ├── Step 5:  decomposition (Steinhardt lambda table)
-    ├── Step 6:  assumption-challenger, mentor-review, pre-mortem (parallel)
-    ├── Step 7:  Report experiment plan (direct dialogue)
-    ├── Step 8:  Confirm fail-fast (direct dialogue)
-    ├── Step 9:  experiment ×N (lambda order, fail-fast)
-    ├── Step 10: results-auditor (audit-remediation loop)
-    └── Step 11: report → LaTeX paper
-```
-
-Steps 2-6 can loop back to earlier steps when evidence demands it (e.g., novelty assessment reveals overlapping work → refine search).
-
-### Output Artifacts
-
-Each run writes its artifacts to `output/<run-id>/`, laid out as
-[`docs/WORKFLOW.md`](docs/WORKFLOW.md#run-directory) shows.
-
-## Project Structure
-
-```
-researcher/
-├── commands/
-│   ├── researcher.md              # Interactive orchestrator (main entry point)
-│   ├── researcher-auto-step.md    # Autonomous per-step executor
-│   ├── researcher-auto-next-steps.md  # next-steps.md for a run that ended without one
-│   ├── researcher-auto-email.md   # Email composer for autonomous results
-│   ├── researcher-review.md       # Interactive result reviewer
-│   └── researcher-continue.md     # Pick a next step and queue the follow-up
-├── agents/                        # 12 leaf-node agent definitions
-│   ├── search-planner.md          # Creates structured search plan
-│   ├── search.md                  # Executes one search task (parallelizable)
-│   ├── novelty-analyst.md         # Assesses whether the idea is novel
-│   ├── criteria.md                # Identifies SOTA, benchmarks, publishability bar
-│   ├── decomposition.md           # Steinhardt decomposition (P_success, T, lambda)
-│   ├── assumption-challenger.md   # Surfaces unstated assumptions
-│   ├── mentor-review.md           # Senior researcher perspective
-│   ├── pre-mortem.md              # Failure scenario analysis
-│   ├── experiment.md              # Executes a single experiment
-│   ├── results-auditor.md         # Independently audits the results (Step 10)
-│   ├── report.md                  # Compiles LaTeX paper
-│   └── knowledge.md               # Queries/ingests/lints the knowledge bases
-├── scripts/
-│   ├── researcher-cron.sh         # Dual-backend autonomous runner
-│   ├── config.sh                  # Reads config/researcher.env; run directly, prints configured values
-│   ├── runner/                    # The runner's functions, one file per concern (sourced by researcher-cron.sh)
-│   ├── kb-init.sh                 # Bootstraps the global knowledge base
-│   ├── researcher_lib.py          # The runner's decisions: state.md fields, issue picking and claiming, follow-up issues, final outcome, issue comment
-│   ├── preflight_checks.py        # Experiment pre-flight checks: degeneracy, training, metric separation, clustered stats
-│   ├── create-followup-issue.sh   # Creates a type:follow-up research issue (idempotent)
-│   ├── check-voice-blocks.sh      # Voice-block and KEEP-token guard
-│   ├── test-researcher-backends.sh # Mock provider integration tests
-│   ├── test-researcher-lifecycle.sh # Mock pick/timeout/publish/outcome/issue tests
-│   └── tests/                     # Unit tests for the Python helpers and manifests; mocks.sh, the mock CLIs both integration tests use
-├── skills/
-│   ├── research-workflow/         # Auto-trigger skill definition
-│   └── researcher*/               # Codex workflow adapters
-├── config/                        # Deployment defaults (researcher.env) and compute-profile presets
-├── templates/                     # LaTeX templates, kb-schema.md (wiki schema), codex-adapter.md
-├── data/
-│   └── model-organisms/           # Curated DB of reusable misaligned model organisms
-│       ├── organisms.yaml         #   family-level index (machine-readable)
-│       ├── models.md              #   expanded per-model view
-│       └── README.md              #   schema + robustness-vetting protocol
-├── docs/
-│   ├── WORKFLOW.md                # Detailed 11-step specification
-│   ├── ARCHITECTURE.md            # Architecture and agent inventory
-│   ├── AUTONOMOUS.md              # Autonomous mode setup and reference
-│   ├── COMPUTE-MATS.md            # Running on the MATS Slurm cluster
-│   ├── KNOWLEDGE-BASE.md          # Global wiki + per-repo knowledge bases
-│   ├── STANCE.md                  # Truth-seeking Voice block + KEEP/REFRAME rubric
-│   └── DIAGRAM.md                 # Mermaid architecture diagrams
-├── output/                        # Research artifacts (gitignored)
-├── logs/                          # Autonomous mode logs (gitignored)
-├── .claude-plugin/plugin.json     # Claude plugin manifest
-├── .codex-plugin/plugin.json      # Codex plugin manifest
-├── CLAUDE.md                      # Claude Code context
-└── AGENTS.md                      # Codex/project context
-```
-
-## How It Works (Detail)
-
-For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKFLOW.md). For architecture details and agent descriptions, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). For autonomous mode setup, see [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md).
-
-### Key Design Decisions
-
-- **State persistence**: The orchestrator writes `state.md` after every step
-  with YAML frontmatter. Either provider can recover by re-reading it.
-- **Multi-session autonomous mode**: The cron wrapper runs one fresh Claude or
-  Codex session per step, reading `state.md` between sessions. Runs can resume
-  with the same backend and model recorded in state.
-- **Adversarial challenge phase** (Step 6): Three independent reviews run in parallel before committing to experiments — catches flawed assumptions and predictable failures early.
-- **Lambda ordering**: Experiments are sorted by `lambda = -ln(P_success) / T` — the component most likely to fail per hour of work gets tested first.
-- **Negative results are results**: If experiments fail, the agent compiles a "here's why this doesn't work" paper rather than producing nothing.
-- **Method spec + pre-flight gate** (Steps 1, 9): Step 1 pins every named method and metric to a testable definition (`method-spec.md`). Before its main run, each experiment checks method fidelity, a known-answer smoke test, training sanity (non-degenerate generations), organism validity, metric separation and its statistics plan (`preflight.md`, `scripts/preflight_checks.py`). A failed check makes the verdict `INCONCLUSIVE`, never a negative result.
-- **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
-- **Construct-validity gate** (Step 6): If a covert/target construct is a strawman whose result is knowable a priori, the plan loops back to Step 1 to redesign it rather than disclaiming it — so experiments carry real information value.
-- **Limitation triage → Future Work**: Limitations are triaged (fix-now vs future-work) at Steps 6 and 10 against the run's compute profile; fix-now items fold into the plan, and the rest become a precise, resource-scoped Future Work section (Step 11) that can seed a follow-up run.
-- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (presets in `config/compute-profiles/` for the local GPU, Modal and Lambda, or any text), so nothing is hard-coded to a device.
-- **Model-organisms database** (`data/model-organisms/`): A curated, robustness-vetted shelf of reusable misaligned model organisms so a run can test methods against a real organism instead of inventing a weak one.
-- **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
-
-## Validation
-
-Run provider-free integration tests before deploying:
-
-```bash
-for f in scripts/researcher-cron.sh scripts/runner/*.sh; do bash -n "$f"; done
-shellcheck -x scripts/researcher-cron.sh scripts/runner/*.sh scripts/test-researcher-backends.sh scripts/test-researcher-lifecycle.sh
-scripts/test-researcher-backends.sh
-scripts/test-researcher-lifecycle.sh
-python3 -m unittest discover -s scripts/tests
-scripts/check-voice-blocks.sh
-```
-
-The backend test executes all eleven state transitions with mocked Claude and
-Codex CLIs, forces one transient Codex failure to exercise retries, and verifies
-the email handoff without sending anything. The lifecycle test drives the runner
-against a mock `gh` and local bare git repositories: private repo creation, a
-`main` push under `init.defaultBranch=master`, a failed push and a full disk
-surfacing as `unpublished`, the timeout keeping a finished run `complete`,
-duplicate and stale-run handling, in-place follow-up branches, slug collisions,
-and idempotent follow-up filing.
+- [`docs/WORKFLOW.md`](docs/WORKFLOW.md): the 11-step workflow, the run directory and `state.md`.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the hub-and-spoke design and the agent catalogue.
+- [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md): autonomous runs: configuration, compute profiles, outcomes, follow-ups and the results email.
+- [`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md): the global wiki and the per-repo knowledge bases.
+- [`docs/STANCE.md`](docs/STANCE.md): the Voice block every agent shares, and the tokens scripts parse.
+- [`docs/DIAGRAM.md`](docs/DIAGRAM.md): Mermaid diagrams of the workflow.
+- [`docs/COMPUTE-MATS.md`](docs/COMPUTE-MATS.md): running against the MATS Slurm cluster (not for new work).
+- [`data/model-organisms/README.md`](data/model-organisms/README.md): the model-organisms database.
+- [`AGENTS.md`](AGENTS.md): the repo map, the contributor rules and the validation commands to run before deploying.
 
 ## License
 

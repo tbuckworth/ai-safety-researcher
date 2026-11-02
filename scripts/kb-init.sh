@@ -32,10 +32,10 @@ KB_DIR="${KB_DIR:-${RESEARCHER_KB_DIR:-$RESEARCHER_DEFAULT_KB_DIR}}"
 SCHEMA_TEMPLATE="${PLUGIN_DIR}/templates/kb-schema.md"
 
 # The lessons pages, one "slug|title|blurb" line each. The workflow reads them
-# before designing experiments, so they are seeded (empty is fine) rather than
-# 404 at Step 5. The blurb opens the page, and its first sentence is the page's
-# line in index.md.
-LESSONS="common-failures|Common Failures|Failure modes that have actually bitten a research run. Read before Step 5 (decomposition) and Step 6 (challenge).
+# at Step 6, before an experiment design is committed, so each exists from the
+# start, holding only its blurb. The blurb opens the page, and its first
+# sentence is the page's line in index.md.
+LESSONS="common-failures|Common Failures|Failure modes that have occurred in research runs. The workflow reads this page at Step 6 (challenge), before an experiment design is committed.
 experiment-design|Experiment Design Lessons|Constructs that turned out to be strawmen, controls that proved load-bearing, and criteria that drifted between design and write-up.
 compute|Compute Lessons|What each compute profile can really do, what jobs actually cost in wall-clock and money, and where runs have hit ceilings.
 tooling|Tooling Lessons|Library and API traps, version pins that matter, and environment gotchas that cost a run time."

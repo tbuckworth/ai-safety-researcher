@@ -30,7 +30,7 @@ Read all specified files before beginning your analysis.
 
 ## The Steinhardt Method
 
-The key insight: order experiments by **information rate** lambda = -ln(P_success) / T.
+Order experiments by **information rate** lambda = -ln(P_success) / T.
 
 - High lambda = you learn a lot about potential failure quickly
 - Components with high lambda should be tested first

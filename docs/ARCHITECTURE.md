@@ -110,16 +110,11 @@ The repo map in [`AGENTS.md`](../AGENTS.md) lists the directories and entry poin
 
 ## State Management
 
-Every run writes `output/<run-id>/state.md` with YAML frontmatter tracking:
-- Current step and status
-- User clarifications and decisions
-- Novelty verdict
-- Criteria approval
-- Fail-fast agreement
-- Lambda table (component decomposition)
-- Experiment results
-
-The orchestrator re-reads `state.md` at the start of each step and after any context compaction event, enabling seamless recovery.
+Every run writes `output/<run-id>/state.md`: YAML frontmatter for the
+machine-readable state and a narrative body, whose fields
+[`WORKFLOW.md`](WORKFLOW.md#state-management) gives. The orchestrator re-reads
+it at the start of each step and after a context compaction, and resumes from
+the step it records.
 
 ## Output Artefacts
 

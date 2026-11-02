@@ -163,28 +163,32 @@ the dedicated trusted desktop. For a constrained run, choose
 `workspace-write`; expect dependency downloads or writes outside the run
 directory to fail unless separately provisioned.
 
-Codex CLI currently has no direct equivalent of Claude's
-`--max-budget-usd`. The wrapper therefore relies on the compute profile,
-experiment cap, retry cap, and wall-clock timeout. Account/project spending
-limits should be configured separately when strict monetary enforcement is
-required.
+Neither backend has a runner-level dollar cap: the runner passes Claude no
+`--max-budget-usd`, and Codex has no equivalent. Spending is bounded by the
+compute profile (a paid preset carries the run's budget), the experiment cap,
+the retry cap and the run timeout. If you need a strict monetary limit, set a
+spending limit on the provider account or project.
 
 ### Operational overrides
 
 | Setting | Purpose |
 |---------|---------|
 | `RESEARCHER_OUTPUT_DIR` | Override `researcher-output/` under `RESEARCHER_STORAGE_ROOT` |
+| `RESEARCHER_LOG_DIR` | Where the runner writes its logs (default `logs/` in the output directory) |
+| `RESEARCHER_LOCKFILE` | The lockfile that keeps one run at a time (default `/tmp/researcher-auto.lock`). A run that finds it held by a live process logs that another run is active and exits 0; it removes a lockfile whose process is dead and goes ahead |
 | `RESEARCHER_SKIP_PUBLISH=true` | Do not create repos or update issues (outcome `complete-local`) |
 | `RESEARCHER_REPO_VISIBILITY` | Visibility of new run repos: `private` (default), `internal`, or `public` |
 | `RESEARCHER_MIN_FREE_MB` | Publishing refuses to start below this much free space on the run volume (default 1024), or when `df` cannot measure it, and reports why |
 | `RESEARCHER_ALLOW_RERUN=true` | Let the queue pick an issue that already has a run directory here (default: skip it; `RESEARCHER_ISSUE=<n>` also re-runs one deliberately) |
 | `RESEARCHER_RESUME_MAX_AGE_DAYS` | An unfinished autonomous run untouched for longer is not auto-resumed (default 14; 0 disables). Interactive runs (`mode: interactive`) are never resumed |
+| `RESEARCHER_TIMEOUT_HOURS` | Run timeout in hours (default 8). When it passes, a run that has finished Step 5 or a later step skips the audit and compiles the report from what exists; an earlier run ends `timed_out` |
 | `RESEARCHER_TIMEOUT_SECONDS` | Run timeout in seconds; overrides `RESEARCHER_TIMEOUT_HOURS` |
 | `RESEARCHER_GIT_REMOTE_BASE` | Where git pushes (default `https://github.com`; tests point it at local bare repos) |
 | `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
 | `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_SKIP_GPU_CHECK=true` | Skip the start-up GPU check, which exits 0 when a process uses over 500 MiB of GPU memory and exits 1 when `nvidia-smi` fails or reports a non-numeric value |
+| `RESEARCHER_STEP_ATTEMPTS` | Attempts at a step that ends without advancing (default 3), after which the run is marked `failed` |
 | `RESEARCHER_RETRY_DELAY_SECONDS` | Delay between provider retries |
 | `RESEARCHER_JOB_WAIT_CMD` | A run setting (see [Resuming a run](#resuming-a-run)): a command printing outstanding external job ids for the run (`{run_id}` substituted). It exits 0 with its answer (no output: no jobs); a non-zero exit is an error, logged with its stderr, and the answer is unknown. While it prints anything or cannot answer, a non-advancing step waits instead of spending an attempt. Set automatically by the `mats` profile |
 | `RESEARCHER_RUN_DIR` | Resume exactly this run directory, or exit 2 if it is finished, missing or interactive; never another unfinished run or the queue |
@@ -285,7 +289,10 @@ first resumes it, which then records them.
 
 ## Limitation Triage & Future Work
 
-Limitations are triaged, not just disclaimed. At **Step 6** (design-time) and **Step 10** (results-time), each limitation is classified against the compute profile and remaining budget as **fix-now-free** (re-analysis of existing data), **fix-now-cheap** (a small run that fits the profile + experiment cap), or **future-work** (needs resources beyond the profile). Fix-now items are done; future-work items carry their precise resource asks into the paper's **Future Work** section, which states a resource-scoped next-round plan precise enough to seed a follow-up run. Step 11 refuses to write a limitation without a disposition.
+Steps 6 and 10 triage each limitation by the
+[Limitation Triage](WORKFLOW.md#limitation-triage) rubric in WORKFLOW.md,
+against the run's compute profile; Step 11 writes the future-work rows into the
+paper's Future Work section.
 
 ## Next Steps (every run, including failed ones)
 
@@ -326,14 +333,14 @@ never fails a step.
 - **All loops capped at 1 iteration** — except the Step 10 audit-remediation
   loop, which allows up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a runner-owned
   ceiling one round higher and the configured wall-clock timeout as backstops)
-- **8-hour timeout by default** — wrapper stops the run and compiles whatever
-  exists; override with `RESEARCHER_TIMEOUT_HOURS`
-- **Lockfile** — prevents concurrent runs
+- **Run timeout**: `RESEARCHER_TIMEOUT_HOURS` (default 8); what happens when it
+  passes depends on the step reached (see `RESEARCHER_TIMEOUT_HOURS` above)
+- **Lockfile**: `RESEARCHER_LOCKFILE` keeps one run at a time
 - **Read-only outside run dir**: the agent can search `RESEARCHER_CODE_SEARCH_DIR` but never modifies other repos
 - **Provider permissions** — autonomous Claude and Codex runs are intentionally
   non-interactive; review the sandbox settings above before enabling cron
-- **Cost control** — compute profile, experiment cap, retry cap, and timeout;
-  Codex has no runner-level dollar-cap flag
+- **Cost control**: the compute profile, the experiment cap, the retry cap and
+  the timeout; neither backend has a runner-level dollar cap
 
 ## GitHub Integration
 
@@ -362,8 +369,8 @@ never fails a step.
 
   | Verdict | Meaning | Valid |
   |---------|---------|-------|
-  | `PASS`, `FAIL`, `MIXED` | The verdict line of its `results.md` | yes |
-  | `INCONCLUSIVE` | It could not answer its question: a failed pre-flight check, an invalid measurement, or FAIL-on-affordability | no |
+  | `PASS`, `FAIL`, `MIXED` | The verdict line of its `results.md` (`PARTIAL` reads as `MIXED`) | yes |
+  | `INCONCLUSIVE` | It could not answer its question: a failed pre-flight check, a verdict line of `INCONCLUSIVE` or `INVALID`, or a `FAIL` that names affordability (FAIL-on-affordability) | no |
   | `UNKNOWN` | Its `results.md` has no recognisable verdict line | no |
   | `MISSING` | Its directory exists, but it wrote no `results.md` (it started and stopped) | no |
 
@@ -395,7 +402,8 @@ never fails a step.
 **Run stuck (state not advancing)**:
 - Check `state.md` for the current step and status
 - Check the latest step log in `logs/`
-- Delete the lockfile if stale: `rm /tmp/researcher-auto.lock`
+- A lockfile left by a dead process is removed by the next run; if the log says
+  another run is active, its PID is in that line and in the file `RESEARCHER_LOCKFILE` names
 
 **Results email not sent**:
 - The run log says why (`Writing and sending the results email ...`, then
@@ -507,14 +515,15 @@ Parent: #42 | Repo: https://github.com/<owner>/research-foo | Run: 2026-04-03-fo
 ```
 output/<date>-followup-<slug>/
 ├── prior/                      # Copied from the prior run's repo (or its run directory)
-│   ├── state.md
-│   ├── briefing.md
-│   ├── literature/synthesis.md
-│   ├── decomposition.md
+│   ├── state.md, briefing.md, method-spec.md
+│   ├── novelty-assessment.md, success-criteria.md, decomposition.md
+│   ├── references.bib, citation-registry.md
+│   ├── literature/
 │   ├── challenge/
 │   ├── next-steps.md           #   the prior round's ranked plan + reflection
-│   ├── knowledge/              #   the line's KB — dead-ends.md stops re-treading
-│   └── experiments/exp-*/results.md
+│   ├── knowledge/              #   the line's knowledge base; dead-ends.md stops re-treading
+│   ├── experiments/exp-*/      #   plan.md and results.md of each
+│   └── paper/sections/*.tex
 ├── followup-context.md         # Feedback + metadata
 ├── followup-summary.md         # Written by Step 1: what changed and why
 ├── state.md                    # Fresh state for this run

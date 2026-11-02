@@ -39,6 +39,18 @@ load_config() {
     done < "$RESEARCHER_CONFIG_FILE"
 }
 
+# config_from_file KEY: true when load_config set KEY from the file, that is,
+# the environment did not set it.
+config_from_file() {
+    local key
+    for key in ${CONFIG_FILE_KEYS[@]+"${CONFIG_FILE_KEYS[@]}"}; do
+        if [ "$key" = "$1" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # require_config KEY...: returns 2, naming the first KEY that is unset or
 # empty on stderr, unless the environment or the configuration file set them all.
 require_config() {

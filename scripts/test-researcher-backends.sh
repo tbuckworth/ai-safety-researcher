@@ -348,7 +348,8 @@ RESEARCHER_HOST_ALIAS="mock-host" \
 mismatch_status=$?
 set -e
 test "$mismatch_status" = "2"
-grep -q "in-progress run uses backend 'claude'" "${TEST_ROOT}/mismatch.stdout"
+# A run that predates run-config.json has its backend saved in state.md.
+grep -q "ERROR: the run's saved RESEARCHER_BACKEND is 'claude', but this launch sets 'codex'" "${TEST_ROOT}/mismatch.stdout"
 
 # Follow-up issues carry the source label of the backend that files them.
 cat > "${MOCK_BIN}/gh" <<'MOCK_GH'

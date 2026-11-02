@@ -89,22 +89,19 @@ GITHUB_WEB="https://github.com"
 # Where git pushes to. Only tests override this (with a file:// directory of bare repos).
 GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-$GITHUB_WEB}"
 # Publishing refuses to start below this much free space on the run volume, and
-# never publishes a single file at or above MAX_FILE_MB (GitHub rejects files
-# over 100 MB, which fails the whole push).
+# never publishes a single file at or above MAX_FILE_MB (a run setting, below;
+# GitHub rejects files over 100 MB, which fails the whole push).
 MIN_FREE_MB="${RESEARCHER_MIN_FREE_MB:-1024}"
-MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
-# The limits the steps keep to, which the runtime header gives them with
-# MAX_FILE_MB. The step ends the audit loop at MAX_AUDIT_ROUNDS; the runner's
-# own ceiling (in the step loop below) is one round more, so it only stops a
-# step that ignores the limit.
-MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
-EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
-MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
-# Local code the steps may search, read-only (also in the runtime header).
+# Local code the steps may search, read-only (in the runtime header).
 CODE_SEARCH_DIR="$RESEARCHER_CODE_SEARCH_DIR"
 LIB="${SCRIPT_DIR}/researcher_lib.py"
 if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
     echo "ERROR: python3 and ${LIB} are required. Exiting." >&2
+    exit 1
+fi
+# The plugin's commit, recorded with each launch in run-config.json.
+if ! PLUGIN_COMMIT=$(git -C "$REPO_DIR" rev-parse HEAD); then
+    echo "ERROR: could not read the plugin's commit (git rev-parse HEAD in ${REPO_DIR} failed, its error is above); the runner records it with every run, so it must run from a git checkout. Exiting." >&2
     exit 1
 fi
 # The workflow steps the runner treats specially (commands/researcher-auto-step.md
@@ -121,15 +118,8 @@ FAST_TRACK_MIN_STEP=5
 # Bounded so a genuinely stuck step still fails instead of looping forever.
 STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
-# Optional hook: a shell command printing the still-outstanding external
-# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
-# its answer (no output: no jobs); a non-zero exit is an error, logged, and the
-# answer is unknown. While it reports jobs, or cannot say, a step that did not
-# advance is WAITING on external compute, not failing — so the attempt is
-# refunded instead of spent. Empty: no hook.
-JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
-# Each call of JOB_WAIT_CMD is stopped after this long; it covers the `timeout 90`
-# inside the mats profile's command (and agent-board's).
+# Each call of JOB_WAIT_CMD (a run setting, below) is stopped after this long;
+# it covers the `timeout 90` inside the mats profile's command (and agent-board's).
 JOB_WAIT_CMD_TIMEOUT_SECONDS="${RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS:-120}"
 JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
 JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
@@ -161,16 +151,78 @@ case "$RUN_OWNER" in
 esac
 TOPIC="${1:-}"
 
-# Provider selection. RESEARCHER_MODEL remains a backwards-compatible
-# provider-specific override; the named variables avoid ambiguous saved config.
-BACKEND="$RESEARCHER_BACKEND"
 SKIP_PUBLISH="${RESEARCHER_SKIP_PUBLISH:-false}"
 SKIP_EMAIL="${RESEARCHER_SKIP_EMAIL:-false}"
 SKIP_GPU_CHECK="${RESEARCHER_SKIP_GPU_CHECK:-false}"
 LINK_OUTPUT="${RESEARCHER_LINK_OUTPUT:-true}"
-CODEX_IGNORE_USER_CONFIG="$RESEARCHER_CODEX_IGNORE_USER_CONFIG"
-ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
 PAUSED=false
+
+RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
+# The workflow statuses that end a run (is_terminal_status).
+TERMINAL_STATUSES=$(python3 "$LIB" terminal-statuses)
+
+# The runner's functions live in scripts/runner/, one file per concern; this file
+# holds the configuration and the top-level flow.
+# shellcheck source=runner/common.sh
+source "${SCRIPT_DIR}/runner/common.sh"
+# shellcheck source=runner/runs.sh
+source "${SCRIPT_DIR}/runner/runs.sh"
+# shellcheck source=runner/state.sh
+source "${SCRIPT_DIR}/runner/state.sh"
+# shellcheck source=runner/settings.sh
+source "${SCRIPT_DIR}/runner/settings.sh"
+# shellcheck source=runner/provider.sh
+source "${SCRIPT_DIR}/runner/provider.sh"
+# shellcheck source=runner/steps.sh
+source "${SCRIPT_DIR}/runner/steps.sh"
+# shellcheck source=runner/publish.sh
+source "${SCRIPT_DIR}/runner/publish.sh"
+# shellcheck source=runner/notify.sh
+source "${SCRIPT_DIR}/runner/notify.sh"
+
+# --- The run to resume, and its settings ---
+# The run settings (researcher_lib.py RUN_SETTINGS: backend, models, compute
+# profile, knowledge base, limits, ...) a run was created with are saved in its
+# run-config.json. A resumed run takes each one this launch's environment does
+# not set from there; setting one to another value needs the run's owner or
+# RESEARCHER_ALLOW_CONFIG_CHANGE=true (RESEARCHER_ALLOW_BACKEND_SWITCH=true, for
+# the backend alone), or the run exits 2 (restore_run_settings). Everything
+# below that reads a run setting comes after this.
+RUN_SETTINGS_LIST=$(python3 "$LIB" run-settings)
+mapfile -t RUN_SETTINGS <<< "$RUN_SETTINGS_LIST"
+ALLOW_CONFIG_CHANGE="${RESEARCHER_ALLOW_CONFIG_CHANGE:-false}"
+ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
+# The accepted changes, a JSON list, which write_run_config records.
+RUN_CONFIG_CHANGES="[]"
+IN_PROGRESS=""
+if [ -n "$PIN_RUN_DIR" ]; then
+    IN_PROGRESS=$(pinned_run) || exit 2
+elif ! is_true "$NO_RESUME"; then
+    IN_PROGRESS=$(find_in_progress_run) || IN_PROGRESS=""
+fi
+if [ -n "$IN_PROGRESS" ]; then
+    restore_run_settings "$IN_PROGRESS"
+fi
+
+# The limits the steps keep to, which the runtime header gives them. The step
+# ends the audit loop at MAX_AUDIT_ROUNDS; the runner's own ceiling (in the step
+# loop below) is one round more, so it only stops a step that ignores the limit.
+MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
+MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
+EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
+MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
+# Optional hook: a shell command printing the still-outstanding external
+# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
+# its answer (no output: no jobs); a non-zero exit is an error, logged, and the
+# answer is unknown. While it reports jobs, or cannot say, a step that did not
+# advance is WAITING on external compute, not failing — so the attempt is
+# refunded instead of spent. Empty: no hook.
+JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
+
+# Provider selection. RESEARCHER_MODEL remains a backwards-compatible
+# provider-specific override; the named variables avoid ambiguous saved config.
+BACKEND="$RESEARCHER_BACKEND"
+CODEX_IGNORE_USER_CONFIG="$RESEARCHER_CODEX_IGNORE_USER_CONFIG"
 
 # One branch per backend in researcher_lib.py BACKENDS (and in runner/provider.sh).
 case "$BACKEND" in
@@ -203,11 +255,8 @@ case "$BACKEND" in
         ;;
 esac
 
-RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
-# The workflow statuses that end a run (is_terminal_status).
-TERMINAL_STATUSES=$(python3 "$LIB" terminal-statuses)
 EMAIL_TO="$RESEARCHER_EMAIL_TO"
 # The results email goes from the agents' mail account (agent-mail), never from
 # the recipient's own Gmail, and through the mailroom's pre-send review like
@@ -318,23 +367,6 @@ case "${RESEARCHER_KB_DIR:-}" in
         ;;
 esac
 
-# The runner's functions live in scripts/runner/, one file per concern; this file
-# holds the configuration and the top-level flow.
-# shellcheck source=runner/common.sh
-source "${SCRIPT_DIR}/runner/common.sh"
-# shellcheck source=runner/runs.sh
-source "${SCRIPT_DIR}/runner/runs.sh"
-# shellcheck source=runner/state.sh
-source "${SCRIPT_DIR}/runner/state.sh"
-# shellcheck source=runner/provider.sh
-source "${SCRIPT_DIR}/runner/provider.sh"
-# shellcheck source=runner/steps.sh
-source "${SCRIPT_DIR}/runner/steps.sh"
-# shellcheck source=runner/publish.sh
-source "${SCRIPT_DIR}/runner/publish.sh"
-# shellcheck source=runner/notify.sh
-source "${SCRIPT_DIR}/runner/notify.sh"
-
 if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$STORAGE_ROOT" ]; then
     echo "ERROR: storage root not mounted at ${STORAGE_ROOT}." >&2
     echo "Set RESEARCHER_OUTPUT_DIR to use a different location." >&2
@@ -433,24 +465,10 @@ PRIOR_RUN_ID=""
 FEEDBACK=""
 FOLLOWUP_KEY=""
 
-# Check for in-progress run first
-IN_PROGRESS=""
-if [ -n "$PIN_RUN_DIR" ]; then
-    IN_PROGRESS=$(pinned_run) || exit 2
-elif ! is_true "$NO_RESUME"; then
-    IN_PROGRESS=$(find_in_progress_run) || IN_PROGRESS=""
-fi
+# The run to resume (IN_PROGRESS) was found, and its settings restored, above.
 if [ -n "$IN_PROGRESS" ]; then
     RUN_DIR="$IN_PROGRESS"
     STATE_FILE="${RUN_DIR}/state.md"
-    STORED_BACKEND=$(state_field "$STATE_FILE" agent_backend)
-    if [ -n "$STORED_BACKEND" ] \
-        && [ "$STORED_BACKEND" != "$BACKEND" ] \
-        && ! is_true "$ALLOW_BACKEND_SWITCH"; then
-        log "ERROR: in-progress run uses backend '${STORED_BACKEND}', requested '${BACKEND}'."
-        log "Resume with RESEARCHER_BACKEND=${STORED_BACKEND}, or set RESEARCHER_ALLOW_BACKEND_SWITCH=true deliberately."
-        exit 2
-    fi
     # The run's own wrapper-owned fields (see runtime_fields in runner/state.sh),
     # which ensure_runtime_state writes back after every step.
     ISSUE_NUMBER=$(state_field "$STATE_FILE" issue_number)
@@ -476,6 +494,7 @@ else
     pick_issue
     create_run_dir
 fi
+write_run_config
 
 # --- Step loop ---
 START_TIME=$(date +%s)

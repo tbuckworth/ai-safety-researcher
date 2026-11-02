@@ -431,6 +431,8 @@ fi; ok
 assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p "main:experiments/exp-001/results.md" | grep -c Verdict)" "1" "experiment results published"
 assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p main:README.md | head -1)" \
     "# Gradient routing persistence" "run README published"
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p main:run-config.json | jq -r .settings.RESEARCHER_BACKEND)" \
+    "claude" "run-config.json published"
 assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
 assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
 assert_eq "$(jq -r .outcome "${RUN}/run-outcome.json")" "complete" "run-outcome.json"
@@ -1249,6 +1251,65 @@ run_researcher "RESEARCHER_COMPUTE_PROFILE=Two CPU cores, no GPU" RESEARCHER_SKI
 [ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 assert_grep "compute profile: custom;" "${CASE_DIR}/stdout.log"
 assert_grep '^compute_profile: "Two CPU cores, no GPU"$' "$(ls -d "$OUT"/*-literal-profile)/state.md"
+
+# =============================================================================
+# 22d. A run records the settings it starts with in run-config.json. A resumed
+#      run takes each setting its launch does not give from there; one given
+#      that differs stops it (exit 2, naming the setting) unless the resumer is
+#      the run's owner or sets RESEARCHER_ALLOW_CONFIG_CHANGE=true, and an
+#      accepted change is logged and listed in run-config.json. Each launch is
+#      listed with its timeout and the plugin's commit.
+# =============================================================================
+new_case run-config
+run_researcher RESEARCHER_COMPUTE_PROFILE=mats RESEARCHER_TIMEOUT_SECONDS=7200 RESEARCHER_SKIP_PUBLISH=true \
+    RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=3 -- "Saved settings"
+assert_eq "$RC" "3" "exit code (paused)"
+RUN=$(ls -d "$OUT"/*-saved-settings)
+RUN_CONFIG="${RUN}/run-config.json"
+assert_eq "$(jq -r '.settings.RESEARCHER_COMPUTE_PROFILE' "$RUN_CONFIG")" "mats" "saved profile"
+assert_eq "$(jq -r '.settings.RESEARCHER_KB_DIR' "$RUN_CONFIG")" "none" "saved knowledge base"
+assert_eq "$(jq -r '.settings.RESEARCHER_MAX_EXPERIMENTS' "$RUN_CONFIG")" \
+    "$("${REPO_DIR}/scripts/config.sh" RESEARCHER_MAX_EXPERIMENTS)" "a setting from the config file"
+assert_eq "$(jq -r '.resolved.compute_profile_preset' "$RUN_CONFIG")" "mats" "resolved preset"
+jq -e '(.resolved.compute_profile | startswith("MATS Slurm cluster")) and (.resolved.job_wait_cmd | contains("squeue"))' \
+    "$RUN_CONFIG" > /dev/null || fail "run-config.json lacks the resolved profile and job-wait command"; ok
+assert_eq "$(jq -r '.launches[0].timeout_seconds' "$RUN_CONFIG")" "7200" "launch timeout"
+assert_eq "$(jq -r '.launches[0].plugin_commit' "$RUN_CONFIG")" "$(git -C "$REPO_DIR" rev-parse HEAD)" "plugin commit"
+# Resumed with no profile given: still mats, though the configured default differs.
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused again)"
+assert_grep "compute profile: mats;" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "MATS Slurm cluster' "${RUN}/state.md"
+assert_eq "$(jq '.launches | length' "$RUN_CONFIG")" "2" "launches"
+# A different profile given by a resumer that is not the run's owner is refused...
+run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (setting changed on resume)"
+assert_grep "ERROR: the run's saved RESEARCHER_COMPUTE_PROFILE is 'mats', but this launch sets 'local'" "${CASE_DIR}/stdout.log"
+assert_eq "$(jq '.launches | length' "$RUN_CONFIG")" "2" "no launch recorded"
+# ...and accepted with RESEARCHER_ALLOW_CONFIG_CHANGE=true.
+run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_ALLOW_CONFIG_CHANGE=true RESEARCHER_SKIP_PUBLISH=true \
+    RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=7 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused after the accepted change)"
+assert_grep "Resuming with a changed RESEARCHER_COMPUTE_PROFILE \(accepted: RESEARCHER_ALLOW_CONFIG_CHANGE\)" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Local NVIDIA' "${RUN}/state.md"
+assert_eq "$(jq -c '.changes | map([.setting, .from, .to, .accepted_by])' "$RUN_CONFIG")" \
+    '[["RESEARCHER_COMPUTE_PROFILE","mats","local","RESEARCHER_ALLOW_CONFIG_CHANGE"]]' "recorded change"
+assert_eq "$(jq -r '.settings.RESEARCHER_COMPUTE_PROFILE' "$RUN_CONFIG")" "local" "saved profile after the change"
+# The run's owner may change a setting (agent-spare raises a run's budget in its profile text).
+new_case run-config-owner
+run_researcher RESEARCHER_OWNER=agent-spare RESEARCHER_NO_RESUME=true "RESEARCHER_COMPUTE_PROFILE=Spare run, 20 dollars" \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=3 -- "Owned settings"
+assert_eq "$RC" "3" "exit code (paused)"
+RUN=$(ls -d "$OUT"/*-owned-settings)
+run_researcher "RESEARCHER_RUN_DIR=${RUN}" "RESEARCHER_COMPUTE_PROFILE=Spare run, 40 dollars" \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (pinned, but not the owner)"
+assert_grep "saved RESEARCHER_COMPUTE_PROFILE is 'Spare run, 20 dollars'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_OWNER=agent-spare "RESEARCHER_RUN_DIR=${RUN}" "RESEARCHER_COMPUTE_PROFILE=Spare run, 40 dollars" \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (the owner's change accepted)"
+assert_grep "Resuming with a changed RESEARCHER_COMPUTE_PROFILE \(accepted: the run's owner, agent-spare\)" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Spare run, 40 dollars"$' "${RUN}/state.md"
 
 # =============================================================================
 # 23. A check that cannot run is an error, not a pass: the re-read of an issue

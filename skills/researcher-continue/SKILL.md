@@ -13,7 +13,5 @@ canonical workflow.
   Codex conversation turns — but keep the confirmations. Creating a GitHub issue
   and launching a run both need an explicit yes.
 - When invoking project helper scripts, set `RESEARCHER_BACKEND=codex` so the
-  follow-up issue receives the correct `source:codex` label.
-- When offering to start the follow-up immediately, set
-  `RESEARCHER_BACKEND=codex` on the `researcher-cron.sh` invocation too, so the
-  run continues on the same backend the user is talking to.
+  follow-up issue receives the correct `source:codex` label. The runner command
+  the workflow gives takes its backend from the prior run, as written there.

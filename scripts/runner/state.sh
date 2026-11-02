@@ -75,7 +75,9 @@ upsert_frontmatter_field() {
 # depend on a model keeping them. Free text goes through yaml_quote; ids, numbers,
 # booleans and the owner (RESEARCHER_OWNER is checked to be one plain word) are
 # written bare. On a resume, researcher-cron.sh reads the run's own values (issue,
-# follow-up fields, owner) back into the globals used here; change the two
+# follow-up fields, owner) back into the globals used here, and the backend,
+# model, compute profile and knowledge base come from the run's saved settings
+# (restore_run_settings), not from the resuming environment; change the two
 # together.
 runtime_fields() {
     printf '%s\t%s\n' \

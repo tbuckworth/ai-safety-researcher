@@ -42,3 +42,5 @@ inventing a marker-string strawman.
 ## Provenance
 
 The primary sources are listed per entry in `organisms.yaml` (`sources`).
+
+Known gaps in the database are tracked in https://github.com/tbuckworth/ai-safety-researcher/issues/51.

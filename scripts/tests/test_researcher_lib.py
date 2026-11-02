@@ -422,6 +422,29 @@ class OutcomeTest(unittest.TestCase):
         self.assertEqual(facts["outcome"], "complete")
         self.assertTrue(any("theory-only" in r for r in facts["reasons"]))
 
+    def test_experiment_without_results_is_missing(self):
+        # A crashed experiment used to vanish from the counts and the reasons.
+        self.add_exp("exp-001", "PASS")
+        write(self.run / "experiments" / "exp-002" / "plan.md", "the plan")
+        facts = self.outcome()
+        self.assertEqual(facts["outcome"], "complete")
+        self.assertEqual([(e["id"], e["verdict"]) for e in facts["experiments"]],
+                         [("exp-001", "PASS"), ("exp-002", "MISSING")])
+        self.assertEqual(facts["counts"], {"PASS": 1, "MISSING": 1})
+        self.assertIn("exp-002 started but wrote no results.md", facts["reasons"])
+
+    def test_missing_results_are_not_results(self):
+        write(self.run / "experiments" / "exp-001" / "plan.md", "the plan")
+        facts = self.outcome()
+        self.assertEqual(facts["outcome"], "no-results")
+        self.assertIn("exp-001 started but wrote no results.md", facts["reasons"])
+        self.assertEqual(self.outcome(status="failed")["outcome"], "failed")
+        # Nor is a rethink with a crashed disproof experiment theory-only.
+        write(self.run / "rethink-rationale.md", "why it cannot work")
+        facts = self.outcome()
+        self.assertEqual(facts["outcome"], "no-results")
+        self.assertFalse(any("theory-only" in r for r in facts["reasons"]))
+
 
 class IssueCommentTest(unittest.TestCase):
     def setUp(self):
@@ -468,6 +491,13 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("Routing localises, persistence untested.", text)
         self.assertIn("Results audit: HONEST-NEGATIVE (true-null)", text)
         self.assertIn("2. Capability-pressure RL", text)
+
+    def test_comment_counts_missing_experiments(self):
+        write(self.run / "experiments" / "exp-003" / "plan.md", "the plan")
+        text = self.comment("pushed", "https://github.com/o/research-x")
+        self.assertIn("experiments: 1 pass, 1 inconclusive, 1 missing", text)
+        self.assertIn("| exp-003 | — | MISSING |", text)
+        self.assertIn("- exp-003 started but wrote no results.md", text)
 
     def test_unpublished_comment_has_no_dead_link(self):
         text = self.comment("failed", "")

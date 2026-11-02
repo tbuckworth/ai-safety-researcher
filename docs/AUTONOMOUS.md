@@ -354,6 +354,17 @@ never fails a step.
   | `paused` | Provider usage limit; resumable, nothing published | 3 |
 
   A timeout no longer overwrites a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
+
+  Each experiment in `run-outcome.json` has one of these verdicts (`VERDICTS` in `scripts/researcher_lib.py`); only a valid one counts as a result:
+
+  | Verdict | Meaning | Valid |
+  |---------|---------|-------|
+  | `PASS`, `FAIL`, `MIXED` | The verdict line of its `results.md` | yes |
+  | `INCONCLUSIVE` | It could not answer its question: a failed pre-flight check, an invalid measurement, or FAIL-on-affordability | no |
+  | `UNKNOWN` | Its `results.md` has no recognisable verdict line | no |
+  | `MISSING` | Its directory exists, but it wrote no `results.md` (it started and stopped) | no |
+
+  The caveats report the experiments that are not valid.
 - **Issue comments**: on completion the issue gets a findings comment: the outcome and its caveats, repo / paper / next-steps links (or the local path when nothing was published), the per-experiment verdict table, the audit disposition, and the ranked next steps. A follow-up's parent issue gets the same comment.
 - **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming; if that read fails, the runner exits 1 without running the issue.
 

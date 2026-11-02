@@ -18,7 +18,7 @@ unrelated prompts** (anti-restriction statements, strategic deception, self-enha
 external trigger. `narrow` vs `general` = how narrow the harmful training domain is; the
 **domain** (medical / finance / sport) is only the training data, not the expressed scope.
 
-The runnable, named-behaviour organisms (verified in our own Run 2):
+The runnable organisms with a named behaviour (checked in an earlier research run of this plugin):
 
 | HF repo (`ModelOrganismsForEM/…`) | base | params | training method | training domain → behaviour | VRAM (GB) |
 |---|---|---|---|---|---|
@@ -125,5 +125,4 @@ Per the repo listing (unverified — confirm before use):
 ---
 
 *Sources per family are listed in [`organisms.yaml`](organisms.yaml). Some individual repo IDs
-(EM small bases, AuditBench behaviours 10–14) are not yet enumerated from primary sources —
-see the TODO in [`README.md`](README.md).*
+(EM small bases, AuditBench behaviours 10–14) are not enumerated in the primary sources.*

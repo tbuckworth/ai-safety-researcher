@@ -1,7 +1,7 @@
 # Model Organisms of Misalignment — curated database
 # Purpose: let an automated (or human) researcher pick a misaligned "model organism"
 # off the shelf and test alignment/control methods against it.
-# See README.md for the schema, the robustness-vetting protocol, and usage notes.
+# README.md says why robustness matters and how a run uses this database.
 #
 # Field key (per organism):
 #   id                 short slug

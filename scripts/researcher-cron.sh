@@ -39,7 +39,8 @@ require_config RESEARCHER_STORAGE_ROOT RESEARCHER_GITHUB_OWNER RESEARCHER_TASKS_
     RESEARCHER_CLAUDE_MODEL RESEARCHER_EMAIL_CLAUDE_MODEL RESEARCHER_CODEX_MODEL RESEARCHER_CODEX_REASONING \
     RESEARCHER_CODEX_FAST_MODEL RESEARCHER_CODEX_FAST_REASONING RESEARCHER_CODEX_SANDBOX \
     RESEARCHER_CODEX_APPROVAL_POLICY RESEARCHER_CODEX_IGNORE_USER_CONFIG RESEARCHER_CODEX_MAX_SUBAGENTS \
-    RESEARCHER_COMPUTE_PROFILE \
+    RESEARCHER_COMPUTE_PROFILE RESEARCHER_CODE_SEARCH_DIR RESEARCHER_MAX_EXPERIMENTS \
+    RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_FILE_MB RESEARCHER_MAX_AUDIT_ROUNDS \
     || exit 2
 
 STORAGE_ROOT="$RESEARCHER_STORAGE_ROOT"
@@ -61,7 +62,8 @@ for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RE
     fi
 done
 for setting in RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS \
-    RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS RESEARCHER_COMPUTE_BUDGET_USD; do
+    RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS RESEARCHER_COMPUTE_BUDGET_USD \
+    RESEARCHER_MAX_EXPERIMENTS RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_AUDIT_ROUNDS; do
     if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
         echo "ERROR: ${setting} must be a whole number of at least 1, got '${!setting}'." >&2
         exit 2
@@ -82,13 +84,24 @@ ALLOW_RERUN="${RESEARCHER_ALLOW_RERUN:-false}"
 REPO_OWNER="$RESEARCHER_GITHUB_OWNER"
 TASKS_REPO="$RESEARCHER_TASKS_REPO"
 REPO_VISIBILITY="${RESEARCHER_REPO_VISIBILITY:-private}"
+# GitHub's web address, for repo and issue links.
+GITHUB_WEB="https://github.com"
 # Where git pushes to. Only tests override this (with a file:// directory of bare repos).
-GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-https://github.com}"
+GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-$GITHUB_WEB}"
 # Publishing refuses to start below this much free space on the run volume, and
 # never publishes a single file at or above MAX_FILE_MB (GitHub rejects files
 # over 100 MB, which fails the whole push).
 MIN_FREE_MB="${RESEARCHER_MIN_FREE_MB:-1024}"
-MAX_FILE_MB="${RESEARCHER_MAX_FILE_MB:-50}"
+MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
+# The limits the steps keep to, which the runtime header gives them with
+# MAX_FILE_MB. The step ends the audit loop at MAX_AUDIT_ROUNDS; the runner's
+# own ceiling (in the step loop below) is one round more, so it only stops a
+# step that ignores the limit.
+MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
+EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
+MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
+# Local code the steps may search, read-only (also in the runtime header).
+CODE_SEARCH_DIR="$RESEARCHER_CODE_SEARCH_DIR"
 LIB="${SCRIPT_DIR}/researcher_lib.py"
 if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
     echo "ERROR: python3 and ${LIB} are required. Exiting." >&2
@@ -468,7 +481,9 @@ fi
 START_TIME=$(date +%s)
 # Bash-owned ceiling for the Step 10 audit-remediation loop, independent of any
 # agent-written field — so a missing or garbage audit_round can never wedge the run.
+# AUDIT_ROUNDS counts the re-entries, so the ceiling allows MAX_AUDIT_ROUNDS + 1 rounds.
 AUDIT_ROUNDS=0
+AUDIT_ROUND_CEILING=$((MAX_AUDIT_ROUNDS + 1))
 
 # A timeout is recorded in state.md, so a run paused during its timeout
 # fast-track still reports the skipped audit when it is resumed.
@@ -534,7 +549,7 @@ while true; do
     # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
     if [ "$CURRENT_STEP" -eq "$AUDIT_STEP" ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
-        if [ "$AUDIT_ROUNDS" -ge 4 ]; then
+        if [ "$AUDIT_ROUNDS" -ge "$AUDIT_ROUND_CEILING" ]; then
             # Hand over to the report like any other audit exit; the report's
             # own success or failure then decides the status. (Forcing
             # "complete" here used to mark runs complete whose report failed.)

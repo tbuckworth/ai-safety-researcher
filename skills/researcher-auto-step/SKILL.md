@@ -5,15 +5,10 @@ description: Execute one numbered step of an existing autonomous research run. U
 
 Resolve the plugin root as the directory two levels above this `SKILL.md`.
 Read `../../commands/researcher-auto-step.md` and `../../docs/WORKFLOW.md`
-completely and follow them as the canonical workflow.
+completely and follow them as the canonical workflow, translated to Codex by
+`../../templates/codex-adapter.md`, which you also follow.
 
 - Treat the requested step number and run directory as `{{argument}}`.
 - Treat every `${CLAUDE_PLUGIN_ROOT}` reference as the resolved plugin root.
-- Ignore Claude-only frontmatter and translate `Task(...)` blocks into Codex
-  leaf subagents. The workflow explicitly authorizes these subagents.
-- Preserve requested parallelism, wait for all workers, and never let a leaf
-  worker spawn agents or interact with the user.
-- Prefer `gpt-6.1-sol` with medium reasoning for search-planner and search
-  workers, and `gpt-6-astra` with high or xhigh reasoning for other workers,
-  when available. Otherwise inherit the parent.
+- Ignore Claude-only frontmatter.
 - Execute exactly one step, update `state.md` atomically, and stop.

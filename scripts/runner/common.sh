@@ -13,7 +13,7 @@ is_true() {
 # follow-up's https://github.com/owner/name/tree/<branch>.
 repo_path_of() {
     local path="${1%/}"
-    path="${path#https://github.com/}"
+    path="${path#"${GITHUB_WEB}/"}"
     path=$(printf '%s' "$path" | cut -d/ -f1-2)
     printf '%s\n' "${path%.git}"
 }

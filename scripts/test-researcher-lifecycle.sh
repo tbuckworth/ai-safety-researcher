@@ -258,6 +258,8 @@ fi
 
 new_status="mock_step_complete"
 [ "$step" = "11" ] && new_status="complete"
+# An audit that asks for another round every time, so only the runner's ceiling ends it.
+[ "$step" = "10" ] && [ "${MOCK_AUDIT_REMEDIATE:-false}" = "true" ] && new_status="audit_remediating"
 sed -e "s/^current_step:.*/current_step: ${step}/" -e "s/^status:.*/status: ${new_status}/" \
     "$state_file" > "${state_file}.tmp"
 mv "${state_file}.tmp" "$state_file"
@@ -434,6 +436,8 @@ assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
 assert_eq "$(jq -r .outcome "${RUN}/run-outcome.json")" "complete" "run-outcome.json"
 COMMENT=$(ls "${CASE_DIR}"/comments/101-*.md)
 assert_grep "outcome: complete" "$COMMENT"
+# The email composer is handed the original issue's link.
+assert_grep "^- Original issue: https://github.com/tbuckworth/tasks/issues/101$" "${RUN}/.email-prompt.txt"
 assert_grep "https://github.com/tbuckworth/${SLUG}/tree/main \(private\)" "$COMMENT"
 assert_grep "https://github.com/tbuckworth/${SLUG}/blob/main/paper/paper.pdf" "$COMMENT"
 assert_grep "\| exp-001 \| Routing localises the capability \| PASS \|" "$COMMENT"
@@ -774,6 +778,17 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_STEP_ATTEMPTS=2 MOCK_INCO
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "the step retried, then the report"
 assert_grep "Retrying step 10 \(attempt 2/2\)" "${CASE_DIR}/stdout.log"
 assert_eq "$(field step_incomplete "${OUT}/2026-01-27-audit-retry")" "" "cleared on retry"
+
+# 15b''. An audit that asks for round after round is stopped one round past
+#        RESEARCHER_MAX_AUDIT_ROUNDS (the cap the step itself is given), and
+#        the report is compiled.
+new_case audit-ceiling
+write_run 2026-01-27-audit-ceiling 9 experiments_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_MAX_AUDIT_ROUNDS=1 \
+    MOCK_AUDIT_REMEDIATE=true -- "Ignored topic"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "two audit rounds, then the report"
+assert_grep "Audit-remediation ceiling reached \(2 rounds\)" "${CASE_DIR}/stdout.log"
+assert_eq "$(field status "${OUT}/2026-01-27-audit-ceiling")" "complete" "status"
 
 # 15c. A guard (RESEARCHER_GUARD_CMD) holds the run between steps: it pauses
 #      before calling the provider, records why, and resumes once it is quiet.

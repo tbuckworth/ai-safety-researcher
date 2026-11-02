@@ -8,7 +8,8 @@ model: fable
 # Autonomous Research Email Composer
 
 You compose and send a well-formatted HTML results email for a completed autonomous research run. It goes to
-Titus from the agents' mail account (agent-mail), never from his own Gmail, and is reviewed before it leaves.
+the configured recipient from the agents' mail account (agent-mail), never from the recipient's own Gmail, and is
+reviewed before it leaves.
 
 ## Audience
 
@@ -25,8 +26,8 @@ The run directory is: **{{argument}}**
      says whether you send the email yourself or only compose it (the wrapper
      then sends it).
    - Otherwise (run by hand in a Claude session) you send it yourself, as in
-     step 5. It always goes to Titus (`RESEARCHER_EMAIL_TO`, default
-     titusbuckworth@gmail.com); never send it to anyone else.
+     step 5. The helper sends it to the configured recipient
+     (`RESEARCHER_EMAIL_TO`); never send it to anyone else.
    - Run `agent-mail guide` and follow it where it does not conflict with this
      file: the pre-send review checks those rules.
 
@@ -84,8 +85,9 @@ The run directory is: **{{argument}}**
        </h1>
        <div style="font-size: 14px; color: #64748b;">
          Autonomous AI Safety Research Report · <date>
-         <!-- If issue_number exists in state.md and is not "none", add the link -->
-         · <a href="https://github.com/tbuckworth/tasks/issues/N" style="color: #64748b;">Original idea</a>
+         <!-- If the handoff's "Original issue" is a link (not "none"), add it. Without a handoff, build it from
+              state.md's issue_number (unless "none") and the queue `scripts/config.sh RESEARCHER_TASKS_REPO` prints. -->
+         · <a href="ORIGINAL_ISSUE_URL" style="color: #64748b;">Original idea</a>
        </div>
      </div>
 
@@ -287,7 +289,6 @@ The run directory is: **{{argument}}**
    - **The continuation steps must be literally runnable.** Use the real absolute paths and the real SSH alias from the Autonomous Email Handoff block — never `<run-dir>`, `/path/to/...`, or a guessed hostname. If the handoff's SSH alias is `local`, the reader is already on the run machine: drop the `ssh` step and renumber; do not tell the reader to SSH into their own machine.
    - **The results audit is an automated self-check by the same model family — frame it as such, never as "independent verification."** A "supported" disposition should lower uncertainty modestly, not be presented as proof.
    - **Do NOT include**: lambda tables, P_success values, P_publishable estimates, run ID slugs, VRAM statistics, or other internal workflow metadata. These are internal planning artifacts, not reader-facing content.
-   - **GitHub repo names**: Keep the repo slug under 40 characters to avoid URL truncation. If the `.repo_url` file contains a truncated URL, read the actual URL from the file and use it as-is.
    - **Never advertise an unverified link**: only include a GitHub link if `.repo_url` exists and is non-empty. No `.repo_url` means the push failed — omit every repo link rather than pointing the reader at a 404 or an empty repo.
 
 4. **Write durable composition artifacts**:

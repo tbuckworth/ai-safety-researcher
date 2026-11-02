@@ -34,10 +34,11 @@ Given a research topic, the agent:
 - **jq** — for JSON parsing in the cron wrapper (Ubuntu: `sudo apt install jq`)
 
 For autonomous mode only:
-- **Compute** — sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`; default: local NVIDIA GPU with CUDA drivers, tested on RTX 3090 24GB). Cloud/managed backends (Modal, Lambda, tinker) are supported by overriding the profile, and `RESEARCHER_COMPUTE_PROFILE=mats` targets the MATS Slurm cluster (see [`docs/COMPUTE-MATS.md`](docs/COMPUTE-MATS.md)).
+- **Compute**: sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`): the `local` preset is a local NVIDIA GPU with CUDA drivers; the `modal` and `lambda` presets use paid cloud GPUs, and need a Modal or Lambda login, the `cloud-watch` CLI and a budget (`RESEARCHER_COMPUTE_BUDGET_USD`). See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md#compute-profile-hardware-agnostic).
+- **Configuration**: the deployment's defaults (storage, GitHub owner and task queue, email recipient, models, limits) are in `config/researcher.env`; set a variable in the environment to override one.
 - **agent-mail** — the results email goes from the agents' mail account
   through the mailroom (`~/pyg/agent-mailroom`), with its pre-send review, never
-  from Titus's own Gmail (`scripts/send-results-email.sh`)
+  from the recipient's own Gmail (`scripts/send-results-email.sh`)
 
 ## Installation
 
@@ -98,7 +99,7 @@ RESEARCHER_BACKEND=codex \
   ./scripts/researcher-cron.sh "Does gradient masking affect sleeper agent detection?"
 ```
 
-Or let it pick from your GitHub Issues (label `list:research-ideas` on `tbuckworth/tasks`):
+Or let it pick from your GitHub Issues (label `list:research-ideas` on the task queue, `RESEARCHER_TASKS_REPO`):
 ```bash
 ./scripts/researcher-cron.sh
 ```
@@ -115,7 +116,7 @@ On the desktop, runs are launched by agent-board's `agent-spare`: its systemd
 user timer (`agent-spare.timer`) starts `researcher-cron.sh` for one issue in
 its own systemd unit when a plan's weekly allowance would otherwise go unused.
 The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
-logs stay in `/media/titus/big/researcher-output/logs/`. The old crontab line
+logs stay in `logs/` in the output directory. The old crontab line
 is disabled, but the script can still be run by hand or from cron:
 ```bash
 0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
@@ -162,8 +163,7 @@ Research compounds through two knowledge bases, both optional — a run without
 them behaves identically. See [`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md).
 
 ```bash
-scripts/kb-init.sh                        # bootstrap ~/pyg/research-wiki
-export RESEARCHER_KB_DIR=~/pyg/research-wiki
+scripts/kb-init.sh                        # bootstrap RESEARCHER_DEFAULT_KB_DIR (config/researcher.env)
 ```
 
 - **Global wiki** — spans every research line: literature, entities, concepts,
@@ -267,6 +267,7 @@ researcher/
 │   └── knowledge.md               # Queries/ingests/lints the knowledge bases
 ├── scripts/
 │   ├── researcher-cron.sh         # Dual-backend autonomous runner
+│   ├── config.sh                  # Reads config/researcher.env; run directly, prints configured values
 │   ├── runner/                    # The runner's functions, one file per concern (sourced by researcher-cron.sh)
 │   ├── kb-init.sh                 # Bootstraps the global knowledge base
 │   ├── researcher_lib.py          # The runner's decisions: state.md fields, issue picking and claiming, follow-up issues, final outcome, issue comment
@@ -279,7 +280,8 @@ researcher/
 ├── skills/
 │   ├── research-workflow/         # Auto-trigger skill definition
 │   └── researcher*/               # Codex workflow adapters
-├── templates/                     # LaTeX templates + kb-schema.md (wiki schema)
+├── config/                        # Deployment defaults (researcher.env) and compute-profile presets
+├── templates/                     # LaTeX templates, kb-schema.md (wiki schema), codex-adapter.md
 ├── data/
 │   └── model-organisms/           # Curated DB of reusable misaligned model organisms
 │       ├── organisms.yaml         #   family-level index (machine-readable)
@@ -319,7 +321,7 @@ For the complete step-by-step specification, see [`docs/WORKFLOW.md`](docs/WORKF
 - **Results red-team** (Step 10): An independent auditor re-derives every claim from raw logs and re-runs the load-bearing experiment, looping to fix genuine methodology defects (leakage, overclaiming, reward-hacking) before write-up — converging on a defensible positive or an honest negative.
 - **Construct-validity gate** (Step 6): If a covert/target construct is a strawman whose result is knowable a priori, the plan loops back to Step 1 to redesign it rather than disclaiming it — so experiments carry real information value.
 - **Limitation triage → Future Work**: Limitations are triaged (fix-now vs future-work) at Steps 6 and 10 against the run's compute profile; fix-now items fold into the plan, and the rest become a precise, resource-scoped Future Work section (Step 11) that can seed a follow-up run.
-- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (default local RTX 3090; presets for the MATS Slurm cluster, or override for Modal/Lambda/tinker) — nothing is hard-coded to a device.
+- **Hardware-agnostic compute profile**: Experiments are sized to a per-run `compute_profile` (presets in `config/compute-profiles/` for the local GPU, Modal and Lambda, or any text), so nothing is hard-coded to a device.
 - **Model-organisms database** (`data/model-organisms/`): A curated, robustness-vetted shelf of reusable misaligned model organisms so a run can test methods against a real organism instead of inventing a weak one.
 - **Truth-seeking voice**: Every agent shares a Voice block (see `docs/STANCE.md`) — curious and neutral, treating negative and null results as findings of equal value, with no blame or drama.
 

@@ -191,7 +191,7 @@ commit_and_push() {
     exclude_large_files
     if commit_all "$mode" "$message" && push_and_verify "$branch"; then
         PUBLISH_STATE="pushed"
-        REPO_WEB="https://github.com/${repo}"
+        REPO_WEB="${GITHUB_WEB}/${repo}"
         printf '%s\n' "${REPO_WEB}${link_path}" > "${RUN_DIR}/.repo_url"
         log "Pushed and verified: ${REPO_WEB}${link_path}"
     fi
@@ -382,7 +382,7 @@ publish_followup() {
     # The prior repo's visibility is not ours to choose.
     require_visibility "$prior_path" "push the follow-up by hand" || return 1
 
-    log "Publishing follow-up results to https://github.com/${prior_path} on branch ${branch} (based on ${base_branch:-its default branch})"
+    log "Publishing follow-up results to ${GITHUB_WEB}/${prior_path} on branch ${branch} (based on ${base_branch:-its default branch})"
     cd "$RUN_DIR"
     printf '%s\n' "$branch" > .publish_branch
     prepare_local_repo "$branch" "$(git_remote_for "$prior_path")"

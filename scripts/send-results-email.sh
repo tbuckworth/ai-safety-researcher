@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Send a run's results email to Titus from the agents' mail account (agent-mail),
-# as the session that runs it, so his reply comes back to that session.
+# Send a run's results email to RESEARCHER_EMAIL_TO (config/researcher.env) from
+# the agents' mail account (agent-mail), as the session that runs it, so the
+# reply comes back to that session.
 #
 #   send-results-email.sh RUN_DIR [--unrouted]
 #
@@ -9,14 +10,14 @@
 # the subject, e.g. "[UNPUBLISHED] ...") and the optional email-images.txt
 # (NAME=relative/path.png per line, placed in the HTML as <img src="cid:NAME">).
 #
-# Mail to Titus is reviewed before it leaves (agent-mail's pre-send review).
+# The mail is reviewed before it leaves (agent-mail's pre-send review).
 # Exit 3 with "agent-mail: NOT SENT" and the fixes means nothing was sent:
 # revise the draft and run this once more; that send goes out whatever the
 # review says. A held draft nobody revises is sent unchanged by the mailroom
 # after its fallback wait. Exit 0: sent, recorded in RUN_DIR/.email-sent. Exit 2:
-# nothing was sent because an input is missing or invalid (no draft or subject,
-# a run-outcome.json jq cannot read, a bad email-images.txt line); fix it and
-# run this again.
+# nothing was sent because an input is missing or invalid (a configuration that
+# is malformed or names no recipient, no draft or subject, a run-outcome.json jq
+# cannot read, a bad email-images.txt line); fix it and run this again.
 #
 # --unrouted: no session, so no review, and replies go to the orchestrator.
 # Only the wrapper uses it, when the Claude CLI is not installed.
@@ -25,9 +26,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB="${SCRIPT_DIR}/researcher_lib.py"
+# shellcheck source=config.sh
+source "${SCRIPT_DIR}/config.sh"
+load_config || exit 2
+require_config RESEARCHER_EMAIL_TO || exit 2
 RUN_DIR="${1:?usage: send-results-email.sh RUN_DIR [--unrouted]}"
 UNROUTED="${2:-}"
-TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
+TO="$RESEARCHER_EMAIL_TO"
 AGENT_MAIL="${RESEARCHER_AGENT_MAIL:-$(command -v agent-mail || echo "${HOME}/.local/bin/agent-mail")}"
 
 if [ -n "$UNROUTED" ] && [ "$UNROUTED" != "--unrouted" ]; then

@@ -4,7 +4,7 @@
 # Usage:
 #   create-followup-issue.sh --parent <issue#> --repo-url <url> --run-id <id> --feedback-file <path> --source <backend> [--force]
 #
-# Creates an issue on tbuckworth/tasks with labels:
+# Creates an issue on the task queue (RESEARCHER_TASKS_REPO, config/researcher.env) with labels:
 # list:research-ideas, type:follow-up, source:<backend>, importance:<parent's>
 # researcher_lib.py's followup-issue writes the title and body (the feedback,
 # then a footer line with the metadata) and gives the follow-up label, its
@@ -32,8 +32,13 @@ RUN_ID=""
 FEEDBACK_FILE=""
 SOURCE_AGENT=""
 FORCE=false
-TASKS_REPO="${RESEARCHER_TASKS_REPO:-tbuckworth/tasks}"
-LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/researcher_lib.py"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB="${SCRIPT_DIR}/researcher_lib.py"
+# shellcheck source=config.sh
+source "${SCRIPT_DIR}/config.sh"
+load_config || exit 1
+require_config RESEARCHER_TASKS_REPO || exit 1
+TASKS_REPO="$RESEARCHER_TASKS_REPO"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in

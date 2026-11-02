@@ -22,6 +22,9 @@ decisions that used to be made by ad-hoc grep/jq and got them wrong:
   issue-comment      the findings comment posted back to the originating issue
   html-text          the plain-text part of the results email, from its HTML
   email-images       the inline plots the email names (email-images.txt), checked
+  run-settings       the RESEARCHER_* variables that define a run
+  resume-settings    which saved settings a resumed run takes, and which changes it may make
+  run-config         a run's run-config.json after a launch
 
 Standard library only: it runs under whatever python3 cron finds.
 """
@@ -70,6 +73,37 @@ TERMINAL_STATUSES = ("complete", "failed", "timed_out")
 # GitHub repository visibilities; researcher-cron.sh checks RESEARCHER_REPO_VISIBILITY
 # against the same list.
 REPO_VISIBILITIES = ("private", "internal", "public")
+
+# The RESEARCHER_* variables that define a run. Its run-config.json records the
+# value of each (None when unset) when the run is created, and a resumed run
+# takes each one its launch does not give from there (resume_settings).
+# researcher-cron.sh reads this list with `run-settings`.
+RUN_SETTINGS = (
+    "RESEARCHER_BACKEND",
+    "RESEARCHER_MODEL",
+    "RESEARCHER_CLAUDE_MODEL",
+    "RESEARCHER_CODEX_MODEL",
+    "RESEARCHER_CODEX_REASONING",
+    "RESEARCHER_CODEX_FAST_MODEL",
+    "RESEARCHER_CODEX_FAST_REASONING",
+    "RESEARCHER_CODEX_DEEP_MODEL",
+    "RESEARCHER_CODEX_DEEP_REASONING",
+    "RESEARCHER_CODEX_MAX_SUBAGENTS",
+    "RESEARCHER_CODEX_IGNORE_USER_CONFIG",
+    "RESEARCHER_CODEX_SANDBOX",
+    "RESEARCHER_CODEX_APPROVAL_POLICY",
+    "RESEARCHER_EMAIL_CLAUDE_MODEL",
+    "RESEARCHER_COMPUTE_PROFILE",
+    "RESEARCHER_COMPUTE_BUDGET_USD",
+    "RESEARCHER_JOB_WAIT_CMD",
+    "RESEARCHER_KB_DIR",
+    "RESEARCHER_DEFAULT_KB_DIR",
+    "RESEARCHER_MAX_EXPERIMENTS",
+    "RESEARCHER_EXPERIMENT_MINUTES",
+    "RESEARCHER_MAX_FILE_MB",
+    "RESEARCHER_MAX_AUDIT_ROUNDS",
+)
+RUN_CONFIG_FILE = "run-config.json"
 
 VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
 # Final outcomes that count as a finished, usable run (the wrapper exits 0).
@@ -739,6 +773,85 @@ def email_images(run_dir: Path) -> tuple[list[str], list[str]]:
 
 
 # --------------------------------------------------------------------------
+# A run's settings (run-config.json)
+# --------------------------------------------------------------------------
+
+class SettingChangeRefused(Exception):
+    """A resume gave a run setting a value other than the one the run saved, without leave to change it."""
+
+    def __init__(self, setting: str, saved: str | None, given: str):
+        super().__init__(setting)
+        self.setting, self.saved, self.given = setting, saved, given
+
+
+def saved_settings(run_dir: Path) -> tuple[dict[str, str | None], bool]:
+    """The settings `run_dir` saved, and whether the run predates run-config.json.
+
+    The settings are run-config.json's `settings`. A run without that file has
+    only its backend saved, state.md's agent_backend (nothing when that is
+    missing). Raises OSError when a file cannot be read, and ValueError or
+    KeyError when run-config.json is not the JSON run_config() writes.
+    """
+    config = run_dir / RUN_CONFIG_FILE
+    if config.is_file():
+        return json.loads(config.read_text(encoding="utf-8"))["settings"], False
+    backend = read_frontmatter(run_dir / "state.md").get("agent_backend", "")
+    return ({"RESEARCHER_BACKEND": backend} if backend else {}), True
+
+
+def resume_settings(saved: dict[str, str | None], given: dict[str, str], *, change_allowed_by: str | None,
+                    backend_switch_allowed: bool) -> tuple[dict[str, str | None], list[dict]]:
+    """What a resumed run takes from its `saved` settings, and the changes it makes.
+
+    `given` holds the RUN_SETTINGS this launch's environment sets. Each saved
+    setting it does not give is returned to restore (None: unset); a setting
+    the run did not save keeps the launch's value. A given setting that differs
+    from its saved value is a change, accepted, as {setting, from, to,
+    accepted_by}, when `change_allowed_by` names who may change the run's
+    settings, or, for RESEARCHER_BACKEND alone, when `backend_switch_allowed`.
+    Raises SettingChangeRefused for the first other change, in RUN_SETTINGS order.
+    """
+    restore = {name: saved[name] for name in RUN_SETTINGS if name in saved and name not in given}
+    changes = []
+    for name in RUN_SETTINGS:
+        if name not in given or name not in saved or given[name] == saved[name]:
+            continue
+        if change_allowed_by:
+            accepted_by = change_allowed_by
+        elif name == "RESEARCHER_BACKEND" and backend_switch_allowed:
+            accepted_by = "RESEARCHER_ALLOW_BACKEND_SWITCH"
+        else:
+            raise SettingChangeRefused(name, saved[name], given[name])
+        changes.append({"setting": name, "from": saved[name], "to": given[name], "accepted_by": accepted_by})
+    return restore, changes
+
+
+def run_config(previous: dict | None, *, settings: dict[str, str | None], resolved: dict, launch: dict,
+               changes: list[dict]) -> dict:
+    """A run's run-config.json content after a launch.
+
+    `settings` (each RUN_SETTINGS variable's value, None when unset or absent)
+    and `resolved` (what the runner made of them: the model, the compute
+    profile's text, ...) replace the previous ones; `launch` and `changes` are
+    appended to `previous`'s lists (None for a new run).
+    """
+    previous = previous or {}
+    return {
+        "settings": {name: settings.get(name) for name in RUN_SETTINGS},
+        "resolved": resolved,
+        "launches": previous.get("launches", []) + [launch],
+        "changes": previous.get("changes", []) + changes,
+    }
+
+
+def _brief(value: str | None) -> str:
+    """A setting's value for an error message: unset, or at most 100 characters."""
+    if value is None:
+        return "unset"
+    return f"'{value}'" if len(value) <= 100 else f"'{value[:97]}...'"
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -790,6 +903,18 @@ def main(argv: list[str] | None = None) -> int:
     p_img = sub.add_parser("email-images", help="print checked NAME=PATH lines from <run>/email-images.txt; exit 1, listing "
                            "the problems on stderr, when any line is invalid")
     p_img.add_argument("--run-dir", required=True, type=Path)
+
+    sub.add_parser("run-settings", help="print the RESEARCHER_* variables that define a run, one per line")
+
+    p_resume = sub.add_parser("resume-settings", help="read the settings this launch gives as a JSON object on stdin; "
+                              "print {restore, changes, older_run} as JSON, or exit 2 naming a change not allowed")
+    p_resume.add_argument("--run-dir", required=True, type=Path)
+    p_resume.add_argument("--change-allowed-by", help="who may change the run's settings (the owner, or the flag)")
+    p_resume.add_argument("--allow-backend-switch", action="store_true", help="RESEARCHER_ALLOW_BACKEND_SWITCH is set")
+
+    p_config = sub.add_parser("run-config", help="read {settings, resolved, launch, changes} as JSON on stdin; print "
+                              "the run directory's run-config.json after this launch")
+    p_config.add_argument("--run-dir", required=True, type=Path)
 
     for name in ("outcome", "issue-comment"):
         p = sub.add_parser(name)
@@ -887,6 +1012,33 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         for image in images:
             print(image)
+        return 0
+
+    if args.command == "run-settings":
+        print("\n".join(RUN_SETTINGS))
+        return 0
+
+    if args.command == "resume-settings":
+        saved, older = saved_settings(args.run_dir)
+        try:
+            restore, changes = resume_settings(saved, json.load(sys.stdin), change_allowed_by=args.change_allowed_by,
+                                               backend_switch_allowed=args.allow_backend_switch)
+        except SettingChangeRefused as refused:
+            backend_only = (" (RESEARCHER_ALLOW_BACKEND_SWITCH=true allows a change of backend alone)"
+                            if refused.setting == "RESEARCHER_BACKEND" else "")
+            log(f"ERROR: the run's saved {refused.setting} is {_brief(refused.saved)}, but this launch sets "
+                f"{_brief(refused.given)}. Resume without setting it; to change it, resume as the run's owner "
+                f"(its RESEARCHER_OWNER) or set RESEARCHER_ALLOW_CONFIG_CHANGE=true{backend_only}.")
+            return 2
+        print(json.dumps({"restore": restore, "changes": changes, "older_run": older}))
+        return 0
+
+    if args.command == "run-config":
+        config = args.run_dir / RUN_CONFIG_FILE
+        previous = json.loads(config.read_text(encoding="utf-8")) if config.is_file() else None
+        launch = json.load(sys.stdin)
+        print(json.dumps(run_config(previous, settings=launch["settings"], resolved=launch["resolved"],
+                                    launch=launch["launch"], changes=launch["changes"]), indent=2))
         return 0
 
     facts = compute_outcome(args.run_dir, status=args.status,

@@ -2,7 +2,7 @@
 # kb-init.sh — Bootstrap the global research knowledge base (wiki).
 #
 # Usage:
-#   kb-init.sh [path]            # default: $RESEARCHER_KB_DIR, else ~/pyg/research-wiki
+#   kb-init.sh [path]            # default: $RESEARCHER_KB_DIR, else RESEARCHER_DEFAULT_KB_DIR (config)
 #
 # Idempotent: safe to re-run. Existing files are never overwritten, except
 # KB-SCHEMA.md, which is refreshed from the plugin template only when --update-schema
@@ -24,7 +24,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-KB_DIR="${KB_DIR:-${RESEARCHER_KB_DIR:-${HOME}/pyg/research-wiki}}"
+# shellcheck source=config.sh
+source "${SCRIPT_DIR}/config.sh"
+load_config || exit 1
+require_config RESEARCHER_DEFAULT_KB_DIR || exit 1
+KB_DIR="${KB_DIR:-${RESEARCHER_KB_DIR:-$RESEARCHER_DEFAULT_KB_DIR}}"
 SCHEMA_TEMPLATE="${PLUGIN_DIR}/templates/kb-schema.md"
 
 # The lessons pages, one "slug|title|blurb" line each. The workflow reads them

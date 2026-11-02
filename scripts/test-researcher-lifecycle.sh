@@ -258,6 +258,8 @@ fi
 
 new_status="mock_step_complete"
 [ "$step" = "11" ] && new_status="complete"
+# An audit that asks for another round every time, so only the runner's ceiling ends it.
+[ "$step" = "10" ] && [ "${MOCK_AUDIT_REMEDIATE:-false}" = "true" ] && new_status="audit_remediating"
 sed -e "s/^current_step:.*/current_step: ${step}/" -e "s/^status:.*/status: ${new_status}/" \
     "$state_file" > "${state_file}.tmp"
 mv "${state_file}.tmp" "$state_file"
@@ -429,11 +431,15 @@ fi; ok
 assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p "main:experiments/exp-001/results.md" | grep -c Verdict)" "1" "experiment results published"
 assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p main:README.md | head -1)" \
     "# Gradient routing persistence" "run README published"
+assert_eq "$(git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -p main:run-config.json | jq -r .settings.RESEARCHER_BACKEND)" \
+    "claude" "run-config.json published"
 assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
 assert_eq "$(field publish_state "$RUN")" "pushed" "publish_state"
 assert_eq "$(jq -r .outcome "${RUN}/run-outcome.json")" "complete" "run-outcome.json"
 COMMENT=$(ls "${CASE_DIR}"/comments/101-*.md)
 assert_grep "outcome: complete" "$COMMENT"
+# The email composer is handed the original issue's link.
+assert_grep "^- Original issue: https://github.com/tbuckworth/tasks/issues/101$" "${RUN}/.email-prompt.txt"
 assert_grep "https://github.com/tbuckworth/${SLUG}/tree/main \(private\)" "$COMMENT"
 assert_grep "https://github.com/tbuckworth/${SLUG}/blob/main/paper/paper.pdf" "$COMMENT"
 assert_grep "\| exp-001 \| Routing localises the capability \| PASS \|" "$COMMENT"
@@ -774,6 +780,17 @@ run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_STEP_ATTEMPTS=2 MOCK_INCO
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "the step retried, then the report"
 assert_grep "Retrying step 10 \(attempt 2/2\)" "${CASE_DIR}/stdout.log"
 assert_eq "$(field step_incomplete "${OUT}/2026-01-27-audit-retry")" "" "cleared on retry"
+
+# 15b''. An audit that asks for round after round is stopped one round past
+#        RESEARCHER_MAX_AUDIT_ROUNDS (the cap the step itself is given), and
+#        the report is compiled.
+new_case audit-ceiling
+write_run 2026-01-27-audit-ceiling 9 experiments_complete
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true RESEARCHER_MAX_AUDIT_ROUNDS=1 \
+    MOCK_AUDIT_REMEDIATE=true -- "Ignored topic"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "two audit rounds, then the report"
+assert_grep "Audit-remediation ceiling reached \(2 rounds\)" "${CASE_DIR}/stdout.log"
+assert_eq "$(field status "${OUT}/2026-01-27-audit-ceiling")" "complete" "status"
 
 # 15c. A guard (RESEARCHER_GUARD_CMD) holds the run between steps: it pauses
 #      before calling the provider, records why, and resumes once it is quiet.
@@ -1140,13 +1157,212 @@ printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
 chmod +x "${CASE_DIR}/bin/hostname"
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (unknown host)"
-assert_grep "host 'some-laptop' is not in the table; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
+assert_grep "host 'some-laptop' is not in RESEARCHER_HOST_ALIASES; set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
 # A hostname that cannot be read is the same: set RESEARCHER_HOST_ALIAS.
 printf '#!/usr/bin/env bash\necho "hostname: mock failure" >&2\nexit 1\n' > "${CASE_DIR}/bin/hostname"
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (hostname failed)"
 assert_grep "ERROR: could not read this machine's hostname \(hostname -s failed\); set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+# A host in RESEARCHER_HOST_ALIASES gets its alias in the email's continuation steps.
+printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
+run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= \
+    "RESEARCHER_HOST_ALIASES=other-host=other some-laptop=laptop-alias" RESEARCHER_SKIP_PUBLISH=true -- "Aliased host"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "^- Run host SSH alias: laptop-alias$" "$(ls -d "$OUT"/*-aliased-host)/.email-prompt.txt"
+
+# =============================================================================
+# 22b. Deployment defaults come from config/researcher.env (RESEARCHER_CONFIG_FILE
+#      names another file), read as data: a variable set in the environment
+#      wins, ~/ is the home directory, nothing in a value runs, and a line that
+#      is not RESEARCHER_KEY=value, or a key the runner needs that neither sets,
+#      stops it (exit 2).
+# =============================================================================
+new_case config
+CONFIG_FILE="${CASE_DIR}/researcher.env"
+printf '# a comment\n\nRESEARCHER_TASKS_REPO=file/tasks\nRESEARCHER_DEFAULT_KB_DIR=~/wiki\nRESEARCHER_EMAIL_TO=$(touch %s/ran)\n' \
+    "$CASE_DIR" > "$CONFIG_FILE"
+config_get() {
+    set +e
+    env "$@" bash "${REPO_DIR}/scripts/config.sh" RESEARCHER_TASKS_REPO RESEARCHER_DEFAULT_KB_DIR RESEARCHER_EMAIL_TO \
+        > "${CASE_DIR}/config.out" 2>&1
+    RC=$?
+    set -e
+}
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" HOME=/home/mock RESEARCHER_TASKS_REPO=
+assert_eq "$RC" "0" "exit code (file values)"
+assert_eq "$(cat "${CASE_DIR}/config.out")" "file/tasks
+/home/mock/wiki
+\$(touch ${CASE_DIR}/ran)" "file values"
+[ ! -e "${CASE_DIR}/ran" ] || fail "a config value was run as a command"; ok
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_TASKS_REPO=env/tasks
+assert_eq "$(head -1 "${CASE_DIR}/config.out")" "env/tasks" "the environment wins"
+printf 'RESEARCHER_TASKS_REPO=file/tasks\n' > "$CONFIG_FILE"
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_DEFAULT_KB_DIR= RESEARCHER_EMAIL_TO=
+assert_eq "$RC" "2" "exit code (a key neither sets)"
+assert_grep "ERROR: RESEARCHER_DEFAULT_KB_DIR is not set: define it in ${CONFIG_FILE} or the environment" "${CASE_DIR}/config.out"
+printf 'RESEARCHER_TASKS_REPO = file/tasks\n' > "$CONFIG_FILE"
+config_get "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}"
+assert_eq "$RC" "2" "exit code (malformed line)"
+assert_grep "ERROR: line 1 of ${CONFIG_FILE} is not RESEARCHER_KEY=value: RESEARCHER_TASKS_REPO = file/tasks" "${CASE_DIR}/config.out"
+# The runner, and each helper script, stops on the same errors before doing anything.
+run_researcher "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (runner, malformed config)"
+assert_grep "is not RESEARCHER_KEY=value" "${CASE_DIR}/stdout.log"
+grep -v '^RESEARCHER_GITHUB_OWNER=' "${REPO_DIR}/config/researcher.env" > "$CONFIG_FILE"
+run_researcher "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (runner, missing key)"
+assert_grep "ERROR: RESEARCHER_GITHUB_OWNER is not set: define it in ${CONFIG_FILE} or the environment" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+grep -v '^RESEARCHER_EMAIL_TO=' "${REPO_DIR}/config/researcher.env" > "$CONFIG_FILE"
+set +e
+env "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_EMAIL_TO= RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+    "${REPO_DIR}/scripts/send-results-email.sh" "$CASE_DIR" > "${CASE_DIR}/helper.out" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "2" "exit code (email helper, missing recipient)"
+assert_grep "ERROR: RESEARCHER_EMAIL_TO is not set" "${CASE_DIR}/helper.out"
+# create-followup-issue.sh and kb-init.sh exit 1, as on their other errors.
+printf 'RESEARCHER_TASKS_REPO = file/tasks\n' > "$CONFIG_FILE"
+printf 'Feedback.\n' > "${CASE_DIR}/feedback.txt"
+set +e
+env "PATH=${MOCK_BIN}:${PATH}" "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" MOCK_GH_LOG="${CASE_DIR}/gh.log" \
+    "${REPO_DIR}/scripts/create-followup-issue.sh" --parent 1 --repo-url "" --run-id r --source claude \
+    --feedback-file "${CASE_DIR}/feedback.txt" > "${CASE_DIR}/followup.out" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "1" "exit code (create-followup-issue.sh, malformed config)"
+assert_grep "is not RESEARCHER_KEY=value" "${CASE_DIR}/followup.out"
+[ ! -s "${CASE_DIR}/gh.log" ] || fail "create-followup-issue.sh called gh"; ok
+set +e
+env "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" "${REPO_DIR}/scripts/kb-init.sh" "${CASE_DIR}/wiki" > "${CASE_DIR}/kb.out" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "1" "exit code (kb-init.sh, malformed config)"
+assert_grep "is not RESEARCHER_KEY=value" "${CASE_DIR}/kb.out"
+[ ! -e "${CASE_DIR}/wiki" ] || fail "kb-init.sh wrote a wiki"; ok
+
+# =============================================================================
+# 22c. RESEARCHER_COMPUTE_PROFILE names a preset in config/compute-profiles/
+#      (any case), or mats, or is the profile text itself, which has more than
+#      one word: a single word that names no preset is a misspelt preset and
+#      exits 2. A paid preset gets the shared paid-compute rules and needs
+#      RESEARCHER_COMPUTE_BUDGET_USD, which goes into its text; a budget for a
+#      profile that takes none, or one that is not whole dollars, exits 2.
+# =============================================================================
+new_case presets
+run_researcher RESEARCHER_COMPUTE_PROFILE=modal -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (paid preset, no budget)"
+assert_grep "ERROR: the modal compute profile is paid: set RESEARCHER_COMPUTE_BUDGET_USD" "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+run_researcher RESEARCHER_COMPUTE_PROFILE=lamda RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (misspelt preset)"
+assert_grep "ERROR: 'lamda' is not a compute-profile preset \(those in config/compute-profiles/ are: lambda local modal\); a profile written out as text has more than one word" \
+    "${CASE_DIR}/stdout.log"
+[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+# scripts/config.sh --compute-profile resolves a profile the same way, for the
+# interactive workflow; both paid presets carry the one paid-compute text.
+for preset in modal lambda; do
+    set +e
+    env RESEARCHER_COMPUTE_BUDGET_USD=25 "${REPO_DIR}/scripts/config.sh" --compute-profile "$preset" \
+        > "${CASE_DIR}/${preset}.txt" 2>&1
+    RC=$?
+    set -e
+    assert_eq "$RC" "0" "exit code (config.sh --compute-profile ${preset})"
+    assert_grep "25 US dollars.*FAIL-on-affordability.*agents/experiment.md" "${CASE_DIR}/${preset}.txt"
+    assert_no_grep "\{\{" "${CASE_DIR}/${preset}.txt"
+done
+assert_grep "cloud-watch resource key .*modal:arrow:<app-name>" "${CASE_DIR}/modal.txt"
+set +e
+env RESEARCHER_COMPUTE_BUDGET_USD= "${REPO_DIR}/scripts/config.sh" --compute-profile lambda > "${CASE_DIR}/nobudget.txt" 2>&1
+RC=$?
+set -e
+assert_eq "$RC" "2" "exit code (config.sh, paid preset without a budget)"
+assert_grep "the lambda compute profile is paid" "${CASE_DIR}/nobudget.txt"
+run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_COMPUTE_BUDGET_USD=40 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (budget for a free preset)"
+assert_grep "ERROR: RESEARCHER_COMPUTE_BUDGET_USD is set, but the local compute profile takes no budget" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_COMPUTE_PROFILE=lambda RESEARCHER_COMPUTE_BUDGET_USD=12.50 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (budget not in whole dollars)"
+assert_grep "RESEARCHER_COMPUTE_BUDGET_USD must be a whole number of at least 1, got '12.50'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_COMPUTE_PROFILE=Lambda RESEARCHER_COMPUTE_BUDGET_USD=40 \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Lambda preset"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+RUN=$(ls -d "$OUT"/*-lambda-preset)
+assert_grep "compute profile: lambda;" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Paid cloud GPUs on Lambda.*lambda:personal:<instance-name>.* 40 US dollars.*FAIL-on-affordability' "${RUN}/state.md"
+assert_no_grep "\{\{" "${RUN}/state.md"
+run_researcher "RESEARCHER_COMPUTE_PROFILE=Two CPU cores, no GPU" RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Literal profile"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
+assert_grep "compute profile: custom;" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Two CPU cores, no GPU"$' "$(ls -d "$OUT"/*-literal-profile)/state.md"
+
+# =============================================================================
+# 22d. A run records the settings it starts with in run-config.json. A resumed
+#      run takes each setting its launch does not give from there; one given
+#      that differs stops it (exit 2, naming the setting) unless the resumer is
+#      the run's owner or sets RESEARCHER_ALLOW_CONFIG_CHANGE=true, and an
+#      accepted change is logged and listed in run-config.json. Each launch is
+#      listed with its timeout and the plugin's commit.
+# =============================================================================
+new_case run-config
+run_researcher RESEARCHER_COMPUTE_PROFILE=mats RESEARCHER_TIMEOUT_SECONDS=7200 RESEARCHER_SKIP_PUBLISH=true \
+    RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=3 -- "Saved settings"
+assert_eq "$RC" "3" "exit code (paused)"
+RUN=$(ls -d "$OUT"/*-saved-settings)
+RUN_CONFIG="${RUN}/run-config.json"
+assert_eq "$(jq -r '.settings.RESEARCHER_COMPUTE_PROFILE' "$RUN_CONFIG")" "mats" "saved profile"
+assert_eq "$(jq -r '.settings.RESEARCHER_KB_DIR' "$RUN_CONFIG")" "none" "saved knowledge base"
+assert_eq "$(jq -r '.settings.RESEARCHER_MAX_EXPERIMENTS' "$RUN_CONFIG")" \
+    "$("${REPO_DIR}/scripts/config.sh" RESEARCHER_MAX_EXPERIMENTS)" "a setting from the config file"
+assert_eq "$(jq -r '.resolved.compute_profile_preset' "$RUN_CONFIG")" "mats" "resolved preset"
+jq -e '(.resolved.compute_profile | startswith("MATS Slurm cluster")) and (.resolved.job_wait_cmd | contains("squeue"))' \
+    "$RUN_CONFIG" > /dev/null || fail "run-config.json lacks the resolved profile and job-wait command"; ok
+assert_eq "$(jq -r '.launches[0].timeout_seconds' "$RUN_CONFIG")" "7200" "launch timeout"
+assert_eq "$(jq -r '.launches[0].plugin_commit' "$RUN_CONFIG")" "$(git -C "$REPO_DIR" rev-parse HEAD)" "plugin commit"
+# Resumed with no profile given: still mats, though the configured default differs.
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused again)"
+assert_grep "compute profile: mats;" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "MATS Slurm cluster' "${RUN}/state.md"
+assert_eq "$(jq '.launches | length' "$RUN_CONFIG")" "2" "launches"
+# A different profile given by a resumer that is not the run's owner is refused...
+run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (setting changed on resume)"
+assert_grep "ERROR: the run's saved RESEARCHER_COMPUTE_PROFILE is 'mats', but this launch sets 'local'" "${CASE_DIR}/stdout.log"
+assert_eq "$(jq '.launches | length' "$RUN_CONFIG")" "2" "no launch recorded"
+# ...and accepted with RESEARCHER_ALLOW_CONFIG_CHANGE=true.
+run_researcher RESEARCHER_COMPUTE_PROFILE=local RESEARCHER_ALLOW_CONFIG_CHANGE=true RESEARCHER_SKIP_PUBLISH=true \
+    RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=7 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused after the accepted change)"
+assert_grep "Resuming with a changed RESEARCHER_COMPUTE_PROFILE \(accepted: RESEARCHER_ALLOW_CONFIG_CHANGE\)" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Local NVIDIA' "${RUN}/state.md"
+assert_eq "$(jq -c '.changes | map([.setting, .from, .to, .accepted_by])' "$RUN_CONFIG")" \
+    '[["RESEARCHER_COMPUTE_PROFILE","mats","local","RESEARCHER_ALLOW_CONFIG_CHANGE"]]' "recorded change"
+assert_eq "$(jq -r '.settings.RESEARCHER_COMPUTE_PROFILE' "$RUN_CONFIG")" "local" "saved profile after the change"
+# A run-config.json that cannot be read stops the resume (exit 1); the run is
+# not resumed with other settings.
+printf '{"settings": ' > "$RUN_CONFIG"
+: > "${CASE_DIR}/steps.log"
+run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" "1" "exit code (unreadable run-config.json)"
+assert_grep "ERROR: could not read the saved settings of ${RUN}" "${CASE_DIR}/stdout.log"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran"; ok
+# The run's owner may change a setting (agent-spare raises a run's budget in its profile text).
+new_case run-config-owner
+run_researcher RESEARCHER_OWNER=agent-spare RESEARCHER_NO_RESUME=true "RESEARCHER_COMPUTE_PROFILE=Spare run, 20 dollars" \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=3 -- "Owned settings"
+assert_eq "$RC" "3" "exit code (paused)"
+RUN=$(ls -d "$OUT"/*-owned-settings)
+run_researcher "RESEARCHER_RUN_DIR=${RUN}" "RESEARCHER_COMPUTE_PROFILE=Spare run, 40 dollars" \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (pinned, but not the owner)"
+assert_grep "saved RESEARCHER_COMPUTE_PROFILE is 'Spare run, 20 dollars'" "${CASE_DIR}/stdout.log"
+run_researcher RESEARCHER_OWNER=agent-spare "RESEARCHER_RUN_DIR=${RUN}" "RESEARCHER_COMPUTE_PROFILE=Spare run, 40 dollars" \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (the owner's change accepted)"
+assert_grep "Resuming with a changed RESEARCHER_COMPUTE_PROFILE \(accepted: the run's owner, agent-spare\)" "${CASE_DIR}/stdout.log"
+assert_grep '^compute_profile: "Spare run, 40 dollars"$' "${RUN}/state.md"
 
 # =============================================================================
 # 23. A check that cannot run is an error, not a pass: the re-read of an issue

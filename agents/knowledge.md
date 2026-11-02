@@ -50,7 +50,7 @@ none says so in one line.
 
 ## The two knowledge bases
 
-**Global wiki** (`$RESEARCHER_KB_DIR`, typically `~/pyg/research-wiki`) — spans
+**Global wiki** (`$RESEARCHER_KB_DIR`, by default `RESEARCHER_DEFAULT_KB_DIR` in `config/researcher.env`) spans
 every research line. Literature, entities, concepts, and — the part that makes it
 more than a bibliography — `lessons/`: what the research *process* has learned.
 Common failures, strawman constructs, what a compute profile really delivers,

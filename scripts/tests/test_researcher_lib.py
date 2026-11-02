@@ -508,6 +508,85 @@ class CliTest(unittest.TestCase):
 
 
 
+class RunConfigTest(unittest.TestCase):
+    SAVED = {"RESEARCHER_BACKEND": "claude", "RESEARCHER_COMPUTE_PROFILE": "mats", "RESEARCHER_KB_DIR": None,
+             "RESEARCHER_JOB_WAIT_CMD": None}
+
+    def resume(self, given, **leave):
+        leave.setdefault("change_allowed_by", None)
+        leave.setdefault("backend_switch_allowed", False)
+        return lib.resume_settings(self.SAVED, given, **leave)
+
+    def test_settings_the_launch_does_not_give_come_from_the_run(self):
+        restore, changes = self.resume({"RESEARCHER_BACKEND": "claude"})
+        self.assertEqual(restore, {"RESEARCHER_COMPUTE_PROFILE": "mats", "RESEARCHER_KB_DIR": None,
+                                   "RESEARCHER_JOB_WAIT_CMD": None})
+        self.assertEqual(changes, [])
+
+    def test_a_different_setting_needs_leave(self):
+        with self.assertRaises(lib.SettingChangeRefused) as refused:
+            self.resume({"RESEARCHER_COMPUTE_PROFILE": "local"})
+        self.assertEqual(refused.exception.setting, "RESEARCHER_COMPUTE_PROFILE")
+        # A setting the run saved as unset counts too.
+        with self.assertRaises(lib.SettingChangeRefused):
+            self.resume({"RESEARCHER_KB_DIR": "/elsewhere/wiki"})
+
+    def test_the_owner_or_the_flag_may_change_settings(self):
+        restore, changes = self.resume({"RESEARCHER_COMPUTE_PROFILE": "budget now $60"},
+                                       change_allowed_by="the run's owner, agent-spare")
+        self.assertNotIn("RESEARCHER_COMPUTE_PROFILE", restore)
+        self.assertEqual(changes, [{"setting": "RESEARCHER_COMPUTE_PROFILE", "from": "mats", "to": "budget now $60",
+                                    "accepted_by": "the run's owner, agent-spare"}])
+
+    def test_the_backend_switch_flag_allows_only_the_backend(self):
+        _, changes = self.resume({"RESEARCHER_BACKEND": "codex"}, backend_switch_allowed=True)
+        self.assertEqual([c["accepted_by"] for c in changes], ["RESEARCHER_ALLOW_BACKEND_SWITCH"])
+        with self.assertRaises(lib.SettingChangeRefused):
+            self.resume({"RESEARCHER_BACKEND": "codex", "RESEARCHER_COMPUTE_PROFILE": "local"},
+                        backend_switch_allowed=True)
+
+    def test_an_older_run_has_only_its_backend_saved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = make_run(Path(tmp), "older", agent_backend="codex", compute_profile='"Local GPU"')
+            saved, older = lib.saved_settings(run)
+            self.assertTrue(older)
+            self.assertEqual(saved, {"RESEARCHER_BACKEND": "codex"})
+            restore, changes = lib.resume_settings(saved, {"RESEARCHER_COMPUTE_PROFILE": "mats"},
+                                                   change_allowed_by=None, backend_switch_allowed=False)
+            self.assertEqual((restore, changes), ({"RESEARCHER_BACKEND": "codex"}, []))
+
+    def test_run_config_keeps_every_launch_and_change(self):
+        first = lib.run_config(None, settings={"RESEARCHER_BACKEND": "claude"}, resolved={"model": "m"},
+                               launch={"timeout_seconds": 60}, changes=[])
+        self.assertEqual(set(first["settings"]), set(lib.RUN_SETTINGS))
+        self.assertIsNone(first["settings"]["RESEARCHER_KB_DIR"])
+        change = {"setting": "RESEARCHER_BACKEND", "from": "claude", "to": "codex", "accepted_by": "x"}
+        second = lib.run_config(first, settings={"RESEARCHER_BACKEND": "codex"}, resolved={"model": "n"},
+                                launch={"timeout_seconds": 90}, changes=[change])
+        self.assertEqual(second["settings"]["RESEARCHER_BACKEND"], "codex")
+        self.assertEqual(second["resolved"], {"model": "n"})
+        self.assertEqual([launch["timeout_seconds"] for launch in second["launches"]], [60, 90])
+        self.assertEqual(second["changes"], [change])
+
+    def test_resume_settings_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = make_run(Path(tmp), "run", agent_backend="claude")
+            write(run / "run-config.json", json.dumps(lib.run_config(
+                None, settings=self.SAVED, resolved={}, launch={}, changes=[])))
+            refused = run_lib("resume-settings", "--run-dir", str(run),
+                              stdin=json.dumps({"RESEARCHER_COMPUTE_PROFILE": "local"}))
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn("ERROR: the run's saved RESEARCHER_COMPUTE_PROFILE is 'mats', but this launch sets 'local'",
+                          refused.stderr)
+            allowed = run_lib("resume-settings", "--run-dir", str(run), "--change-allowed-by", "RESEARCHER_ALLOW_CONFIG_CHANGE",
+                              stdin=json.dumps({"RESEARCHER_COMPUTE_PROFILE": "local"}))
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+            out = json.loads(allowed.stdout)
+            self.assertFalse(out["older_run"])
+            self.assertEqual(out["restore"]["RESEARCHER_BACKEND"], "claude")
+            self.assertEqual(out["changes"][0]["to"], "local")
+
+
 class ResultsEmailTest(unittest.TestCase):
     def test_plain_text_alternative(self):
         text = lib.html_to_text(

@@ -243,7 +243,22 @@ grep -q -- '--sandbox workspace-write' "$MOCK_CALL_LOG"
 grep -q -- '--ask-for-approval never' "$MOCK_CALL_LOG"
 grep -q -- '--ignore-user-config' "$MOCK_CALL_LOG"
 grep -q '# Codex Runtime Adapter' "$MOCK_PROMPT_LOG"
-grep -q 'mock-codex-fast' "$MOCK_PROMPT_LOG"
+# The adapter is templates/codex-adapter.md, followed by this run's worker models.
+grep -qF "$(head -3 "${REPO_DIR}/templates/codex-adapter.md" | tail -1)" "$MOCK_PROMPT_LOG"
+grep -q '^Worker models for this run: fast `mock-codex-fast` with `medium` reasoning; deep `mock-codex` with `high` reasoning\.$' \
+    "$MOCK_PROMPT_LOG"
+
+# The runtime header gives every step the configured limits and the local code
+# it may search.
+read -r max_experiments experiment_minutes max_file_mb max_audit_rounds code_dir < <(
+    "${REPO_DIR}/scripts/config.sh" RESEARCHER_MAX_EXPERIMENTS RESEARCHER_EXPERIMENT_MINUTES \
+        RESEARCHER_MAX_FILE_MB RESEARCHER_MAX_AUDIT_ROUNDS RESEARCHER_CODE_SEARCH_DIR | paste -sd' ')
+grep -qF -- "- Experiment limits: at most ${max_experiments} experiments in the run, each targeting under ${experiment_minutes} minutes of compute, and every file under ${max_file_mb} MB" \
+    "$MOCK_PROMPT_LOG"
+grep -qxF -- "- Audit rounds (R_MAX): at most ${max_audit_rounds}" "$MOCK_PROMPT_LOG"
+grep -qxF -- "- Local code to search (read-only): ${code_dir}" "$MOCK_PROMPT_LOG"
+# A run without an issue tells the email composer so.
+grep -qx -- '- Original issue: none' "$MOCK_PROMPT_LOG"
 test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "4"
 grep -q -- '--to self@example.test' "$MOCK_EMAIL_LOG"
 # Every results email is written and sent by a Claude session (its own id, so
@@ -333,7 +348,8 @@ RESEARCHER_HOST_ALIAS="mock-host" \
 mismatch_status=$?
 set -e
 test "$mismatch_status" = "2"
-grep -q "in-progress run uses backend 'claude'" "${TEST_ROOT}/mismatch.stdout"
+# A run that predates run-config.json has its backend saved in state.md.
+grep -q "ERROR: the run's saved RESEARCHER_BACKEND is 'claude', but this launch sets 'codex'" "${TEST_ROOT}/mismatch.stdout"
 
 # Follow-up issues carry the source label of the backend that files them.
 cat > "${MOCK_BIN}/gh" <<'MOCK_GH'

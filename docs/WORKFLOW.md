@@ -98,8 +98,8 @@ status: clarified
 mode: interactive    # the autonomous runner never resumes an interactive run
 agent_backend: <claude|codex>
 agent_model: <the model running the orchestrator>
-compute_profile: <$RESEARCHER_COMPUTE_PROFILE if set; else the compute the user named; else local>
-knowledge_base: <$RESEARCHER_KB_DIR (default ~/pyg/research-wiki) if it contains KB-SCHEMA.md; else none>
+compute_profile: <$RESEARCHER_COMPUTE_PROFILE if set; else the compute the user named; else the configured RESEARCHER_COMPUTE_PROFILE>
+knowledge_base: <$RESEARCHER_KB_DIR, else the configured RESEARCHER_DEFAULT_KB_DIR, if it contains KB-SCHEMA.md; else none>
 clarifications:
   - q: <question>
     a: <answer>
@@ -107,9 +107,10 @@ decisions: []
 ---
 ```
 
-   For a preset name such as `local`, write the matching `COMPUTE_PROFILE_*`
-   description from `scripts/researcher-cron.sh`, as the autonomous runner does:
-   the experiment, results-auditor and report agents read `compute_profile`.
+   `scripts/config.sh <KEY>` prints a configured value. Write the profile
+   `scripts/config.sh --compute-profile <value>` prints, as the autonomous
+   runner does (a paid preset needs `RESEARCHER_COMPUTE_BUDGET_USD` set): the
+   experiment, results-auditor and report agents read `compute_profile`.
 5. Write `method-spec.md`: for every named method, condition, intervention and metric in the topic, the verbatim source wording, an operational definition, a *defining property* a small code test can assert, the near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Advance to Step 2.
 
 ### Completion Criteria
@@ -373,7 +374,7 @@ This step runs three **independent** adversarial review passes on the research p
 
 **Agent**: `results-auditor` (one per round)
 
-An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there), and loops only on genuinely fixable methodology defects. At most R_MAX = 3 audit rounds run. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
+An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there), and loops only on genuinely fixable methodology defects. At most R_MAX audit rounds run: `RESEARCHER_MAX_AUDIT_ROUNDS`, which an autonomous run's runtime header gives and `scripts/config.sh RESEARCHER_MAX_AUDIT_ROUNDS` prints. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 ### Process
 

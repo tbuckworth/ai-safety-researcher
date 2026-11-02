@@ -3,23 +3,14 @@
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
 build_codex_preamble() {
+    # The Codex adapter the interactive Codex skills also follow
+    # (templates/codex-adapter.md), then this run's worker models and what is
+    # particular to an autonomous step.
+    cat "${REPO_DIR}/templates/codex-adapter.md"
     cat <<EOF
-# Codex Runtime Adapter
 
-This workflow was authored with Claude Code vocabulary. Translate it to Codex
-semantics rather than treating the pseudocode as literal shell or API syntax.
+Worker models for this run: fast \`${CODEX_FAST_MODEL}\` with \`${CODEX_FAST_REASONING}\` reasoning; deep \`${CODEX_DEEP_MODEL}\` with \`${CODEX_DEEP_REASONING}\` reasoning.
 
-- A \`Task(...)\` block means: spawn a Codex leaf subagent, give it the complete
-  prompt in the block, wait for it, and use its returned result.
-- Keep leaf agents from spawning further agents or interacting with the user.
-- Run explicitly parallel Task blocks concurrently and wait for all results.
-- Map search-planner and search workers to model \`${CODEX_FAST_MODEL}\` with
-  \`${CODEX_FAST_REASONING}\` reasoning when that override is available.
-- Map novelty, criteria, decomposition, challenge, experiment, audit, and report
-  workers to model \`${CODEX_DEEP_MODEL}\` with \`${CODEX_DEEP_REASONING}\`
-  reasoning when that override is available.
-- Translate Read/Write/Edit/Glob/Grep/Bash/WebSearch/WebFetch to the available
-  Codex filesystem, shell, and web tools.
 - The plugin-root placeholder has already been replaced with an absolute path.
 - Execute exactly one autonomous workflow step and update state.md before exit.
 EOF
@@ -34,6 +25,9 @@ build_runtime_header() {
 - Plugin root: ${REPO_DIR}
 - Run output root: ${OUTPUT_DIR}
 - Global knowledge base: ${KB_DIR:-none (this run is not using one)}
+- Local code to search (read-only): ${CODE_SEARCH_DIR}
+- Experiment limits: at most ${MAX_EXPERIMENTS} experiments in the run, each targeting under ${EXPERIMENT_MINUTES} minutes of compute, and every file under ${MAX_FILE_MB} MB (the publisher leaves larger files out of the run's repository)
+- Audit rounds (R_MAX): at most ${MAX_AUDIT_ROUNDS}
 EOF
 }
 
@@ -74,7 +68,7 @@ build_email_prompt() {
     # or "compose" (write the files only; the wrapper sends them); anything else
     # is an error. The handoff gives facts only; commands/researcher-auto-email.md
     # holds the rules.
-    local delivery published
+    local delivery published issue_url=none
     case "${1:-}" in
         send) delivery="- Send it yourself, to ${EMAIL_TO}, with:
       ${SEND_EMAIL} ${RUN_DIR}" ;;
@@ -89,6 +83,9 @@ build_email_prompt() {
         failed) published="NO - ${PUBLISH_ERROR}" ;;
         *) published="no (publishing skipped for this run)" ;;
     esac
+    if [ -n "${ISSUE_NUMBER:-}" ] && [ "$ISSUE_NUMBER" != "none" ]; then
+        issue_url="${GITHUB_WEB}/${TASKS_REPO}/issues/${ISSUE_NUMBER}"
+    fi
     build_runtime_header
     cat <<EOF
 
@@ -98,6 +95,7 @@ build_email_prompt() {
 - Subject file: ${RUN_DIR}/email-subject.txt
 - Inline plot list: ${RUN_DIR}/email-images.txt
 - Footer agent label: ${AGENT_LABEL}
+- Original issue: ${issue_url}
 ${delivery}
 
 ## Continuation facts

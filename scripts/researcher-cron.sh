@@ -12,10 +12,13 @@
 #
 # Launcher: agent-board's agent-spare (the agent-spare.timer systemd user timer)
 # starts this script for one issue in its own systemd unit, and its output goes to
-# ~/.local/state/agent-board/spare/run.log; step logs stay in
-# /media/titus/big/researcher-output/logs/ (LOG_DIR below). The old
-# crontab line is disabled. It can still be run by hand or from cron, e.g.
-#   0 2 * * * /home/titus/pyg/researcher/scripts/researcher-cron.sh >> /home/titus/pyg/researcher/logs/cron.log 2>&1
+# ~/.local/state/agent-board/spare/run.log; step logs stay in LOG_DIR (below).
+# The old crontab line is disabled. It can still be run by hand or from cron, e.g.
+#   0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
+#
+# Deployment defaults (storage, GitHub owner and queue, recipient, models, ...)
+# come from config/researcher.env, read by scripts/config.sh; a variable set in
+# the environment wins.
 
 set -euo pipefail
 
@@ -28,7 +31,19 @@ case ":${PATH}:" in
     *) export PATH="${HOME}/.local/bin:${PATH}" ;;
 esac
 
-STORAGE_ROOT="${RESEARCHER_STORAGE_ROOT:-/media/titus/big}"
+# shellcheck source=config.sh
+source "${SCRIPT_DIR}/config.sh"
+load_config || exit 2
+require_config RESEARCHER_STORAGE_ROOT RESEARCHER_GITHUB_OWNER RESEARCHER_TASKS_REPO RESEARCHER_EMAIL_TO \
+    RESEARCHER_DEFAULT_KB_DIR RESEARCHER_BACKEND RESEARCHER_CLAUDE_BIN RESEARCHER_CODEX_BIN \
+    RESEARCHER_CLAUDE_MODEL RESEARCHER_EMAIL_CLAUDE_MODEL RESEARCHER_CODEX_MODEL RESEARCHER_CODEX_REASONING \
+    RESEARCHER_CODEX_FAST_MODEL RESEARCHER_CODEX_FAST_REASONING RESEARCHER_CODEX_SANDBOX \
+    RESEARCHER_CODEX_APPROVAL_POLICY RESEARCHER_CODEX_IGNORE_USER_CONFIG RESEARCHER_CODEX_MAX_SUBAGENTS \
+    RESEARCHER_COMPUTE_PROFILE RESEARCHER_CODE_SEARCH_DIR RESEARCHER_MAX_EXPERIMENTS \
+    RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_FILE_MB RESEARCHER_MAX_AUDIT_ROUNDS \
+    || exit 2
+
+STORAGE_ROOT="$RESEARCHER_STORAGE_ROOT"
 OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 
@@ -47,7 +62,8 @@ for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RE
     fi
 done
 for setting in RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS \
-    RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS; do
+    RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS RESEARCHER_COMPUTE_BUDGET_USD \
+    RESEARCHER_MAX_EXPERIMENTS RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_AUDIT_ROUNDS; do
     if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
         echo "ERROR: ${setting} must be a whole number of at least 1, got '${!setting}'." >&2
         exit 2
@@ -65,19 +81,27 @@ ALLOW_RERUN="${RESEARCHER_ALLOW_RERUN:-false}"
 
 # GitHub publication. Run repos hold unreviewed research and are private unless
 # deliberately made public.
-REPO_OWNER="${RESEARCHER_GITHUB_OWNER:-tbuckworth}"
-TASKS_REPO="${RESEARCHER_TASKS_REPO:-tbuckworth/tasks}"
+REPO_OWNER="$RESEARCHER_GITHUB_OWNER"
+TASKS_REPO="$RESEARCHER_TASKS_REPO"
 REPO_VISIBILITY="${RESEARCHER_REPO_VISIBILITY:-private}"
+# GitHub's web address, for repo and issue links.
+GITHUB_WEB="https://github.com"
 # Where git pushes to. Only tests override this (with a file:// directory of bare repos).
-GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-https://github.com}"
+GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-$GITHUB_WEB}"
 # Publishing refuses to start below this much free space on the run volume, and
-# never publishes a single file at or above MAX_FILE_MB (GitHub rejects files
-# over 100 MB, which fails the whole push).
+# never publishes a single file at or above MAX_FILE_MB (a run setting, below;
+# GitHub rejects files over 100 MB, which fails the whole push).
 MIN_FREE_MB="${RESEARCHER_MIN_FREE_MB:-1024}"
-MAX_FILE_MB="${RESEARCHER_MAX_FILE_MB:-50}"
+# Local code the steps may search, read-only (in the runtime header).
+CODE_SEARCH_DIR="$RESEARCHER_CODE_SEARCH_DIR"
 LIB="${SCRIPT_DIR}/researcher_lib.py"
 if ! command -v python3 &>/dev/null || [ ! -f "$LIB" ]; then
     echo "ERROR: python3 and ${LIB} are required. Exiting." >&2
+    exit 1
+fi
+# The plugin's commit, recorded with each launch in run-config.json.
+if ! PLUGIN_COMMIT=$(git -C "$REPO_DIR" rev-parse HEAD); then
+    echo "ERROR: could not read the plugin's commit (git rev-parse HEAD in ${REPO_DIR} failed, its error is above); the runner records it with every run, so it must run from a git checkout. Exiting." >&2
     exit 1
 fi
 # The workflow steps the runner treats specially (commands/researcher-auto-step.md
@@ -94,15 +118,8 @@ FAST_TRACK_MIN_STEP=5
 # Bounded so a genuinely stuck step still fails instead of looping forever.
 STEP_MAX_ATTEMPTS="${RESEARCHER_STEP_ATTEMPTS:-3}"
 RETRY_DELAY_SECONDS="${RESEARCHER_RETRY_DELAY_SECONDS:-15}"
-# Optional hook: a shell command printing the still-outstanding external
-# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
-# its answer (no output: no jobs); a non-zero exit is an error, logged, and the
-# answer is unknown. While it reports jobs, or cannot say, a step that did not
-# advance is WAITING on external compute, not failing — so the attempt is
-# refunded instead of spent. Empty: no hook.
-JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
-# Each call of JOB_WAIT_CMD is stopped after this long; it covers the `timeout 90`
-# inside the mats profile's command (and agent-board's).
+# Each call of JOB_WAIT_CMD (a run setting, below) is stopped after this long;
+# it covers the `timeout 90` inside the mats profile's command (and agent-board's).
 JOB_WAIT_CMD_TIMEOUT_SECONDS="${RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS:-120}"
 JOB_WAIT_POLL_SECONDS="${RESEARCHER_JOB_WAIT_POLL_SECONDS:-120}"
 JOB_WAIT_MAX_SECONDS="${RESEARCHER_JOB_WAIT_MAX_SECONDS:-14400}"
@@ -134,37 +151,100 @@ case "$RUN_OWNER" in
 esac
 TOPIC="${1:-}"
 
-# Provider selection. RESEARCHER_MODEL remains a backwards-compatible
-# provider-specific override; the named variables avoid ambiguous saved config.
-BACKEND="${RESEARCHER_BACKEND:-claude}"
 SKIP_PUBLISH="${RESEARCHER_SKIP_PUBLISH:-false}"
 SKIP_EMAIL="${RESEARCHER_SKIP_EMAIL:-false}"
 SKIP_GPU_CHECK="${RESEARCHER_SKIP_GPU_CHECK:-false}"
 LINK_OUTPUT="${RESEARCHER_LINK_OUTPUT:-true}"
-CODEX_IGNORE_USER_CONFIG="${RESEARCHER_CODEX_IGNORE_USER_CONFIG:-true}"
-ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
 PAUSED=false
+
+RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
+# The workflow statuses that end a run (is_terminal_status).
+TERMINAL_STATUSES=$(python3 "$LIB" terminal-statuses)
+
+# The runner's functions live in scripts/runner/, one file per concern; this file
+# holds the configuration and the top-level flow.
+# shellcheck source=runner/common.sh
+source "${SCRIPT_DIR}/runner/common.sh"
+# shellcheck source=runner/runs.sh
+source "${SCRIPT_DIR}/runner/runs.sh"
+# shellcheck source=runner/state.sh
+source "${SCRIPT_DIR}/runner/state.sh"
+# shellcheck source=runner/settings.sh
+source "${SCRIPT_DIR}/runner/settings.sh"
+# shellcheck source=runner/provider.sh
+source "${SCRIPT_DIR}/runner/provider.sh"
+# shellcheck source=runner/steps.sh
+source "${SCRIPT_DIR}/runner/steps.sh"
+# shellcheck source=runner/publish.sh
+source "${SCRIPT_DIR}/runner/publish.sh"
+# shellcheck source=runner/notify.sh
+source "${SCRIPT_DIR}/runner/notify.sh"
+
+# --- The run to resume, and its settings ---
+# The run settings (researcher_lib.py RUN_SETTINGS: backend, models, compute
+# profile, knowledge base, limits, ...) a run was created with are saved in its
+# run-config.json. A resumed run takes each one this launch's environment does
+# not set from there; setting one to another value needs the run's owner or
+# RESEARCHER_ALLOW_CONFIG_CHANGE=true (RESEARCHER_ALLOW_BACKEND_SWITCH=true, for
+# the backend alone), or the run exits 2 (restore_run_settings). Everything
+# below that reads a run setting comes after this.
+RUN_SETTINGS_LIST=$(python3 "$LIB" run-settings)
+mapfile -t RUN_SETTINGS <<< "$RUN_SETTINGS_LIST"
+ALLOW_CONFIG_CHANGE="${RESEARCHER_ALLOW_CONFIG_CHANGE:-false}"
+ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
+# The accepted changes, a JSON list, which write_run_config records.
+RUN_CONFIG_CHANGES="[]"
+IN_PROGRESS=""
+if [ -n "$PIN_RUN_DIR" ]; then
+    IN_PROGRESS=$(pinned_run) || exit 2
+elif ! is_true "$NO_RESUME"; then
+    IN_PROGRESS=$(find_in_progress_run) || IN_PROGRESS=""
+fi
+if [ -n "$IN_PROGRESS" ]; then
+    restore_run_settings "$IN_PROGRESS"
+fi
+
+# The limits the steps keep to, which the runtime header gives them. The step
+# ends the audit loop at MAX_AUDIT_ROUNDS; the runner's own ceiling (in the step
+# loop below) is one round more, so it only stops a step that ignores the limit.
+MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
+MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
+EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
+MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
+# Optional hook: a shell command printing the still-outstanding external
+# (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
+# its answer (no output: no jobs); a non-zero exit is an error, logged, and the
+# answer is unknown. While it reports jobs, or cannot say, a step that did not
+# advance is WAITING on external compute, not failing, so the attempt is
+# refunded instead of spent. Empty: no hook.
+JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
+
+# Provider selection. RESEARCHER_MODEL remains a backwards-compatible
+# provider-specific override; the named variables avoid ambiguous saved config.
+BACKEND="$RESEARCHER_BACKEND"
+CODEX_IGNORE_USER_CONFIG="$RESEARCHER_CODEX_IGNORE_USER_CONFIG"
 
 # One branch per backend in researcher_lib.py BACKENDS (and in runner/provider.sh).
 case "$BACKEND" in
     claude)
-        PROVIDER_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
-        MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CLAUDE_MODEL:-fable}}"
+        PROVIDER_BIN="$RESEARCHER_CLAUDE_BIN"
+        MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CLAUDE_MODEL}"
         AGENT_LABEL="Claude ${MODEL}"
         CONTINUE_COMMAND="/researcher-continue"
         COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
         ;;
     codex)
-        PROVIDER_BIN="${RESEARCHER_CODEX_BIN:-codex}"
-        MODEL="${RESEARCHER_MODEL:-${RESEARCHER_CODEX_MODEL:-gpt-6-astra}}"
-        CODEX_REASONING="${RESEARCHER_CODEX_REASONING:-xhigh}"
-        CODEX_FAST_MODEL="${RESEARCHER_CODEX_FAST_MODEL:-gpt-6.1-sol}"
-        CODEX_FAST_REASONING="${RESEARCHER_CODEX_FAST_REASONING:-medium}"
+        PROVIDER_BIN="$RESEARCHER_CODEX_BIN"
+        MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CODEX_MODEL}"
+        CODEX_REASONING="$RESEARCHER_CODEX_REASONING"
+        CODEX_FAST_MODEL="$RESEARCHER_CODEX_FAST_MODEL"
+        CODEX_FAST_REASONING="$RESEARCHER_CODEX_FAST_REASONING"
+        # The deep workers run the parent's model and effort unless set apart.
         CODEX_DEEP_MODEL="${RESEARCHER_CODEX_DEEP_MODEL:-${MODEL}}"
         CODEX_DEEP_REASONING="${RESEARCHER_CODEX_DEEP_REASONING:-${CODEX_REASONING}}"
-        CODEX_SANDBOX="${RESEARCHER_CODEX_SANDBOX:-danger-full-access}"
-        CODEX_APPROVAL_POLICY="${RESEARCHER_CODEX_APPROVAL_POLICY:-never}"
-        CODEX_MAX_SUBAGENTS="${RESEARCHER_CODEX_MAX_SUBAGENTS:-4}"
+        CODEX_SANDBOX="$RESEARCHER_CODEX_SANDBOX"
+        CODEX_APPROVAL_POLICY="$RESEARCHER_CODEX_APPROVAL_POLICY"
+        CODEX_MAX_SUBAGENTS="$RESEARCHER_CODEX_MAX_SUBAGENTS"
         AGENT_LABEL="OpenAI Codex ${MODEL} (${CODEX_REASONING})"
         CONTINUE_COMMAND="\$researcher:researcher-continue"
         COMMIT_ATTRIBUTION="Generated-By: OpenAI Codex (${MODEL}, ${CODEX_REASONING})"
@@ -175,70 +255,66 @@ case "$BACKEND" in
         ;;
 esac
 
-RESEARCH_IDEAS_LABEL=$(python3 "$LIB" research-ideas-label)
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
-# The workflow statuses that end a run (is_terminal_status).
-TERMINAL_STATUSES=$(python3 "$LIB" terminal-statuses)
-EMAIL_TO="${RESEARCHER_EMAIL_TO:-titusbuckworth@gmail.com}"
-export RESEARCHER_EMAIL_TO="$EMAIL_TO"
+EMAIL_TO="$RESEARCHER_EMAIL_TO"
 # The results email goes from the agents' mail account (agent-mail), never from
-# Titus's own Gmail, and through the mailroom's pre-send review like every
-# agent's mail to him. A Claude session writes and sends it, so his reply comes
+# the recipient's own Gmail, and through the mailroom's pre-send review like
+# every agent's mail. A Claude session writes and sends it, so the reply comes
 # back to that session, whichever backend ran the research; a Codex run uses
 # EMAIL_CLAUDE_MODEL for it. Only when the Claude CLI is not installed does the
 # run's own backend write it, and it then goes unrouted (no review, replies to
 # the orchestrator).
 SEND_EMAIL="${SCRIPT_DIR}/send-results-email.sh"
-EMAIL_CLAUDE_BIN="${RESEARCHER_CLAUDE_BIN:-claude}"
+EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
 if [ "$BACKEND" = "claude" ]; then
     EMAIL_CLAUDE_MODEL="$MODEL"
 else
-    EMAIL_CLAUDE_MODEL="${RESEARCHER_EMAIL_CLAUDE_MODEL:-sonnet}"
+    EMAIL_CLAUDE_MODEL="$RESEARCHER_EMAIL_CLAUDE_MODEL"
 fi
 
 # How the reader of the results email reaches the machine this run executed on, so
 # the email's "How to Continue This Research" steps are literally runnable. This is
-# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname — any
-# machine not in the table below must set RESEARCHER_HOST_ALIAS, or the run exits 2.
+# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname: a
+# machine whose short hostname has no "hostname=alias" pair in RESEARCHER_HOST_ALIASES
+# (space-separated) must set RESEARCHER_HOST_ALIAS, or the run exits 2.
 # The value "local" suppresses the ssh step entirely (run and reader on the same machine).
 if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
     if ! RUN_HOSTNAME=$(hostname -s); then
         echo "ERROR: could not read this machine's hostname (hostname -s failed); set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for it, or to 'local'." >&2
         exit 2
     fi
-    case "$RUN_HOSTNAME" in
-        titus-MS-7A59) HOST_ALIAS="desktop" ;;
-        *)
-            echo "ERROR: host '${RUN_HOSTNAME}' is not in the table; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
-            exit 2
-            ;;
-    esac
+    HOST_ALIAS=""
+    read -ra HOST_ALIAS_PAIRS <<< "${RESEARCHER_HOST_ALIASES:-}"
+    for pair in ${HOST_ALIAS_PAIRS[@]+"${HOST_ALIAS_PAIRS[@]}"}; do
+        if [ "${pair%%=*}" = "$RUN_HOSTNAME" ]; then
+            HOST_ALIAS="${pair#*=}"
+        fi
+    done
+    if [ -z "$HOST_ALIAS" ]; then
+        echo "ERROR: host '${RUN_HOSTNAME}' is not in RESEARCHER_HOST_ALIASES; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
+        exit 2
+    fi
 else
     HOST_ALIAS="$RESEARCHER_HOST_ALIAS"
 fi
 
-# Compute profile for this run — a human-readable description of the hardware/budget
-# experiments may use. Hardware-agnostic: the default describes the local desktop, but
-# override it for other backends, e.g.
-#   RESEARCHER_COMPUTE_PROFILE='Modal A100 40GB on-demand, ~$3.50/hr, up to $30 budget'
-#   RESEARCHER_COMPUTE_PROFILE='Lambda 8xH100 80GB node'
-#   RESEARCHER_COMPUTE_PROFILE='tinker fine-tuning API (managed training), no local GPU'
-# Paid compute (Modal, Lambda, Slurm elastic-*, HF endpoints) must be registered with
-# cloud-watch straight after launch and stopped before the step ends (the experiment
-# rules in commands/researcher-auto-step.md and agents/experiment.md say how).
-# Every step reads this from state.md (compute_profile:) to size experiments and to triage
-# which limitations are fixable now vs genuine future work. Nothing is hard-coded to a 3090.
-#
-# Short presets expand to a full description (see docs/COMPUTE-MATS.md):
-#   RESEARCHER_COMPUTE_PROFILE=local   # local NVIDIA GPU (default)
-#   RESEARCHER_COMPUTE_PROFILE=mats    # MATS Slurm cluster (free L40s), submitted remotely over SSH
-COMPUTE_PROFILE_LOCAL="Local NVIDIA RTX 3090 (24GB VRAM); CPU fallback available. No cloud GPU or paid API budget provisioned for this run. Prefer lightweight experiments (small open-weight models), each targeting under 30 min runtime. Max 5 experiments."
+# Compute profile for this run: a human-readable description of the hardware and
+# budget experiments may use. Every step reads it from state.md (compute_profile:)
+# to size experiments and to triage which limitations are fixable now vs genuine
+# future work. RESEARCHER_COMPUTE_PROFILE is `mats`, the text below (not
+# recommended for new work), or anything resolve_compute_profile
+# (scripts/config.sh) takes: a preset in config/compute-profiles/, or profile
+# text. apply_compute_budget then requires RESEARCHER_COMPUTE_BUDGET_USD for a
+# paid profile and puts it in the text.
+# The text's "30 min" and "Max 5 experiments" predate the configured limits
+# (RESEARCHER_EXPERIMENT_MINUTES, RESEARCHER_MAX_EXPERIMENTS), which the runtime
+# header gives every step and which win. The line stays byte-for-byte as it is:
+# agent-board's agent-spare reads it by regex.
 COMPUTE_PROFILE_MATS="MATS Slurm cluster, driven REMOTELY over SSH from wherever this run is executing (laptop or desktop) - you are NOT on the cluster. Every cluster command is prefixed: ssh mats '<cmd>' for the dev/login node, ssh mats-controller '<cmd>' for the controller (the only place gpu-avail and gpu-cost exist). AUTHORIZED COMPUTE: the FREE 'compute' partition only - one shared always-on node with 8x NVIDIA L40 (48GB VRAM each). Your concurrent cap across all your jobs is 6 GPUs, 124 CPUs, and 384GB RAM; max wall time is 24h per job. Request 1 GPU (--gres=gpu:1) unless the experiment genuinely needs more, and up to 6 when it does (single node, so torchrun/FSDP works). Sizing on 48GB: fp16 inference up to ~20B params, LoRA/QLoRA fine-tuning up to ~7B (13B with care), full fine-tuning only up to ~2-3B. Add --qos=debug for validation runs under 2h to jump the queue. PAID elastic-* partitions (A100/H100) are NOT authorized for autonomous runs (they bill by the hour and need Titus's explicit confirmation): if an experiment needs more than 6 L40s or more VRAM per device, do not attempt it - record a FAIL-on-affordability with the exact resource ask and continue. WORKFLOW for each experiment: (1) write the code and an sbatch script locally under experiments/exp-NNN/; (2) stage it with rsync -avP experiments/exp-NNN/ mats:/mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN/; (3) submit with ssh mats 'cd /mnt/nw/home/t.buckworth/researcher-runs/<run-id>/exp-NNN && mkdir -p logs && sbatch run.sbatch' - create logs/ BEFORE sbatch, because Slurm opens the output file at job launch and an in-script mkdir is too late; (4) poll with ssh mats 'squeue -u t.buckworth' until the job leaves the queue (PD pending, R running, CG completing), sleeping 60s between polls rather than busy-looping - the free partition is shared and a PD (Resources) wait of tens of minutes is normal, NOT a failure, so keep waiting; do NOT end the step while a job you submitted is still queued or running - if you must stop, first record the job id and its experiment in state.md so the next attempt resumes waiting instead of resubmitting; and before submitting anything, run squeue and check whether a job for this experiment is already queued or running, because the step may be retried after an interruption and duplicate submissions waste the shared partition; (5) pull results back with rsync -avP mats:.../exp-NNN/ experiments/exp-NNN/ and copy the full slurm log into run.log. NEVER run training, fine-tuning, heavy inference, or long CPU loops in an ssh shell on the dev node - it is the shared login node and that is the cluster's worst etiquette violation. Never run agents or jobs on the controller. The local machine this run executes on is for orchestration, plotting, and light analysis of returned results only - do not silently fall back to a local GPU for experiments under this profile. Job script requirements: all #SBATCH lines must precede the first command (any command above them silently disables every directive below); include --partition=compute, --gres=gpu:1, a realistic --time, --job-name, --cpus-per-task=8, --mem=32G, --output=logs/slurm-%j.out. Storage on the cluster: code, checkpoints, and final results under /mnt/nw/home/t.buckworth (persistent NFS, NOT backed up - pull anything irreplaceable back to this machine); HuggingFace cache, dataset shards, and intermediate outputs under /ephemeral/t.buckworth (fast local scratch, wiped on reboot) via HF_HOME=/ephemeral/t.buckworth/hf. Every job script also exports TMPDIR=/ephemeral/t.buckworth/tmp, XDG_CACHE_HOME=/ephemeral/t.buckworth/cache and WANDB_DIR=/ephemeral/t.buckworth/wandb, and runs mkdir -p on all four first: nothing bulky may go in /tmp, which is the worker's root disk (filling it drains the node for everyone). Inside every job script: source ~/venv/bin/activate (the cluster's shared venv) and run python with -u so logs are not buffered. That venv pins torch 2.5.1+cu121 to match the workers' CUDA 12.2 driver - do NOT upgrade torch or install one from default PyPI, which breaks CUDA on every job. Diagnostics: ssh mats 'scontrol show job <jobid>' explains a stuck job; sacct works only from the controller (it errors with Connection refused on the dev node); nvidia-smi on the dev node fails because there is no GPU there, which is expected; on compute, nvidia-smi inside a job lists all 8 physical GPUs but you only own \$CUDA_VISIBLE_DEVICES; an empty .out file on a running job is usually stdout buffering. scancel anything left idle. Prefer lightweight experiments (small open-weight models), each targeting under 30 min of GPU time. Max 5 experiments."
 
 # COMPUTE_PROFILE_NAME (the preset, or "custom") is for the startup log line.
-case "${RESEARCHER_COMPUTE_PROFILE:-}" in
-    ""|local|LOCAL) COMPUTE_PROFILE="$COMPUTE_PROFILE_LOCAL"; COMPUTE_PROFILE_NAME=local ;;
+case "$RESEARCHER_COMPUTE_PROFILE" in
     mats|MATS|mats-cluster)
         COMPUTE_PROFILE="$COMPUTE_PROFILE_MATS"
         COMPUTE_PROFILE_NAME=mats
@@ -249,19 +325,23 @@ case "${RESEARCHER_COMPUTE_PROFILE:-}" in
         # so that it, not run_hook, stops a slow squeue.
         : "${JOB_WAIT_CMD:=set -o pipefail; timeout 90 ssh -o BatchMode=yes -o ConnectTimeout=20 mats \"squeue -u t.buckworth -h -o '%i %Z'\" | (grep -F '{run_id}' || [ \$? -eq 1 ])}"
         ;;
-    *) COMPUTE_PROFILE="$RESEARCHER_COMPUTE_PROFILE"; COMPUTE_PROFILE_NAME=custom ;;
+    *)
+        # Exits 2 for a value that is no preset, 1 when a preset cannot be read.
+        resolve_compute_profile "$RESEARCHER_COMPUTE_PROFILE" || exit
+        ;;
 esac
+apply_compute_budget || exit 2
 
 # Global research knowledge base (the compounding wiki). Optional: a run works
 # identically without one. Set RESEARCHER_KB_DIR=none to disable explicitly, or
 # bootstrap one with scripts/kb-init.sh. Only a directory that holds a
 # KB-SCHEMA.md is a knowledge base: with RESEARCHER_KB_DIR unset, the default
-# path without one means no KB; an explicit path without one exits 2, rather
-# than sending agents to write pages into an unstructured directory or quietly
-# running without the KB that was asked for.
+# path (RESEARCHER_DEFAULT_KB_DIR) without one means no KB; an explicit path
+# without one exits 2, rather than sending agents to write pages into an
+# unstructured directory or quietly running without the KB that was asked for.
 case "${RESEARCHER_KB_DIR:-}" in
     "")
-        KB_DIR="${HOME}/pyg/research-wiki"
+        KB_DIR="$RESEARCHER_DEFAULT_KB_DIR"
         [ -f "${KB_DIR}/KB-SCHEMA.md" ] || KB_DIR=""
         ;;
     none) KB_DIR="" ;;
@@ -273,23 +353,6 @@ case "${RESEARCHER_KB_DIR:-}" in
         KB_DIR="$RESEARCHER_KB_DIR"
         ;;
 esac
-
-# The runner's functions live in scripts/runner/, one file per concern; this file
-# holds the configuration and the top-level flow.
-# shellcheck source=runner/common.sh
-source "${SCRIPT_DIR}/runner/common.sh"
-# shellcheck source=runner/runs.sh
-source "${SCRIPT_DIR}/runner/runs.sh"
-# shellcheck source=runner/state.sh
-source "${SCRIPT_DIR}/runner/state.sh"
-# shellcheck source=runner/provider.sh
-source "${SCRIPT_DIR}/runner/provider.sh"
-# shellcheck source=runner/steps.sh
-source "${SCRIPT_DIR}/runner/steps.sh"
-# shellcheck source=runner/publish.sh
-source "${SCRIPT_DIR}/runner/publish.sh"
-# shellcheck source=runner/notify.sh
-source "${SCRIPT_DIR}/runner/notify.sh"
 
 if [ -z "${RESEARCHER_OUTPUT_DIR:-}" ] && [ ! -d "$STORAGE_ROOT" ]; then
     echo "ERROR: storage root not mounted at ${STORAGE_ROOT}." >&2
@@ -389,24 +452,10 @@ PRIOR_RUN_ID=""
 FEEDBACK=""
 FOLLOWUP_KEY=""
 
-# Check for in-progress run first
-IN_PROGRESS=""
-if [ -n "$PIN_RUN_DIR" ]; then
-    IN_PROGRESS=$(pinned_run) || exit 2
-elif ! is_true "$NO_RESUME"; then
-    IN_PROGRESS=$(find_in_progress_run) || IN_PROGRESS=""
-fi
+# The run to resume (IN_PROGRESS) was found, and its settings restored, above.
 if [ -n "$IN_PROGRESS" ]; then
     RUN_DIR="$IN_PROGRESS"
     STATE_FILE="${RUN_DIR}/state.md"
-    STORED_BACKEND=$(state_field "$STATE_FILE" agent_backend)
-    if [ -n "$STORED_BACKEND" ] \
-        && [ "$STORED_BACKEND" != "$BACKEND" ] \
-        && ! is_true "$ALLOW_BACKEND_SWITCH"; then
-        log "ERROR: in-progress run uses backend '${STORED_BACKEND}', requested '${BACKEND}'."
-        log "Resume with RESEARCHER_BACKEND=${STORED_BACKEND}, or set RESEARCHER_ALLOW_BACKEND_SWITCH=true deliberately."
-        exit 2
-    fi
     # The run's own wrapper-owned fields (see runtime_fields in runner/state.sh),
     # which ensure_runtime_state writes back after every step.
     ISSUE_NUMBER=$(state_field "$STATE_FILE" issue_number)
@@ -432,12 +481,15 @@ else
     pick_issue
     create_run_dir
 fi
+write_run_config
 
 # --- Step loop ---
 START_TIME=$(date +%s)
 # Bash-owned ceiling for the Step 10 audit-remediation loop, independent of any
 # agent-written field — so a missing or garbage audit_round can never wedge the run.
+# AUDIT_ROUNDS counts the re-entries, so the ceiling allows MAX_AUDIT_ROUNDS + 1 rounds.
 AUDIT_ROUNDS=0
+AUDIT_ROUND_CEILING=$((MAX_AUDIT_ROUNDS + 1))
 
 # A timeout is recorded in state.md, so a run paused during its timeout
 # fast-track still reports the skipped audit when it is resumed.
@@ -503,7 +555,7 @@ while true; do
     # round. AUDIT_ROUNDS (bash-owned) is the authoritative ceiling — no agent field needed.
     if [ "$CURRENT_STEP" -eq "$AUDIT_STEP" ] && [ "$STATUS" = "audit_remediating" ]; then
         AUDIT_ROUNDS=$((AUDIT_ROUNDS + 1))
-        if [ "$AUDIT_ROUNDS" -ge 4 ]; then
+        if [ "$AUDIT_ROUNDS" -ge "$AUDIT_ROUND_CEILING" ]; then
             # Hand over to the report like any other audit exit; the report's
             # own success or failure then decides the status. (Forcing
             # "complete" here used to mark runs complete whose report failed.)

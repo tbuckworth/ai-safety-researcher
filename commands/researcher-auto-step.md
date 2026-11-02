@@ -39,8 +39,8 @@ Parse it as: `<step-number> <run-directory-path>`
 1. **No user interaction.** You do NOT have AskUserQuestion. All decisions are autonomous.
 2. **One step only.** Execute the requested step, update state.md, and stop.
 3. **Agents are leaf workers.** They read files, do focused work, write files. They never talk to users or spawn other agents.
-4. **Respect the compute profile.** Read `compute_profile:` from `state.md` — it describes the hardware/budget this run may use (default: local RTX 3090, but it may be a cloud/managed backend). Size experiments to it and use only the compute it authorizes. Nothing is hard-coded to a specific device; do not assume a local GPU unless the profile says so, and do not exceed it silently.
-5. **Read-only outside run dir.** You may search `$HOME/pyg/` for related code, but NEVER modify files outside the run directory.
+4. **Respect the compute profile.** Read `compute_profile:` from `state.md`: it describes the hardware/budget this run may use (a local GPU, a cloud/managed backend, or a paid budget). Size experiments to it and use only the compute it authorizes. Nothing is hard-coded to a specific device; do not assume a local GPU unless the profile says so, and do not exceed it silently. Keep also to the experiment and audit-round limits in the runtime header.
+5. **Read-only outside run dir.** You may search the local code directory the runtime header names for related code, but NEVER modify files outside the run directory.
 6. **Write state.md atomically.** Write to `state.md.tmp` first, then rename. This prevents corruption if you crash.
 7. **Cap loops.** If state.md shows a loop has already happened (e.g., `novelty_loop_count: 1`), do NOT loop again. Proceed forward.
 8. **Preserve state fields.** When updating `state.md`, retain every existing
@@ -250,8 +250,8 @@ If `state.md` contains `is_followup: true`:
    ```
    (Similarly for blogs → search-002-blogs.md, community → search-003-community.md)
 
-4. **Cross-project code search**: After search agents complete, search `$HOME/pyg/` for code related to the research topic:
-   - Use Grep to search for key terms from the topic across `$HOME/pyg/` in `.py` and `.md` files
+4. **Cross-project code search**: After search agents complete, search the local code directory the runtime header names (`Local code to search`) for code related to the research topic:
+   - Use Grep to search for key terms from the topic across it in `.py` and `.md` files
    - If relevant code is found in other repos, read the key files
    - Append a "## Related Local Code" section to `literature/synthesis.md` noting:
      - Which repo and files are relevant
@@ -491,7 +491,7 @@ This step runs three **independent** adversarial review passes on the same plan.
         - Set `current_step: 6, status: challenge_complete, challenge_outcome: rethink_with_disproof, rethink_disproof: true`
         - Steps 7-10 proceed normally but with only the single disproof experiment
 
-5. **Design-time limitation triage** (only when proceeding; skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Classify each by the Limitation Triage rubric in WORKFLOW.md, judged against `compute_profile` and the remaining experiment-cap headroom (max 5, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap: if adding one would exceed 5, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
+5. **Design-time limitation triage** (only when proceeding; skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Classify each by the Limitation Triage rubric in WORKFLOW.md, judged against `compute_profile` and the remaining experiment-cap headroom (the experiment limit in the runtime header, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap: if adding one would exceed it, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
 
 ---
 
@@ -503,7 +503,7 @@ Do this yourself — no agent needed.
 
 2. **Auto-approve the experiment plan** with these modifications:
    - Remove any experiments marked `[SKIP]` (P_success >= 0.9).
-   - Cap at **5 experiments maximum**. If more than 5, keep the top 5 by lambda ordering.
+   - Cap at the experiment limit in the runtime header. If there are more, keep the top ones by lambda ordering.
    - If `rethink_disproof: true` is in state.md, use only the single disproof experiment from the modified decomposition.
 
 3. Write the approved experiment plan to state.md. List each experiment with:
@@ -552,6 +552,7 @@ If `state.md` contains `is_followup: true`:
       Write results to: <run-dir>/experiments/exp-NNN/results.md
       Run directory: <run-dir>
       Compute profile (from state.md `compute_profile`): <paste the compute_profile value>
+      Limits (from the runtime header): <paste its Experiment limits line>
       """)
       ```
    c. Read results. Check that `preflight.md` exists and that no experiment claims PASS or FAIL alongside a `FAIL` pre-flight row; if one does, send it back once to fix the pipeline or re-label the verdict INCONCLUSIVE (the wrapper counts such a verdict as inconclusive regardless).
@@ -573,7 +574,7 @@ If `state.md` contains `is_followup: true`:
 
 ## Step 10: Audit the Results (Audit-Remediation Loop)
 
-An independent **results-auditor** red-teams the experiment outputs before write-up. Autonomous cap: **R_MAX = 3** remediation rounds. The wrapper re-enters this step while `status: audit_remediating`, and stops the loop when you set `status: audit_complete`.
+An independent **results-auditor** red-teams the experiment outputs before write-up. R_MAX is the audit-round limit in the runtime header. The wrapper re-enters this step while `status: audit_remediating`, and stops the loop when you set `status: audit_complete`.
 
 ### Short-circuit cases (no remediation loop)
 
@@ -610,7 +611,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    - **CONVERGED-POSITIVE** or **HONEST-NEGATIVE**: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <all-supported | true-null>`.
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
    - **NEEDS-REMEDIATION**:
-     - If `n >= 3` (R_MAX) **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
+     - If `n >= R_MAX` **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
      - Otherwise: re-run ONLY the flagged experiment — re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
 
 ### Atomicity

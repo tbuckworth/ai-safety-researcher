@@ -364,7 +364,7 @@ never fails a step.
   | `UNKNOWN` | Its `results.md` has no recognisable verdict line | no |
   | `MISSING` | Its directory exists, but it wrote no `results.md` (it started and stopped) | no |
 
-  The caveats report the experiments that are not valid.
+  The caveats report the experiments that are not valid and a finished run without `paper/paper.pdf` (with the `paper_compile_error` Step 11 records in `state.md`).
 - **Issue comments**: on completion the issue gets a findings comment: the outcome and its caveats, repo / paper / next-steps links (or the local path when nothing was published), the per-experiment verdict table, the audit disposition, and the ranked next steps. A follow-up's parent issue gets the same comment.
 - **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming; if that read fails, the runner exits 1 without running the issue.
 

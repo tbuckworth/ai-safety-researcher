@@ -315,8 +315,7 @@ class VerdictTest(unittest.TestCase):
 class OutcomeTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.run = Path(self.tmp.name) / "run"
-        self.run.mkdir()
+        self.run = make_run(Path(self.tmp.name), "run", status="complete")
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -444,6 +443,19 @@ class OutcomeTest(unittest.TestCase):
         facts = self.outcome()
         self.assertEqual(facts["outcome"], "no-results")
         self.assertFalse(any("theory-only" in r for r in facts["reasons"]))
+
+    def test_finished_run_without_a_paper_says_so(self):
+        self.add_exp("exp-001", "PASS")
+        self.assertIn("paper/paper.pdf was not built", self.outcome()["reasons"])
+        make_run(Path(self.tmp.name), "run", status="complete", paper_compiled="false",
+                 paper_compile_error='"! Undefined control sequence."')
+        self.assertIn("paper/paper.pdf was not built: ! Undefined control sequence.", self.outcome()["reasons"])
+        # A run that stopped early is not expected to have a paper.
+        self.assertFalse(any("paper.pdf" in r for r in self.outcome(status="failed")["reasons"]))
+        write(self.run / "paper" / "paper.pdf", "%PDF")
+        facts = self.outcome()
+        self.assertTrue(facts["paper"])
+        self.assertFalse(any("paper.pdf" in r for r in facts["reasons"]))
 
 
 class IssueCommentTest(unittest.TestCase):

@@ -534,11 +534,14 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     failed          workflow stopped early with no valid results
     paused          provider usage limit; resumable, nothing published
 
-    `success` is whether the outcome is one of SUCCESS_OUTCOMES. The result also
+    `success` is whether the outcome is one of SUCCESS_OUTCOMES. The `reasons`
+    are the caveats, among them a finished run without paper/paper.pdf (with
+    state.md's paper_compile_error when Step 11 recorded one). The result also
     carries what the reports quote from the run directory: the `**Outcome**`
     line of next-steps.md (`findings`), its ranked step titles and the results
     audit's disposition (`audit`), each empty when the file is missing. Reads
-    the run directory; writes nothing.
+    the run directory; writes nothing. Raises OSError when a file it needs
+    cannot be read, state.md included.
     """
     experiments = scan_experiments(run_dir)
     counts: dict[str, int] = {}
@@ -592,6 +595,10 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         reasons.append(f"pre-flight record has no readable check table for {', '.join(unreadable)}")
     if theory_only and has_results:
         reasons.append("theory-only negative result (no experiments were run)")
+    paper = (run_dir / "paper" / "paper.pdf").is_file()
+    if finished and not paper:
+        error = read_frontmatter(run_dir / "state.md").get("paper_compile_error", "")
+        reasons.append("paper/paper.pdf was not built" + (f": {error}" if error else ""))
     reasons.extend(notes or [])
 
     next_steps_file = run_dir / "next-steps.md"
@@ -610,7 +617,7 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
         "publish_state": publish_state,
         "counts": counts,
         "experiments": experiments,
-        "paper": (run_dir / "paper" / "paper.pdf").is_file(),
+        "paper": paper,
         "next_steps": next_steps_file.is_file(),
         "findings": findings,
         "next_step_titles": next_step_titles(run_dir),

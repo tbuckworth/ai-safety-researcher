@@ -125,4 +125,4 @@ Per the repo listing (unverified; confirm before use):
 ---
 
 *Sources per family are listed in [`organisms.yaml`](organisms.yaml). Some individual repo IDs
-(EM small bases, AuditBench behaviours 10–14) are not enumerated in the primary sources.*
+(EM small bases, AuditBench behaviours 10–14) are not listed here; issue #51 tracks them.*

@@ -46,7 +46,7 @@ output/<run-id>/
 │   ├── assumption-analysis.md  # Unstated assumptions surfaced
 │   ├── mentor-review.md        # Senior researcher perspective
 │   ├── pre-mortem.md           # Failure scenario analysis
-│   └── limitation-triage.md    # Design-time limitation triage
+│   └── limitation-triage.md    # Design-time limitation triage (autonomous)
 ├── rethink-rationale.md        # Why the approach does not hold, after RETHINK or UNSALVAGEABLE (autonomous)
 ├── experiments/
 │   ├── exp-001/

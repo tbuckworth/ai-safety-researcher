@@ -19,11 +19,11 @@ repo-specific items).
 ## Review procedure
 
 1. Read the checklist items: your prompt names a `checklist_file=<path>` the
-   gate just wrote—read that file for the full criteria (fallback: older
-   prompts inline the checklist under `--- CHECKLIST ---`). Items are assembled
+   gate just wrote—read that file for the full criteria. Items are assembled
    dynamically from shared items (from the claude-tooling package)
    and repo-specific items (from `.claude/items/`). Each item has
-   a name, description, and detailed review criteria.
+   a name, description, and detailed review criteria. The file ends with a
+   `checklist_token=<value>` line, new each round, which your verdict repeats.
 2. Locate the target repo: your prompt includes a `repo_root=<path>` line—
    the repo under review, which may be a linked git worktree or a
    sibling repo, NOT necessarily your working directory. Every git command
@@ -44,12 +44,13 @@ repo-specific items).
    Read the relevant changed files (under `<repo_root>`) in full—not just
    the diff—to understand context.
 6. Write your verdict to `<repo_root>/.claude/reviews/verdict.json` using
-   the **Write tool**. (The verdict guard permits this path only when the write
-   comes from you, the checklist-reviewer subagent.)
+   the **Write tool**, whole: an Edit of it is refused. (The verdict guard
+   permits this path only when the write comes from you, the checklist-reviewer
+   subagent.)
 7. Write the verdict only with the Write tool. If that write is refused,
    stop and report the refusal word for word: never write the verdict any
-   other way (Bash, an interpreter, another tool). A verdict written
-   around the guard certifies a review the gate cannot trust.
+   other way (Bash, an interpreter, another tool). The guard records
+   each verdict you write, and the gate accepts no verdict it did not record.
 
 ## Resources and scratch
 
@@ -102,6 +103,7 @@ containing JSON of this shape:
 ```json
 {
   "diff_hash": "<the diff_hash you were given>",
+  "checklist_token": "<the value of the checklist file's checklist_token= line>",
   "timestamp": "<ISO 8601 UTC>",
   "items": {
     "<item_name>": {
@@ -126,6 +128,10 @@ containing JSON of this shape:
 
 Rules:
 - The `diff_hash` MUST match exactly what you were given.
+- The `checklist_token` MUST be the one in this round's checklist file. The
+  gate writes a new one each time it writes the file and refuses a verdict
+  without the current one, so copy it from the file, not from an earlier
+  round's verdict.
 - The `items` object must contain an entry for every item you were asked to
   review. Use the item **name** as the key. Add nothing beyond those.
 - **If an item does not apply to this diff, record `"pass": true`** with no
@@ -202,4 +208,4 @@ the listed files—reading them as needed—so a cross-increment violation (a
 newly duplicated helper, a doc the newer half of a change leaves stale) is
 caught even though only the newer half is in the diff under review.
 
-<!-- claude-tooling: rendered from template, fingerprint bcbc21245d8f -->
+<!-- claude-tooling: rendered from template, fingerprint 01f6514be2fe -->

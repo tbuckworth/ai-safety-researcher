@@ -74,13 +74,18 @@ reviewer as the gate's block message says; the steps below are for Codex session
 - Codex runs only trusted project hooks and skips an untrusted one without a word, so until
   `.codex/hooks.json` is trusted in `/hooks` (again after any change to it) there is no gate.
   A commit that goes through with no review is the sign; check `/hooks`.
+- In a linked git worktree, Codex runs the main checkout's `.codex/hooks.json`, not the
+  worktree's: if the main checkout has none there is no gate, and if it has an older one the
+  gate is the older one. Check that file, and trust it in `/hooks`.
 - When the gate blocks a command, spawn the reviewer it asks for: `spawn_agent` with
   `agent_type="checklist-reviewer"`, `fork_turns="none"` and no model override, with the
   gate's prompt as the message. The reviewer must not see the conversation that wrote the
   diff, and a hook refuses any other spawn of it. On a retry, send the new prompt to the same
   reviewer with `followup_task`, or spawn a fresh one if it is gone.
-- To review before a gate asks, run `.venv/bin/claude-tooling review-prompt` (or use
-  `$checklist-review`) and pass its output to a fresh reviewer the same way.
+- To review before a gate asks, run `claude-tooling review-prompt` from the clone's tooling
+  environment,
+  `"$(git rev-parse --path-format=absolute --git-common-dir)/claude-tooling/venv/bin/claude-tooling" review-prompt`
+  (or use `$checklist-review`), and pass its output to a fresh reviewer the same way.
 - Never write `.claude/reviews/` yourself: only the reviewer writes `verdict.json`, with
   `apply_patch`, and hooks refuse every other write there, from `apply_patch` or the shell.
   Reading it is allowed.

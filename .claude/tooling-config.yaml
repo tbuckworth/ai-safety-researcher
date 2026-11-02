@@ -133,4 +133,7 @@ review_gate:
   claude_reviewer_effort: high
   codex_reviewer_model: gpt-6.1-sol
   codex_reviewer_effort: high
-  setup_command: agent-gate setup . --kind software
+
+tooling:
+  source: "git+https://github.com/jr-brown/claude-tooling.git"
+  ref: "v0.3.14"

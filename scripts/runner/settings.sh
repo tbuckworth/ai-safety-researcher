@@ -4,13 +4,24 @@
 # resume may change and owns the file's format.
 # Sourced by scripts/researcher-cron.sh; the functions use its globals.
 
-settings_json() {
-    # settings_json NAME...: a JSON object of each NAME's value, null when unset or empty.
-    local name args=()
-    for name in "$@"; do
-        args+=(--arg "$name" "${!name:-}")
+json_object() {
+    # json_object KEY VALUE [KEY VALUE ...]: a JSON object of the string VALUEs,
+    # with null for an empty one (the runner treats an empty setting as unset).
+    local args=()
+    while [ "$#" -gt 0 ]; do
+        args+=(--arg "$1" "$2")
+        shift 2
     done
     jq -n '$ARGS.named | map_values(if . == "" then null else . end)' ${args[@]+"${args[@]}"}
+}
+
+settings_json() {
+    # settings_json NAME...: a JSON object of each variable NAME's value (json_object).
+    local name pairs=()
+    for name in "$@"; do
+        pairs+=("$name" "${!name:-}")
+    done
+    json_object ${pairs[@]+"${pairs[@]}"}
 }
 
 restore_run_settings() {
@@ -60,15 +71,11 @@ restore_run_settings() {
 }
 
 resolved_settings_json() {
-    # What the run's settings resolved to at this launch, as a JSON object.
-    jq -n --arg model "$MODEL" --arg deep_model "${CODEX_DEEP_MODEL:-}" \
-        --arg deep_reasoning "${CODEX_DEEP_REASONING:-}" --arg email_model "$EMAIL_CLAUDE_MODEL" \
-        --arg preset "$COMPUTE_PROFILE_NAME" --arg profile "$COMPUTE_PROFILE" --arg job_wait "$JOB_WAIT_CMD" \
-        --arg kb "${KB_DIR:-none}" \
-        '{model: $model, codex_deep_model: $deep_model, codex_deep_reasoning: $deep_reasoning,
-          email_claude_model: $email_model, compute_profile_preset: $preset, compute_profile: $profile,
-          job_wait_cmd: $job_wait, knowledge_base: $kb}
-         | map_values(if . == "" then null else . end)'
+    # What the run's settings resolved to at this launch, as a JSON object (json_object).
+    json_object model "$MODEL" codex_deep_model "${CODEX_DEEP_MODEL:-}" \
+        codex_deep_reasoning "${CODEX_DEEP_REASONING:-}" email_claude_model "$EMAIL_CLAUDE_MODEL" \
+        compute_profile_preset "$COMPUTE_PROFILE_NAME" compute_profile "$COMPUTE_PROFILE" \
+        job_wait_cmd "$JOB_WAIT_CMD" knowledge_base "${KB_DIR:-none}"
 }
 
 write_run_config() {
@@ -77,14 +84,13 @@ write_run_config() {
     # plugin's commit) and RUN_CONFIG_CHANGES added to the earlier ones. A run
     # whose settings cannot be saved could not be resumed with them, so a
     # failure stops the run (exit 1).
-    local input temp="${RUN_DIR}/run-config.runtime.tmp"
+    local input launch temp="${RUN_DIR}/run-config.runtime.tmp"
+    launch=$(json_object started "$(date -Iseconds)" plugin_commit "$PLUGIN_COMMIT" owner "$RUN_OWNER" \
+        | jq --argjson timeout "$TIMEOUT_SECONDS" '. + {timeout_seconds: $timeout}')
     input=$(jq -n --argjson settings "$(settings_json "${RUN_SETTINGS[@]}")" \
         --argjson resolved "$(resolved_settings_json)" --argjson changes "$RUN_CONFIG_CHANGES" \
-        --arg started "$(date -Iseconds)" --arg commit "$PLUGIN_COMMIT" --arg owner "$RUN_OWNER" \
-        --argjson timeout "$TIMEOUT_SECONDS" \
-        '{settings: $settings, resolved: $resolved, changes: $changes,
-          launch: {started: $started, plugin_commit: $commit, timeout_seconds: $timeout,
-                   owner: (if $owner == "" then null else $owner end)}}')
+        --argjson launch "$launch" \
+        '{settings: $settings, resolved: $resolved, changes: $changes, launch: $launch}')
     if ! python3 "$LIB" run-config --run-dir "$RUN_DIR" <<< "$input" > "$temp" \
         || ! mv "$temp" "${RUN_DIR}/run-config.json"; then
         rm -f "$temp"

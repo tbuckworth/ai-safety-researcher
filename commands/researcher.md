@@ -304,7 +304,7 @@ Do this yourself — no agent needed.
 
 ## Step 10: Audit the Results (Audit-Remediation Loop)
 
-Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects, never to grind a null into a positive. At most R_MAX audit rounds run (WORKFLOW.md's Step 10 says where R_MAX is set). A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
+Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects, never to grind a null into a positive. WORKFLOW.md's Step 10 defines R_MAX, the most audit rounds that run, and when a round is *stuck*.
 
 1. **Create the audit directory**:
    ```bash

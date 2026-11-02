@@ -34,9 +34,9 @@ prepare_local_repo() {
     if git rev-parse -q --verify HEAD >/dev/null; then
         git branch -M "$branch"
     else
-        # Name the unborn branch explicitly. Relying on git's default branch
-        # name is what left 14 repos empty: runs committed on 'master' and
-        # pushed 'main' ("src refspec main does not match any").
+        # Name the unborn branch explicitly: git's default branch name may be
+        # 'master', and pushing 'main' after a commit on 'master' fails ("src
+        # refspec main does not match any"), leaving the repo empty.
         git symbolic-ref HEAD "refs/heads/${branch}"
     fi
     git remote remove origin 2>/dev/null || true
@@ -100,11 +100,10 @@ git_reason() {
 exclude_secret_findings() {
     # The global pre-commit hook (~/.git-hooks/pre-commit) runs gitleaks and
     # refuses a commit with anything that looks like a secret. Research output
-    # trips it on false positives: on 2026-10-28 a BibTeX cite key in
-    # literature/search-001-academic.md read as a generic API key, and the
-    # commit failed. Scan the staged changes the way the hook does, and leave
-    # each flagged file out of the commit (it stays in the run directory), with
-    # the reason. Never bypass or weaken the scan from here: if it was a real
+    # trips it on false positives (a BibTeX cite key can read as a generic API
+    # key), which fails the commit. Scan the staged changes the way the hook
+    # does, and leave each flagged file out of the commit (it stays in the run
+    # directory), with the reason. Never bypass or weaken the scan from here: if it was a real
     # secret it must not be published, and if not, Titus decides on an allowlist.
     # When the scan cannot run here, that is logged; a commit the hook then
     # refuses fails publishing with the hook's reason (commit_all).
@@ -236,9 +235,9 @@ repo_state() {
 choose_repo_slug() {
     # Prints the first usable name: one that does not exist yet, or an empty
     # repo that already has the requested visibility. Never another run's
-    # repo (the push would be rejected), and never an empty repo left public
-    # by the old master/main bug (results would go public while every report
-    # said private). Returns 1 when every candidate is taken, and 2, printing
+    # repo (the push would be rejected), and never an empty repo with another
+    # visibility (a public one would publish results every report calls
+    # private). Returns 1 when every candidate is taken, and 2, printing
     # why, when GitHub could not be asked about one. Diagnostics go to stderr.
     local slug="$1" candidate state vis
     for candidate in "$slug" "${slug}-$(echo "$RUN_ID" | cut -c1-10 | tr -d '-')" "${slug}-$(date +%H%M%S)"; do
@@ -366,9 +365,8 @@ publish_followup() {
     # Follow-ups push a new branch to the existing repo, in place: the branch
     # starts from the branch the follow-up continues (the prior repo's default
     # branch, or the /tree/<branch> a follow-up of a follow-up names) and this
-    # run's files are laid over it. Nothing is copied — the old version cloned
-    # the prior repo into /tmp and copied the whole run into it, which filled
-    # the root disk and lost both 2026-04 follow-ups (tasks#1919/#1920).
+    # run's files are laid over it. Nothing is copied: a copy of the whole run
+    # in /tmp can fill the root disk (tasks#1919/#1920).
     local branch prior_path base_branch message
     prior_path=$(repo_path_of "$PRIOR_REPO_URL")
     base_branch=$(repo_url_branch "$PRIOR_REPO_URL")

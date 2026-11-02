@@ -162,7 +162,7 @@ The run directory is: **{{argument}}**
 
      <!-- If there's a method comparison table, include it here with column definitions -->
 
-     <!-- Surprising Findings — moved up because this is the most interesting content -->
+     <!-- Surprising Findings: placed early, as the most interesting content -->
      <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px;">
        <h2 style="margin: 0 0 12px 0; font-size: 16px; color: #92400e;">Surprising Findings</h2>
        <ol style="font-size: 14px; padding-left: 20px; margin: 0;">

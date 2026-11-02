@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Pre-flight sanity checks for researcher experiments.
 
-Each check exists because a past autonomous run reported a conclusion that the
-pipeline could not support:
+Each check catches a pipeline that cannot support the conclusion it reports:
 
-  degeneracy   Generated text is fluent, not collapsed. Three fine-tunes that
-               only emitted "QuestionQuestion..." passed the old check, and the
-               run concluded scheming cannot be induced at 3-8B (tasks#1863).
+  degeneracy   Generated text is fluent, not collapsed. A fine-tune that only
+               emits "QuestionQuestion..." says nothing about whether a
+               behaviour can be induced (tasks#1863).
   training     A loss curve is finite and moved in the right direction.
   separation   A metric separates known-positive from known-negative examples
-               before it is used to measure an effect. #1898's "localisation"
-               score was ~0.98 for the routed model AND the unrouted control.
+               before it is used to measure an effect: a score near its ceiling
+               for the treatment and the control alike measures nothing
+               (tasks#1898).
   compare      A treatment-vs-control comparison with the right unit of
                analysis: repeated samples of one prompt are not independent
                (clustered by prompt/scenario), seeds are counted, intervals are
-               reported (tasks#1859 treated 5 repeats x 20 scenarios as n=100).
+               reported (5 repeats of 20 scenarios are 20 independent units, not
+               100; tasks#1859).
 
 Usage (each prints a JSON report on stdout and a summary on stderr):
 

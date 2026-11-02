@@ -122,7 +122,7 @@ decisions: []
 
 - At least 3 clarifying questions asked and answered.
 - `state.md` exists with clarifications recorded.
-- `method-spec.md` exists. Later steps implement and audit against it, so a method cannot drift into a different one under the same name (a past run defined "Salad" as token alternation and implemented logit ensembling).
+- `method-spec.md` exists. Later steps implement and audit against it, so a method cannot drift into a different one under the same name (for example, a method defined as token alternation implemented as logit ensembling).
 
 ---
 

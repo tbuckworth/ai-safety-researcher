@@ -71,9 +71,9 @@ idea and `agent-spare launch` starts `researcher-cron.sh` for that one issue in
 its own systemd unit, setting the backend, models, compute profile,
 `RESEARCHER_GUARD_CMD`, `RESEARCHER_JOB_WAIT_CMD` and `RESEARCHER_OWNER=agent-spare`.
 The wrapper's output goes to `~/.local/state/agent-board/spare/run.log`; step
-logs stay in `logs/` in the output directory. The old crontab line is disabled.
+logs stay in `logs/` in the output directory.
 
-A crontab entry still works for a plain scheduled run, e.g.
+A crontab entry also works for a plain scheduled run, e.g.
 ```bash
 0 2 * * * /path/to/researcher/scripts/researcher-cron.sh >> /path/to/researcher/logs/cron.log 2>&1
 ```
@@ -130,7 +130,7 @@ whole number of at least 1).
 | `RESEARCHER_CODEX_DEEP_MODEL` | Codex non-search workers (default: the parent model) |
 | `RESEARCHER_CODEX_DEEP_REASONING` | Codex non-search-worker effort (default: the parent's) |
 | `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (a Claude run uses its own model) |
-| `RESEARCHER_MODEL` | Legacy override for the selected backend (default: unset) |
+| `RESEARCHER_MODEL` | Overrides the selected backend's model, `RESEARCHER_CLAUDE_MODEL` or `RESEARCHER_CODEX_MODEL` (default: unset) |
 
 The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
 follow) translates Claude `Task(...)` blocks into leaf subagents. It uses the
@@ -156,8 +156,8 @@ default so personal hooks and plugins do not alter cron behavior.
 | `RESEARCHER_CODEX_IGNORE_USER_CONFIG` | `true` or `false` |
 | `RESEARCHER_CODEX_MAX_SUBAGENTS` | Most concurrent subagents, at least 1 |
 
-`danger-full-access` matches the pre-existing Claude
-`--dangerously-skip-permissions` behavior and is needed by experiments that
+`danger-full-access` matches how the runner starts Claude
+(`--dangerously-skip-permissions`) and is needed by experiments that
 install dependencies, populate model caches, or use the GPU. Use it only on
 the dedicated trusted desktop. For a constrained run, choose
 `workspace-write`; expect dependency downloads or writes outside the run
@@ -350,7 +350,7 @@ never fails a step.
   - `status:claude-processed` — completed
   - `status:codex-researching` — currently being worked on by Codex
   - `status:codex-processed` — completed by Codex
-- **Repos**: Created as `<RESEARCHER_GITHUB_OWNER>/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility (the old bug left empty *public* repos), gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
+- **Repos**: Created as `<RESEARCHER_GITHUB_OWNER>/research-<slug>`, **private** by default (`RESEARCHER_REPO_VISIBILITY`). The run directory is committed in place on an explicitly named `main` branch and pushed as `HEAD:refs/heads/main`; publishing counts as done only when `git ls-remote` shows the remote branch at exactly the local commit. A slug already holding another run's repo, or an existing empty repo with the wrong visibility, gets a date suffix instead. After creation the visibility is read back from GitHub; on a mismatch nothing is pushed. Oversized files and nested git repositories stay local and are listed as caveats in the outcome.
 - **Final outcome**: written to `state.md` (`final_outcome`, `publish_state`) and `run-outcome.json`, whose `success` is true exactly for the outcomes that exit 0 (5 when a deliverable failed; see [Exit codes](#exit-codes)):
 
   | Outcome | Meaning | Exit |
@@ -363,7 +363,7 @@ never fails a step.
   | `failed` | Stopped early with no valid results | 4 |
   | `paused` | Provider usage limit; resumable, nothing published | 3 |
 
-  A timeout no longer overwrites a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
+  A timeout does not overwrite a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
 
   Each experiment in `run-outcome.json` has one of these verdicts (`VERDICTS` in `scripts/researcher_lib.py`); only a valid one counts as a result:
 
@@ -424,7 +424,8 @@ never fails a step.
 **Codex works interactively but cron says it is missing**:
 - Confirm `~/.local/bin/codex` exists
 - Run `bash -lc 'codex --version'`
-- The current wrapper prepends `~/.local/bin`; older deployed copies must be updated
+- The runner prepends `~/.local/bin` to `PATH`; if `codex` is installed elsewhere,
+  set `RESEARCHER_CODEX_BIN` to its path
 
 **Codex step cannot install or download dependencies**:
 - Check `RESEARCHER_CODEX_SANDBOX`
@@ -560,5 +561,4 @@ step). So:
   `--unrouted`: not reviewed, and replies go to the orchestrator. If that Codex
   writer fails, nothing is sent either, and the run exits 5.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
-  is not `complete` (e.g. `[UNPUBLISHED]`). The old Gmail label "Researcher" is
-  gone: the agents' account cannot label the recipient's mailbox.
+  is not `complete` (e.g. `[UNPUBLISHED]`).

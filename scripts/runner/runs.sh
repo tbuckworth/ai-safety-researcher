@@ -118,8 +118,7 @@ select_issue() {
         --limit 50)
 
     # Skips claimed/processed issues, issues already run on this machine, and
-    # duplicate follow-up requests (tasks#1919/#1920 were the same request filed
-    # twice and run on consecutive nights).
+    # duplicate follow-up requests (tasks#1919/#1920: one request filed twice).
     is_true "$ALLOW_RERUN" && allow_rerun_flag=(--allow-rerun)
     picked=$(echo "$issues" | python3 "$LIB" pick --output-dir "$OUTPUT_DIR" ${allow_rerun_flag[@]+"${allow_rerun_flag[@]}"})
     fi

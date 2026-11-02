@@ -33,11 +33,10 @@ EOF
 
 # Strip a command file's YAML frontmatter, and NOTHING else.
 #
-# The obvious `sed '/^---$/,/^---$/d'` is wrong and was wrong here for a long
-# time: sed pairs up EVERY `---` in the file, so with markdown section
-# separators it deletes alternating sections of the document. That silently
-# dropped half the workflow — including whole steps — from every step prompt.
-# Match only the frontmatter: a `---` on line 1, up to the next `---`.
+# The obvious `sed '/^---$/,/^---$/d'` is wrong: sed pairs up EVERY `---` in
+# the file, so with Markdown section separators it deletes alternate sections
+# of the document, whole workflow steps among them, without a word. Match only
+# the frontmatter: a `---` on line 1, up to the next `---`.
 strip_frontmatter() {
     awk '
         NR == 1 && $0 == "---" { in_fm = 1; next }

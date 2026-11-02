@@ -188,7 +188,7 @@ ${body}"
 }
 
 write_gitignore() {
-    # Written into every run directory, which is git-initialised in place at
+    # Written into every run directory, which is git-initialized in place at
     # publish time. A follow-up also ignores prior/ (the previous run's copied
     # artifacts, already in the repo it continues).
     local dir="$1"

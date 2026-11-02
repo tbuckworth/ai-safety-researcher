@@ -467,7 +467,7 @@ Each limitation calls for a decision: fix it now, or defer it. Wherever limitati
 (Step 11), classify each one against the run's `compute_profile` and the
 remaining budget (experiment-cap headroom, wall-clock left):
 
-1. **fix-now-free**: addressable by re-analysis of data or artifacts the run
+1. **fix-now-free**: addressable by re-analysis of data or artefacts the run
    already has (add a CI, a paired statistic, a held-out re-score). It costs
    nothing, so do it.
 2. **fix-now-cheap**: addressable by a small new run that fits the

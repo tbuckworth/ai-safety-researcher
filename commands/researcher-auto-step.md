@@ -113,7 +113,7 @@ Do this yourself — no agent needed.
    - Copy `prior/references.bib` → `references.bib` (if exists)
    - Copy `prior/method-spec.md` → `method-spec.md` (if exists), then amend it for anything the feedback changes. If the prior run has none, write one (step 3a below) — always, whatever the `followup_focus`.
 
-   Write a `followup-summary.md` file summarizing: what the prior run did, what changed, which artifacts are reused vs regenerated. This helps downstream steps understand the context.
+   Write a `followup-summary.md` file summarising: what the prior run did, what changed, which artifacts are reused vs regenerated. This helps downstream steps understand the context.
 
    **Skip to step 3 below** (write state.md with follow-up metadata preserved).
 
@@ -396,7 +396,7 @@ If `state.md` contains `is_followup: true`:
 
 ### Process
 
-This step runs three **independent** adversarial review passes on the same plan. They do **not** build on each other — dispatch all three in a single message so they run in parallel, each forming its own view from the base artefacts. Independence is the point: it stops the later passes from anchoring on the earlier ones.
+This step runs three **independent** adversarial review passes on the same plan. They do **not** build on each other — dispatch all three in a single message so they run in parallel, each forming its own view from the base artifacts. Independence is the point: it stops the later passes from anchoring on the earlier ones.
 
 1. **Create challenge directory** (if not exists):
    ```bash
@@ -428,7 +428,7 @@ This step runs three **independent** adversarial review passes on the same plan.
    that have actually occurred in prior runs of this workflow. A lesson that
    applies to this plan is evidence, not speculation: weight it accordingly."
 
-2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
+2. **Spawn all three challenge agents in parallel** — issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artifacts; no agent reads another's output.
    ```
    Task(subagent_type="researcher:assumption-challenger", prompt="""
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md

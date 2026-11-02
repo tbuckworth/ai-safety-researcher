@@ -19,6 +19,7 @@ agent-spare (or by hand) → researcher-cron.sh
          ├─ Loop: <claude|codex> researcher-auto-step <N> <run-dir>
          │    └─ Step N: spawn agents, make decisions, update state.md
          │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
+         ├─ No next-steps.md (stopped before Step 11): <claude|codex> researcher-auto-next-steps <run-dir>
          ├─ Create GitHub repo (gh CLI)
          ├─ Email: a Claude session writes it and sends it with agent-mail (reviewed)
          └─ Update issue: status:<backend>-processed
@@ -294,10 +295,12 @@ hypothesis it tests, the resources it needs, and the result that would kill the
 line — plus a `## Not Worth Pursuing` list so a follow-up doesn't re-tread ruled-out
 ground.
 
-A run that never reaches Step 11 still gets one: the email composer writes it
-from whatever artifacts exist, and diagnoses explicitly whether the failure was
+A run that ends without one (it stopped before Step 11) gets one before it is
+published, from one session of its backend running
+`commands/researcher-auto-next-steps.md`, which diagnoses whether the failure was
 **orchestration** (the workflow broke, the science is untouched, resume) or
-**scientific** (the hypothesis or construct didn't survive, redesign). Every
+**scientific** (the hypothesis or construct didn't survive, redesign). If that
+session fails, the outcome lists `next-steps.md` as missing. Every
 results email carries the top steps and a literal, copy-pasteable
 "How to Continue This Research" block.
 
@@ -364,7 +367,7 @@ never fails a step.
   | `UNKNOWN` | Its `results.md` has no recognisable verdict line | no |
   | `MISSING` | Its directory exists, but it wrote no `results.md` (it started and stopped) | no |
 
-  The caveats report the experiments that are not valid and a finished run without `paper/paper.pdf` (with the `paper_compile_error` Step 11 records in `state.md`).
+  The caveats report the experiments that are not valid, a finished run without `paper/paper.pdf` (with the `paper_compile_error` Step 11 records in `state.md`), and a run that is not paused without `next-steps.md`.
 - **Issue comments**: on completion the issue gets a findings comment: the outcome and its caveats, repo / paper / next-steps links (or the local path when nothing was published), the per-experiment verdict table, the audit disposition, and the ranked next steps. A follow-up's parent issue gets the same comment.
 - **Duplicates**: the queue skips issues claimed or processed by either backend, issues that already have a run directory here, and follow-ups whose request (follow-up key) was already filed, claimed, processed or run. The labels are re-read right before claiming; if that read fails, the runner exits 1 without running the issue.
 
@@ -372,6 +375,7 @@ never fails a step.
 
 - `~/.local/state/agent-board/spare/run.log` — wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
 - `logs/step-N-attempt-N-*.log` — per-step provider output
+- `logs/next-steps-*.log` — output of the session that writes a missing `next-steps.md`
 - `logs/email-*.log` — email sending output
 - `output/<run-id>/state.md` — workflow state (authoritative)
 

@@ -457,6 +457,17 @@ class OutcomeTest(unittest.TestCase):
         self.assertTrue(facts["paper"])
         self.assertFalse(any("paper.pdf" in r for r in facts["reasons"]))
 
+    def test_missing_next_steps_is_reported(self):
+        self.add_exp("exp-001", "PASS")
+        self.assertIn("next-steps.md is missing: the run proposes no next round", self.outcome()["reasons"])
+        self.assertIn("next-steps.md is missing: the run proposes no next round",
+                      self.outcome(status="failed")["reasons"])
+        # A paused run writes it when it resumes.
+        paused = self.outcome(status="audit_complete", paused=True, publish_state="skipped")
+        self.assertFalse(any("next-steps.md" in r for r in paused["reasons"]))
+        write(self.run / "next-steps.md", "**Outcome**: It holds.\n")
+        self.assertFalse(any("next-steps.md" in r for r in self.outcome()["reasons"]))
+
 
 class IssueCommentTest(unittest.TestCase):
     def setUp(self):

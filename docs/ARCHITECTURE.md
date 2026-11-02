@@ -117,6 +117,7 @@ researcher/
 ├── commands/
 │   ├── researcher.md                # Interactive orchestrator (11-step workflow)
 │   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
+│   ├── researcher-auto-next-steps.md  # next-steps.md for a run that ended without one
 │   └── researcher-auto-email.md     # Autonomous email composer
 ├── config/
 │   ├── researcher.env               # Deployment defaults, read by scripts/config.sh

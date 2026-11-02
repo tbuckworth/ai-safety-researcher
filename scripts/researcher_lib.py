@@ -536,12 +536,13 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
 
     `success` is whether the outcome is one of SUCCESS_OUTCOMES. The `reasons`
     are the caveats, among them a finished run without paper/paper.pdf (with
-    state.md's paper_compile_error when Step 11 recorded one). The result also
-    carries what the reports quote from the run directory: the `**Outcome**`
-    line of next-steps.md (`findings`), its ranked step titles and the results
-    audit's disposition (`audit`), each empty when the file is missing. Reads
-    the run directory; writes nothing. Raises OSError when a file it needs
-    cannot be read, state.md included.
+    state.md's paper_compile_error when Step 11 recorded one) and a run that is
+    not paused without next-steps.md. The result also carries what the reports
+    quote from the run directory: the `**Outcome**` line of next-steps.md
+    (`findings`), its ranked step titles and the results audit's disposition
+    (`audit`), each empty when the file is missing. Reads the run directory;
+    writes nothing. Raises OSError when a file it needs cannot be read,
+    state.md included.
     """
     experiments = scan_experiments(run_dir)
     counts: dict[str, int] = {}
@@ -599,9 +600,11 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     if finished and not paper:
         error = read_frontmatter(run_dir / "state.md").get("paper_compile_error", "")
         reasons.append("paper/paper.pdf was not built" + (f": {error}" if error else ""))
+    next_steps_file = run_dir / "next-steps.md"
+    if not paused and not next_steps_file.is_file():
+        reasons.append("next-steps.md is missing: the run proposes no next round")
     reasons.extend(notes or [])
 
-    next_steps_file = run_dir / "next-steps.md"
     findings = ""
     if next_steps_file.is_file():
         findings = first_bold_field(next_steps_file.read_text(encoding="utf-8", errors="replace"), "Outcome")

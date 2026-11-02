@@ -154,6 +154,7 @@ chmod +x "${MOCK_BIN}/gh"
 source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
+install_mock_next_steps_writer "$MOCK_BIN"
 
 cat > "${MOCK_BIN}/claude" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
@@ -162,6 +163,9 @@ prompt=$(cat)
 
 if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
     exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
+fi
+if [[ "$prompt" == *"# Autonomous Next-Steps Writer"* ]]; then
+    exec "$(dirname "$0")/mock-next-steps-writer" <<< "$prompt"
 fi
 
 argument=$(printf '%s\n' "$prompt" | sed -n 's/^The argument is: \*\*\([0-9][0-9]*\) \(.*\)\*\*$/\1|\2/p' | head -1)
@@ -445,6 +449,8 @@ assert_grep "https://github.com/tbuckworth/${SLUG}/blob/main/paper/paper.pdf" "$
 assert_grep "\| exp-001 \| Routing localises the capability \| PASS \|" "$COMMENT"
 assert_grep "Mock finding holds on the toy setup" "$COMMENT"
 assert_grep "1\. Validate the metric at t=0" "$COMMENT"
+# Step 11 wrote next-steps.md, so no session writes it again.
+assert_no_grep "No next-steps.md after the workflow" "${CASE_DIR}/stdout.log"
 assert_grep "vendored-lib/ not published: it is a separate git repository" "$COMMENT"
 assert_grep "big.dat not published" "$COMMENT"
 assert_grep "issue edit 101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
@@ -751,6 +757,8 @@ assert_eq "$RC" "3" "exit code (paused)"
 assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "provider calls"
 assert_eq "$(field status "${OUT}/2026-01-03-limit")" "audit_complete" "status left resumable"
 [ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a paused run commented on an issue"; ok
+# Step 11 writes next-steps.md when the run resumes.
+assert_no_grep "No next-steps.md after the workflow" "${CASE_DIR}/stdout.log"
 
 # 15b. ...and the same during a Step 10 remediation round: the notice must not
 #      count as a finished audit round (that silently skipped remediation).
@@ -1583,5 +1591,44 @@ assert_eq "$RC" "1" "exit code"
 assert_grep "ERROR: could not copy the prior run's artifacts" "${CASE_DIR}/stdout.log"
 assert_grep "issue edit 406 --repo tbuckworth/tasks --remove-label status:claude-researching" "${CASE_DIR}/gh.log"
 [ -z "$(ls -d "$OUT"/*-followup-retry-it 2>/dev/null)" ] || fail "the partial run directory was left: $(ls "$OUT")"; ok
+
+# =============================================================================
+# 27. A run that ends without next-steps.md (it failed before Step 11, which
+#     writes it) gets one from a short session before publishing, so the repo
+#     holds the file the issue comment links (the email writer used to write
+#     it after the push). A session that fails leaves no next-steps.md, the log
+#     says why, and the outcome lists the file as missing.
+# =============================================================================
+new_case next-steps-session
+set_issues <(issue_json 501 "Stops before the report" "list:research-ideas")
+run_researcher MOCK_INCOMPLETE_AT_STEP=10
+assert_eq "$RC" "4" "exit code (partial)"
+RUN=$(run_dir_for_issue 501)
+SLUG="research-stops-before-the-report"
+assert_eq "$(field status "$RUN")" "failed" "status"
+assert_grep "No next-steps.md after the workflow \(status failed\); writing it with claude mock-claude" "${CASE_DIR}/stdout.log"
+assert_grep "Wrote ${RUN}/next-steps.md\." "${CASE_DIR}/stdout.log"
+git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -e main:next-steps.md || fail "next-steps.md was not published"; ok
+COMMENT=$(ls "${CASE_DIR}"/comments/501-*.md)
+assert_grep "https://github.com/tbuckworth/${SLUG}/blob/main/next-steps.md" "$COMMENT"
+assert_grep "1\. Resume the run after fixing the failed step" "$COMMENT"
+assert_no_grep "next-steps.md is missing" "${RUN}/run-outcome.json"
+
+new_case next-steps-session-fails
+set_issues <(issue_json 502 "Next steps cannot be written" "list:research-ideas")
+run_researcher MOCK_INCOMPLETE_AT_STEP=10 MOCK_NEXT_STEPS_FAIL=true
+assert_eq "$RC" "4" "exit code (partial)"
+RUN=$(run_dir_for_issue 502)
+SLUG="research-next-steps-cannot-be-written"
+assert_grep "ERROR: the next-steps session failed \(exit 1; its output is in .*/next-steps-[0-9-]*\.log\); removed what it wrote, so the run has no next-steps.md" \
+    "${CASE_DIR}/stdout.log"
+[ ! -e "${RUN}/next-steps.md" ] || fail "the failed session's next-steps.md was kept"; ok
+if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -e main:next-steps.md 2>/dev/null; then
+    fail "a failed session's next-steps.md was published"
+fi; ok
+jq -e '.reasons | any(test("next-steps.md is missing"))' "${RUN}/run-outcome.json" > /dev/null || fail "missing next-steps.md not in the outcome"; ok
+COMMENT=$(ls "${CASE_DIR}"/comments/502-*.md)
+assert_grep "next-steps.md is missing" "$COMMENT"
+assert_no_grep "blob/main/next-steps.md" "$COMMENT"
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

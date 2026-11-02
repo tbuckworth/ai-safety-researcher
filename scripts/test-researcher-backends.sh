@@ -19,6 +19,7 @@ mkdir -p "$MOCK_BIN"
 source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
+install_mock_next_steps_writer "$MOCK_BIN"
 
 cat > "${MOCK_BIN}/mock-provider" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
@@ -42,6 +43,9 @@ if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
         exit 1
     fi
     exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
+fi
+if [[ "$prompt" == *"# Autonomous Next-Steps Writer"* ]]; then
+    exec "$(dirname "$0")/mock-next-steps-writer" <<< "$prompt"
 fi
 
 argument=$(printf '%s\n' "$prompt" |
@@ -170,6 +174,10 @@ run_case() {
     esac
     test -s "$(dirname "$state_file")/email-draft.html"
     test -s "$(dirname "$state_file")/email-subject.txt"
+    # The mock Step 11 writes no next-steps.md, so a session of the run's own
+    # backend writes it.
+    grep -q "No next-steps.md after the workflow (status complete); writing it with ${backend} mock-${backend}" "$stdout_log"
+    test -s "$(dirname "$state_file")/next-steps.md"
 
     # The knowledge base is wrapper-owned state, restored after every step just
     # like the compute profile.
@@ -276,11 +284,12 @@ grep -qE '^- Run directory on the run host: /.*/output-claude/' "$MOCK_PROMPT_LO
 grep -qE '^- Continue command: /researcher-continue /' "$MOCK_PROMPT_LOG"
 grep -qF -- '- Continue command: $researcher:researcher-continue /' "$MOCK_PROMPT_LOG"
 
-# Every email carries proposed next steps and a continuation path, and the
-# composer knows to write next-steps.md itself when a run died before Step 11.
+# Every email carries proposed next steps and a continuation path.
 grep -q 'Proposed Next Steps' "$MOCK_PROMPT_LOG"
 grep -q 'How to Continue This Research' "$MOCK_PROMPT_LOG"
-grep -q 'If `next-steps.md` does not exist, write it yourself' "$MOCK_PROMPT_LOG"
+# The next-steps session gets its command and the last step's provider output.
+grep -qx '# Autonomous Next-Steps Writer' "$MOCK_PROMPT_LOG"
+grep -qE -- "^- Last step's provider output: /.*/logs/step-11-attempt-1-[0-9-]+\.log$" "$MOCK_PROMPT_LOG"
 
 # Step 11 writes the canonical next-round plan the email and /researcher-continue read.
 grep -q 'Write `next-steps.md`' "$MOCK_PROMPT_LOG"

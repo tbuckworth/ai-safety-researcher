@@ -249,6 +249,7 @@ researcher/
 ├── commands/
 │   ├── researcher.md              # Interactive orchestrator (main entry point)
 │   ├── researcher-auto-step.md    # Autonomous per-step executor
+│   ├── researcher-auto-next-steps.md  # next-steps.md for a run that ended without one
 │   ├── researcher-auto-email.md   # Email composer for autonomous results
 │   ├── researcher-review.md       # Interactive result reviewer
 │   └── researcher-continue.md     # Pick a next step and queue the follow-up

@@ -18,16 +18,22 @@ The voice shift changes **prose, output-template slots, and user-facing language
 
 | Token | Where it matters |
 |-------|------------------|
-| `PASS` / `FAIL` / `INCONCLUSIVE` | experiment verdicts (`## Verdict:` in results.md); matched by orchestrator + email composer + `scripts/researcher_lib.py` |
+| `PASS` / `FAIL` / `INCONCLUSIVE` / `MIXED` | experiment verdicts (`## Verdict:` in results.md); matched by orchestrator + email composer + `scripts/researcher_lib.py`, which also reads `PARTIAL` as `MIXED`, and `INVALID` or a `FAIL` that names affordability (FAIL-on-affordability) as `INCONCLUSIVE` |
+| `MISSING` / `UNKNOWN` | the verdicts `scripts/researcher_lib.py` gives an experiment directory with no results.md, and a results.md with no verdict line it recognises (run-outcome.json, the issue comment) |
+| `## Component Tested` | results.md section; `scripts/researcher_lib.py` takes its first line as the experiment's component |
 | `PASS` / `FAIL` / `WARN` / `N/A` in `preflight.md` | pre-flight check table; parsed by `scripts/researcher_lib.py` (a `FAIL` turns the experiment's verdict into `INCONCLUSIVE`) |
 | filename `method-spec.md` | the binding definition of each named method; read by decomposition, experiment, auditor, report |
 | `[SKIP]` / `[SHOWSTOPPER]` | decomposition component status |
 | Verdict enums: `NOVEL` / `PARTIALLY_NOVEL` / `ALREADY_DONE`, `PROCEED_AS_IS` / `MINOR_REVISIONS` / `MAJOR_REVISIONS` / `RETHINK_APPROACH`, and the audit enum `SUPPORTED` / `FIXABLE-DEFECT` / `TRUE-NULL` / `UNSALVAGEABLE` | step decisions |
+| `Overall disposition:` with `CONVERGED-POSITIVE` / `HONEST-NEGATIVE` / `NEEDS-REMEDIATION` / `UNSALVAGEABLE` / `NO-EXPERIMENTS`, and `audit_exit_reason:` | audit/results-audit.md; the Step 10 decision, quoted by `scripts/researcher_lib.py` in run-outcome.json and the issue comment |
+| `**Outcome**:` line, `## Ranked Next Steps` heading, `### N. <title>` headings | next-steps.md; parsed by `scripts/researcher_lib.py` into run-outcome.json and the issue comment |
+| filename `rethink-rationale.md` | marks a theory-only negative result; `scripts/researcher_lib.py` counts it as a result when no experiment ran |
 | `lambda`, `P_success` | decomposition math |
 | `fail-fast` | methodology name (Steinhardt) — a technical term, not affect |
 | filename `success-criteria.md` | read by many agents/commands |
 | state field `fail_fast_agreement` | parsed in state.md |
-| status token `failed` | cron terminal-state checks (`status: failed`) |
+| `status:` tokens `complete` / `failed` / `timed_out`, `audit_remediating` / `audit_complete` | state.md; the runner's terminal-state checks, and its re-entry of Step 10 |
+| state fields `current_step`, `step_incomplete`, `paper_compile_error`, `mode: interactive` | state.md; the runner's step-progress check, the outcome's missing-PDF caveat, and the never-resumed interactive run |
 
 ### REFRAME (two categories — audit each agent for both)
 

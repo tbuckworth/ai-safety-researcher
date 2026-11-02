@@ -57,6 +57,7 @@ flowchart TD
     EX["experiment ×N"]:::agent --> S9
     RA["results-auditor ×rounds"]:::agent --> S10
     RE["report"]:::agent --> S11
+    KN["knowledge"]:::agent --> S2 & S6 & S11
 
     %% User interaction points
     S1 ~~~ U1(["🗣 User dialogue"]):::user
@@ -81,17 +82,18 @@ flowchart LR
     end
 
     subgraph Agents["Leaf-Node Agents"]
-        A1["search-planner\n(sonnet)"]
-        A2["search\n(sonnet)"]
-        A3["novelty-analyst\n(fable)"]
-        A4["criteria\n(fable)"]
-        A5["decomposition\n(fable)"]
-        A6["assumption-challenger\n(fable)"]
-        A7["mentor-review\n(fable)"]
-        A8["pre-mortem\n(fable)"]
-        A9["experiment\n(fable)"]
-        A10["results-auditor\n(fable)"]
-        A11["report\n(fable)"]
+        A1["search-planner"]
+        A2["search"]
+        A3["novelty-analyst"]
+        A4["criteria"]
+        A5["decomposition"]
+        A6["assumption-challenger"]
+        A7["mentor-review"]
+        A8["pre-mortem"]
+        A9["experiment"]
+        A10["results-auditor"]
+        A11["report"]
+        A12["knowledge"]
     end
 
     subgraph State["Persistent State"]
@@ -111,6 +113,7 @@ flowchart LR
     O -->|"Task() ×N"| A9
     O -->|"Task() ×rounds"| A10
     O -->|"Task()"| A11
+    O -->|"Task()"| A12
 
     A1 -->|writes| AR
     A2 -->|writes| AR
@@ -123,6 +126,7 @@ flowchart LR
     A9 -->|writes| AR
     A10 -->|writes| AR
     A11 -->|writes| AR
+    A12 -->|writes| AR
 
     O <-->|"read/write"| SM
     O <-->|"read"| AR

@@ -98,7 +98,7 @@ specialised leaf-node agents for focused work.
 | experiment | `agents/experiment.md` | 9 | fable | deep | Executes a single experiment, reports pass/fail |
 | results-auditor | `agents/results-auditor.md` | 10 | fable | deep | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
 | report | `agents/report.md` | 11 | fable | deep | Compiles all artefacts into LaTeX paper with real BibTeX |
-| knowledge | `agents/knowledge.md` | 2, 3, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
+| knowledge | `agents/knowledge.md` | 2, 6, 11 | fable | deep | Queries and ingests the global wiki and the per-repo knowledge base; also lints on request. Optional and non-blocking — see [`KNOWLEDGE-BASE.md`](KNOWLEDGE-BASE.md) |
 
 Codex `fast` and `deep` are runtime roles (`templates/codex-adapter.md`), whose
 models are settings with defaults in `config/researcher.env`, so they change
@@ -106,59 +106,7 @@ without changing shared agent files.
 
 ## Directory Layout
 
-```
-researcher/
-├── .claude/
-│   └── settings.local.json         # Plugin-specific permissions
-├── .claude-plugin/
-│   └── plugin.json                  # Claude plugin manifest
-├── .codex-plugin/
-│   └── plugin.json                  # Codex plugin manifest
-├── commands/
-│   ├── researcher.md                # Interactive orchestrator (11-step workflow)
-│   ├── researcher-auto-step.md      # Autonomous per-step executor (no user interaction)
-│   ├── researcher-auto-next-steps.md  # next-steps.md for a run that ended without one
-│   └── researcher-auto-email.md     # Autonomous email composer
-├── config/
-│   ├── researcher.env               # Deployment defaults, read by scripts/config.sh
-│   ├── compute-profiles/            # Compute-profile presets
-│   └── paid-compute.md              # The rules every paid preset includes
-├── scripts/
-│   ├── researcher-cron.sh           # Dual-backend state machine and post-processing
-│   └── test-researcher-backends.sh  # Mock provider integration tests
-├── skills/
-│   ├── research-workflow/           # Shared auto-trigger
-│   └── researcher*/                 # Codex command adapters
-├── agents/
-│   ├── search-planner.md            # Step 2: Search plan creation
-│   ├── search.md                    # Step 2: Single search execution
-│   ├── novelty-analyst.md           # Step 3: Novelty assessment
-│   ├── criteria.md                  # Step 4: Success criteria
-│   ├── decomposition.md             # Step 5: Steinhardt decomposition
-│   ├── assumption-challenger.md     # Step 6: Assumption analysis
-│   ├── mentor-review.md             # Step 6: Senior researcher review
-│   ├── pre-mortem.md                # Step 6: Failure scenario analysis
-│   ├── experiment.md                # Step 9: Experiment execution
-│   ├── results-auditor.md           # Step 10: Independent results audit
-│   └── report.md                    # Step 11: LaTeX paper compilation
-├── templates/
-│   ├── preamble.tex                 # LaTeX preamble
-│   ├── paper.tex                    # Main document template
-│   ├── Makefile                     # LaTeX build file
-│   └── codex-adapter.md             # Codex translation of the workflow
-├── hooks/
-├── docs/
-│   ├── ARCHITECTURE.md              # This file
-│   ├── AUTONOMOUS.md                # Autonomous mode setup and reference
-│   ├── DIAGRAM.md                   # Mermaid architecture diagrams
-│   ├── STANCE.md                    # Canonical truth-seeking Voice block + KEEP/REFRAME rubric
-│   └── WORKFLOW.md                  # Detailed 11-step workflow specification
-├── output/                          # Research artefacts (gitignored)
-├── logs/                            # Autonomous mode logs (gitignored)
-├── CLAUDE.md                        # Claude project context
-├── AGENTS.md                        # Codex/project context
-└── .gitignore
-```
+The repo map in [`AGENTS.md`](../AGENTS.md) lists the directories and entry points.
 
 ## State Management
 

@@ -529,6 +529,15 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("| exp-003 | — | MISSING |", text)
         self.assertIn("- exp-003 started but wrote no results.md", text)
 
+    def test_inconclusive_comment_preserves_pilot_findings(self):
+        write(self.run / "experiments" / "exp-001" / "results.md", results("INCONCLUSIVE"))
+        finding = "Accuracy fell on one development seed. Confirmation did not run."
+        write(self.run / "next-steps.md", f"**Outcome**: {finding}\n")
+        text = self.comment("pushed", "https://github.com/o/research-x")
+        self.assertIn("outcome: no-results", text.splitlines()[0])
+        self.assertIn("without a conclusive experiment verdict", text.splitlines()[1])
+        self.assertIn(finding, text)
+
     def test_unpublished_comment_has_no_dead_link(self):
         text = self.comment("failed", "")
         self.assertIn("finished but NOT PUBLISHED", text)

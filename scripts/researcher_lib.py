@@ -632,7 +632,7 @@ OUTCOME_HEADLINES = {
     "complete": "complete",
     "complete-local": "complete (not published by request)",
     "unpublished": "finished but NOT PUBLISHED",
-    "no-results": "finished with NO VALID RESULTS",
+    "no-results": "finished without a conclusive experiment verdict",
     "partial": "stopped early (partial results)",
     "failed": "FAILED",
     "paused": "paused",

@@ -339,7 +339,7 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
 
 5. **Stuck**: a stuck round exits with `audit_exit_reason: narrowed-claim-residual`.
 
-6. **Independence**: the auditor is a fresh agent each round, re-derives from primary artefacts (never `results.md`'s summary), and keeps a neutral tone but a maximally suspicious stance. It audits; it never edits experiment code.
+6. **Independence.** A fresh [results auditor](../agents/results-auditor.md) re-derives the claims from primary records each round. It returns findings to the hub. The experiment worker owns changes to experiment code.
 
 ### Loop Condition
 

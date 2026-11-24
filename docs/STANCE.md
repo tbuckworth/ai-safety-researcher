@@ -50,4 +50,4 @@ The voice shift changes **prose, output-template slots, and user-facing language
 
 ### The results-auditor exception
 
-`agents/results-auditor.md` embeds the Voice block for **tone** (neutral phrasing: "here is what the evidence does and does not support," never "you cheated"), but its prompt carries an explicit **stance override**: maximally suspicious posture, operating assumption "treat the result as gamed or leaked until the evidence forces otherwise." The Voice block governs how it *speaks*, not how hard it *looks*. Softening its stance would defeat its purpose.
+The [results auditor](../agents/results-auditor.md) uses the shared Voice block when reporting findings. Its stance override requires an independent check of the primary records for leakage, grader errors and competing explanations. Describe the observed defect and the claim it affects.

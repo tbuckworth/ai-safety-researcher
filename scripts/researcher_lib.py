@@ -86,6 +86,8 @@ RUN_SETTINGS = (
     "RESEARCHER_CODEX_REASONING",
     "RESEARCHER_CODEX_FAST_MODEL",
     "RESEARCHER_CODEX_FAST_REASONING",
+    "RESEARCHER_REVIEW_MODEL",
+    "RESEARCHER_REVIEW_REASONING",
     "RESEARCHER_CODEX_DEEP_MODEL",
     "RESEARCHER_CODEX_DEEP_REASONING",
     "RESEARCHER_CODEX_MAX_SUBAGENTS",
@@ -106,9 +108,9 @@ RUN_SETTINGS = (
 RUN_CONFIG_FILE = "run-config.json"
 
 # The verdicts an experiment can have (scan_experiments): those parse_verdict reads
-# from a results.md, and MISSING for an experiment directory without one.
+# from a results.md, PLANNED before dispatch, and MISSING after an unfinished launch.
 # VALID_VERDICTS answer the experiment's question.
-VERDICTS = ("PASS", "FAIL", "MIXED", "INCONCLUSIVE", "UNKNOWN", "MISSING")
+VERDICTS = ("PASS", "FAIL", "MIXED", "INCONCLUSIVE", "UNKNOWN", "MISSING", "PLANNED")
 VALID_VERDICTS = ("PASS", "FAIL", "MIXED")
 # Final outcomes that count as a finished, usable run (the wrapper exits 0).
 SUCCESS_OUTCOMES = ("complete", "complete-local")
@@ -452,10 +454,17 @@ def scan_experiments(run_dir: Path) -> list[dict]:
     with verdict and pre-flight state. An experiment without a results.md, one
     that started and stopped before it reported, has the verdict MISSING."""
     experiments = []
+    plans_precede_execution = (run_dir / "methods-order.json").is_file()
     for exp_dir in sorted((run_dir / "experiments").glob("exp-*")):
         if not exp_dir.is_dir():
             continue
         results = exp_dir / "results.md"
+        if (plans_precede_execution and (exp_dir / "plan.md").is_file()
+                and all(entry.name == "plan.md" for entry in exp_dir.iterdir())):
+            experiments.append({"id": exp_dir.name, "component": "", "stated_verdict": "PLANNED",
+                                "verdict": "PLANNED", "preflight": "not-started",
+                                "preflight_failed": [], "note": ""})
+            continue
         if results.is_file():
             text = results.read_text(encoding="utf-8", errors="replace")
             component = _section(text, "Component Tested").splitlines()
@@ -526,13 +535,13 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
                     publish_error: str = "", paused: bool = False, notes: list[str] | None = None) -> dict:
     """Decide the run's final outcome from what actually exists on disk.
 
-    complete        workflow finished, valid results, pushed and verified
+    complete        workflow finished, qualifying verdict or theory result, pushed and verified
     complete-local  as complete, but publishing was deliberately skipped
     unpublished     workflow finished with valid results, but the push failed
     no-results      workflow finished, but no experiment produced a valid verdict
     partial         workflow stopped early (timeout / failure) with some valid results
-    failed          workflow stopped early with no valid results
-    paused          provider usage limit; resumable, nothing published
+    failed          workflow stopped early without a qualifying verdict
+    paused          resumable hold; state.md records the cause
 
     `success` is whether the outcome is one of SUCCESS_OUTCOMES. The `reasons`
     are the caveats, among them a finished run without paper/paper.pdf (with
@@ -541,7 +550,7 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     quote from the run directory: the `**Outcome**` line of next-steps.md
     (`findings`), its ranked step titles and the results audit's disposition
     (`audit`), each empty when the file is missing. Reads the run directory,
-    state.md only for a finished run without paper/paper.pdf; writes nothing.
+    state.md for a pause or a finished run without paper/paper.pdf; writes nothing.
     Raises OSError when a file it reads cannot be read.
     """
     experiments = scan_experiments(run_dir)
@@ -549,20 +558,22 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     for exp in experiments:
         counts[exp["verdict"]] = counts.get(exp["verdict"], 0) + 1
     valid = sum(counts.get(v, 0) for v in VALID_VERDICTS)
-    theory_only = not experiments and (run_dir / "rethink-rationale.md").is_file()
+    started = len(experiments) - counts.get("PLANNED", 0)
+    theory_only = not started and (run_dir / "rethink-rationale.md").is_file()
     has_results = valid > 0 or (theory_only and status == "complete")
     finished = status == "complete"
 
     reasons: list[str] = []
     if paused:
         outcome = "paused"
-        reasons.append("provider usage limit reached; the run is resumable")
+        reason = read_frontmatter(run_dir / "state.md").get("last_pause_reason")
+        reasons.append(f"Run paused ({reason}). Resume when cleared." if reason else "Run paused and resumable.")
     elif not has_results:
         outcome = "no-results" if finished else "failed"
-        if not experiments:
+        if not started:
             reasons.append("no experiment produced a results.md")
         else:
-            reasons.append(f"none of {len(experiments)} experiment(s) produced a valid PASS/FAIL verdict")
+            reasons.append(f"none of {started} started experiment(s) produced a valid PASS/FAIL verdict")
     elif not finished:
         outcome = "partial"
     elif publish_state == "pushed":
@@ -574,7 +585,9 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
 
     if timed_out:
         if finished:
-            reasons.append("hit the run timeout after experiments; the results audit was skipped")
+            reasons.append("the run reached its time limit and skipped ahead to the report"
+                           if (run_dir / "audit" / "results-audit.md").is_file()
+                           else "the run reached its time limit and the results audit was skipped")
         else:
             reasons.append("hit the run timeout before the workflow finished")
     elif not finished and not paused:
@@ -582,7 +595,7 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     if publish_state == "failed" and not paused:
         reasons.append(f"not on GitHub: {publish_error or 'push failed'}")
     if counts.get("INCONCLUSIVE"):
-        reasons.append(f"{counts['INCONCLUSIVE']} experiment(s) inconclusive (pre-flight failed or invalid measurement)")
+        reasons.append(f"{counts['INCONCLUSIVE']} experiment(s) had an inconclusive verdict")
     if counts.get("UNKNOWN"):
         reasons.append(f"{counts['UNKNOWN']} experiment(s) without a '## Verdict: PASS|FAIL|INCONCLUSIVE' line")
     missing = [e["id"] for e in experiments if e["verdict"] == "MISSING"]
@@ -632,7 +645,7 @@ OUTCOME_HEADLINES = {
     "complete": "complete",
     "complete-local": "complete (not published by request)",
     "unpublished": "finished but NOT PUBLISHED",
-    "no-results": "finished with NO VALID RESULTS",
+    "no-results": "finished without a conclusive experiment verdict",
     "partial": "stopped early (partial results)",
     "failed": "FAILED",
     "paused": "paused",
@@ -715,6 +728,7 @@ class _Text(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.parts: list[str] = []
         self.skip = 0
+        self.link = ""
 
     def handle_starttag(self, tag, attrs):
         if tag in ("style", "script", "head", "title"):
@@ -725,6 +739,9 @@ class _Text(HTMLParser):
             self.parts.append("\n")
         elif tag in ("td", "th"):
             self.parts.append(" | ")
+        elif tag == "a":
+            href = dict(attrs).get("href") or ""
+            self.link = href if href.startswith(("https://", "http://")) else ""
         elif tag == "img":
             alt = dict(attrs).get("alt")
             if alt:
@@ -735,6 +752,9 @@ class _Text(HTMLParser):
     def handle_endtag(self, tag):
         if tag in ("style", "script", "head", "title"):
             self.skip = max(0, self.skip - 1)
+        elif tag == "a" and self.link:
+            self.parts.append(f" ({self.link})")
+            self.link = ""
         elif tag in self.BLOCK:
             self.parts.append("\n")
 

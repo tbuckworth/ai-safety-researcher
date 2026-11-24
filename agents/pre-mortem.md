@@ -68,7 +68,7 @@ Draw scenarios from these categories (not all will apply):
 
 ## Output
 
-Write `challenge/pre-mortem.md` to the run directory:
+For a workflow methods review, return the structured response requested by the hub. The hub records it with the other critiques for this revision. For a standalone Markdown review, use the format below.
 
 ```markdown
 # Pre-Mortem Analysis

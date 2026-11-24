@@ -59,7 +59,7 @@ Answer each of these questions with specificity and honesty:
 
 ## Output
 
-Return your review as text (do NOT write any files). Use this exact format:
+For a workflow methods review, return the structured response requested by the hub. The hub records it with the other critiques for this revision. For a standalone Markdown review, use the format below.
 
 ```markdown
 # Mentor Review

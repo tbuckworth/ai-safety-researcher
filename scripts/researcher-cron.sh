@@ -515,6 +515,10 @@ while true; do
     CURRENT_STEP=$(get_current_step)
     STATUS=$(get_status)
 
+    # A withheld draft retries release, preserving the original scientific status.
+    if [ "$STATUS" = release_pending ]; then
+        break
+    fi
     if is_terminal_status "$STATUS"; then
         log "Run reached terminal state: ${STATUS}"
         break
@@ -595,6 +599,11 @@ done
 
 # --- Post-completion: publish to GitHub (git init in place, no copying) ---
 STATUS=$(get_status)
+RETRYING_RELEASE=false
+if [ "$STATUS" = release_pending ]; then
+    RETRYING_RELEASE=true
+    STATUS=$(state_field "${RUN_DIR}/state.md" release_status)
+fi
 # The run id is the directory name; ensure_runtime_state keeps run_id in step.
 RUN_ID=$(basename "$RUN_DIR")
 TOPIC_LINE=$(state_field "${RUN_DIR}/state.md" topic)
@@ -608,6 +617,24 @@ TOPIC_LINE=$(state_field "${RUN_DIR}/state.md" topic)
 # missing.
 if ! is_true "$PAUSED" && [ ! -s "${RUN_DIR}/next-steps.md" ]; then
     write_next_steps || true
+fi
+
+# Every delivered draft, including a timeout report or an early stop summary,
+# must be read in the form being released. The helper reuses an exact receipt.
+# If the diagnostic writer failed and left no draft, there is only an operational
+# failure notice to deliver.
+if ! is_true "$PAUSED" && { [ -s "${RUN_DIR}/next-steps.md" ] || [ -s "${RUN_DIR}/briefing.md" ] \
+    || [ -s "${RUN_DIR}/paper/paper.tex" ] || has_experiment_results; }; then
+    if ! review_evidence || ! review_run presentation; then
+        set_state_field release_status "$STATUS"
+        set_status release_pending
+        set_review_hold "Review of the release draft failed or requested changes. Resolve the review and resume to retry delivery."
+        pause_run "$REPORT_STEP"
+    fi
+fi
+
+if is_true "$RETRYING_RELEASE" && ! is_true "$PAUSED"; then
+    set_status "$STATUS"
 fi
 
 # Publication result, consumed by the outcome, the email and the issue comment.

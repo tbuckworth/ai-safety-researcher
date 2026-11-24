@@ -49,6 +49,8 @@ Entry points:
 - `/researcher-continue [run-dir]` (Codex: `$researcher:researcher-continue`): queue the next round from a finished run, `commands/researcher-continue.md`.
 - `scripts/researcher-cron.sh [topic]`: the autonomous runner; its functions are in `scripts/runner/`, one file per concern.
 - `scripts/researcher_lib.py`: the runner's decisions, as the subcommands its docstring lists.
+- `scripts/methods_review.py`: review and approve versioned methods, evidence and presentation (see `docs/WORKFLOW.md`).
+- `scripts/harness_lessons.py`: record and review cross-run improvements (see `docs/KNOWLEDGE-BASE.md`).
 - `scripts/preflight_checks.py`: an experiment's pre-flight checks.
 - `scripts/config.sh KEY...`: prints configured values; the runner and the helpers source it.
 - `scripts/kb-init.sh [path]`: bootstraps the global knowledge base.

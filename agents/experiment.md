@@ -29,7 +29,7 @@ You will be given:
 - The run directory path for output
 - The pre-flight tooling: `<plugin-root>/scripts/preflight_checks.py` (standard library only; run it with any python3) and the record template `<plugin-root>/templates/preflight.md`
 
-Read all specified files before beginning.
+Read the approved plan and the execution section of `docs/SCIENTIFIC-REPORTING.md` before beginning. The hub verifies approval before dispatch. If implementation requires changing a condition, split, checkpoint rule, primary outcome or stopping rule, give the hub the proposed amendment and stop. Record which outcomes anyone has already seen.
 
 ## Process
 
@@ -58,6 +58,8 @@ Read all specified files before beginning.
    - **organism-validity** (any "model organism" with an implanted goal/behaviour): before building one, check `<plugin-root>/data/model-organisms/organisms.yaml` for a listed organism whose `min_vram_gb` the compute profile provides, and measure a listed organism's behaviour with its `scorer`. Either way, show the behaviour actually fires on held-out triggers and does *not* fire on controls, at rates you report, before using the organism to test anything. An organism that memorised a surface pattern makes every defence look perfect.
    - **metric-separation**: before measuring a treatment effect with a metric, show the metric separates examples known to have the property from examples known not to (e.g. a positive control vs a negative control, or a trained vs untrained model at step 0). Run `preflight_checks.py separation --positive pos.json --negative neg.json [--lo/--hi bounds]` on at least 3 independent measurements per group. A metric that scores both groups the same (or sits at its ceiling/floor for both) cannot show an effect; redesign it. Keyword or regex counters must additionally be validated against an LLM judge or ~20+ hand labels, with the agreement rate reported.
    - **statistics-plan**: name the unit of analysis (prompt, scenario, seed; repeated samples of the same prompt are NOT independent), the number of independent units, the seeds (≥3 for any trained-model comparison the compute profile allows; otherwise say "single seed" and treat the result as preliminary), and the multiple-comparison correction. Use `preflight_checks.py compare records.jsonl --a control --b treatment --cluster <unit> --n-comparisons <m>` for every headline comparison, where `<m>` is the number of comparisons in the family.
+
+   Run the approved split overlap, comparator readiness and rival-explanation checks from `templates/preflight.md` at the stages prescribed by the plan. Run the known-answer fixture before the expensive workload. Establish convergence from the prespecified per-arm validation criterion and curves when the claim requires it. The loss sanity command checks for pathologies and cannot establish convergence.
 
    A check that fails and cannot be fixed within the budget makes the verdict `INCONCLUSIVE`: the experiment cannot answer its question, and that is what you report.
 

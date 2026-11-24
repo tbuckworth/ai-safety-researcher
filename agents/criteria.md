@@ -27,6 +27,8 @@ You will be given:
 
 Read all specified files before beginning your analysis.
 
+Read the **Before approval** section of `docs/SCIENTIFIC-REPORTING.md`. State the decision this line could change, an effect large enough to matter in its original units, and the precision needed to distinguish it. Define primary, secondary and exploratory outcomes before data are examined.
+
 ## Process
 
 1. **Identify SOTA**: What are the current best results or methods for the relevant task?

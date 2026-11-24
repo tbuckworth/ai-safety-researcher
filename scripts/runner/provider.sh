@@ -121,9 +121,9 @@ EOF
 # prompt on stdin, without permission prompts, with model MODEL, only the tools
 # TOOLS (comma-separated), and any further ARGs.
 invoke_claude() {
-    local bin="$1" model="$2" tools="$3"
+    local bin="$1" cli_model="$2" tools="$3"
     shift 3
-    "$bin" --print --dangerously-skip-permissions --model "$model" "$@" --allowedTools "$tools"
+    "$bin" --print --dangerously-skip-permissions --model "$cli_model" "$@" --allowedTools "$tools"
 }
 
 invoke_provider() {

@@ -20,81 +20,20 @@ specialised leaf-node agents for focused work.
 
 ## Pipeline
 
-```
-/researcher <topic>
-    │
-    ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                        ORCHESTRATOR                              │
-│  (commands/researcher.md: handles all user dialogue & loops)     │
-│                                                                  │
-│  Step 1: Clarify ◄──────────────────────────────────────────┐    │
-│    │ (direct dialogue)                                      │    │
-│    ▼                                                        │    │
-│  Step 2: Research ──────────────────────────────────────┐    │    │
-│    │ ┌─────────────────┐   ┌──────────┐ x3 parallel    │    │    │
-│    ├─┤ search-planner  ├──►│  search   │───────────►    │    │    │
-│    │ └─────────────────┘   └──────────┘                │    │    │
-│    ▼                                              loop │    │    │
-│  Step 3: Novelty ─────────────────────────────────┘    │    │    │
-│    │ ┌─────────────────┐                               │    │    │
-│    ├─┤ novelty-analyst  │                               │    │    │
-│    │ └─────────────────┘                          loop │    │    │
-│    ▼                                              ┌────┘    │    │
-│  Step 4: Criteria ────────────────────────────────┤         │    │
-│    │ ┌─────────────────┐                          └────┐    │    │
-│    ├─┤    criteria      │                               │    │    │
-│    │ └─────────────────┘                               │    │    │
-│    ▼                                              loop │    │    │
-│  Step 5: Decompose ───────────────────────────────┘    │    │    │
-│    │ ┌─────────────────┐                               │    │    │
-│    ├─┤  decomposition   │                               │    │    │
-│    │ └─────────────────┘                               │    │    │
-│    ▼                                              loop │    │    │
-│  Step 6: Challenge ───────────────────────────────┴────┼────┤    │
-│    │ ┌──────────────────────┐  (parallel)              │    │    │
-│    ├─┤ assumption-challenger │                          │    │    │
-│    ├─┤ mentor-review         │                          │    │    │
-│    ├─┤ pre-mortem           │                               │    │
-│    │ └──────────────────────┘                               │    │
-│    ▼                                                        │    │
-│  Step 7: Report Plan (direct dialogue) ─────────────────────┘    │
-│    │                                                             │
-│    ▼                                                             │
-│  Step 8: Confirm Fail-Fast (direct dialogue)                     │
-│    │                                                             │
-│    ▼                                                             │
-│  Step 9: Execute ────────────────────────────────────────────────┘
-│    │ ┌─────────────────┐  (one per experiment, lambda order)
-│    ├─┤   experiment     │  fail → stop or pivot
-│    │ └─────────────────┘  pass → continue + write up
-│    ▼
-│  Step 10: Audit ◄────────────────┐  (re-run flagged exp, re-audit; ≤ R_MAX rounds)
-│    │ ┌─────────────────┐         │
-│    ├─┤ results-auditor  │─────────┘  FIXABLE-DEFECT → loop
-│    │ └─────────────────┘            SUPPORTED / TRUE-NULL → exit
-│    ▼
-│  Step 11: Report
-│    │ ┌─────────────────┐
-│    ├─┤     report       │  → LaTeX paper
-│    │ └─────────────────┘
-│    ▼
-│  Done
-└──────────────────────────────────────────────────────────────────┘
-```
+The [workflow diagram](DIAGRAM.md#workflow-overview) shows all eleven steps. Either hub calls the same review helper for the parallel methods critiques, autonomous approval, evidence challenge and final reading. Each reviewer works in a fresh Codex session with the supplied inputs. The hub records decisions and handles disagreements. The experiment worker executes approved methods. The results auditor still independently recalculates or reruns the load-bearing comparison when appropriate. The final reader checks the report and the rendered headline figures before release.
 
 ## Agent Inventory
 
-| Agent | File | Step | Claude | Codex default | Purpose |
+| Agent | File | Step | Claude hub | Codex hub | Purpose |
 |-------|------|------|--------|---------------|---------|
 | search-planner | `agents/search-planner.md` | 2 | sonnet | fast | Creates structured search plan from topic + clarifications |
 | search | `agents/search.md` | 2 | sonnet | fast | Executes a single search task (parallelisable, multiple instances) |
 | novelty-analyst | `agents/novelty-analyst.md` | 3 | fable | deep | Assesses whether the idea has been done before |
 | criteria | `agents/criteria.md` | 4 | fable | deep | Identifies SOTA, success criteria, benchmarks |
 | decomposition | `agents/decomposition.md` | 5 | fable | deep | Steinhardt decomposition: components, P_success, T, lambda ordering |
-| assumption-challenger | `agents/assumption-challenger.md` | 6 | fable | deep | Surfaces unstated assumptions in the research plan |
-| mentor-review | `agents/mentor-review.md` | 6 | fable | deep | Senior researcher review: simpler paths, blind spots, honest feedback |
-| pre-mortem | `agents/pre-mortem.md` | 6 | fable | deep | Failure scenario analysis: root causes, early warnings, mitigations |
+| assumption-challenger | `agents/assumption-challenger.md` | 6 | Codex reviewer | Codex reviewer | Surfaces unstated assumptions in the research plan |
+| mentor-review | `agents/mentor-review.md` | 6 | Codex reviewer | Codex reviewer | Senior researcher review: simpler paths, blind spots, honest feedback |
+| pre-mortem | `agents/pre-mortem.md` | 6 | Codex reviewer | Codex reviewer | Failure scenario analysis: root causes, early warnings, mitigations |
 | experiment | `agents/experiment.md` | 9 | fable | deep | Executes a single experiment, reports pass/fail |
 | results-auditor | `agents/results-auditor.md` | 10 | fable | deep | Independently red-teams the results; classifies findings and drives the audit-remediation loop |
 | report | `agents/report.md` | 11 | fable | deep | Compiles all artefacts into LaTeX paper with real BibTeX |

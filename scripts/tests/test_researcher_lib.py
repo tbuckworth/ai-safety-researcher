@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -378,6 +379,13 @@ class OutcomeTest(unittest.TestCase):
         self.add_exp("exp-001", "INCONCLUSIVE")
         self.assertEqual(self.outcome()["outcome"], "no-results")
 
+    def test_run_summary_only_attributes_observed_causes(self):
+        # A timeout can skip straight from design to a report. A valid pilot
+        # can also be inconclusive because its estimate is too imprecise.
+        self.assertNotIn("after experiments", " ".join(self.outcome(timed_out=True)["reasons"]))
+        self.add_exp("exp-001", "INCONCLUSIVE")
+        self.assertNotIn("invalid measurement", " ".join(self.outcome()["reasons"]))
+
     def test_failed_preflight_makes_a_claimed_verdict_inconclusive(self):
         # tasks#1863: gibberish fine-tunes reported as a negative finding.
         self.add_exp("exp-001", "FAIL", PREFLIGHT_BAD)
@@ -443,6 +451,30 @@ class OutcomeTest(unittest.TestCase):
         facts = self.outcome()
         self.assertEqual(facts["outcome"], "no-results")
         self.assertFalse(any("theory-only" in r for r in facts["reasons"]))
+
+    def test_prespecified_experiments_are_planned_until_execution(self):
+        ids = ["exp-001", "exp-002", "exp-003"]
+        write(self.run / "methods-order.json", json.dumps(ids))
+        for name in ids:
+            write(self.run / "experiments" / name / "plan.md", "approved plan")
+        write(self.run / "experiments" / "exp-002" / "started", "")
+        write(self.run / "experiments" / "exp-003" / "preflight.md", PREFLIGHT_BAD)
+        facts = self.outcome()
+        self.assertEqual(facts["counts"], {"PLANNED": 1, "MISSING": 2})
+        self.assertNotIn("no pre-flight record for exp-001", " ".join(facts["reasons"]))
+        self.assertFalse(facts["has_results"])
+
+    def test_planned_experiments_can_be_stopped_before_the_first_launch(self):
+        write(self.run / "methods-order.json", '["exp-001"]')
+        write(self.run / "experiments" / "exp-001" / "plan.md", "the plan")
+        write(self.run / "rethink-rationale.md", "a known effect explains the proposed contrast")
+        self.assertTrue(self.outcome()["has_results"])
+
+    def test_pause_reports_its_recorded_cause(self):
+        make_run(Path(self.tmp.name), "run", last_pause_reason="methods require review")
+        facts = self.outcome(paused=True, publish_state="skipped")
+        self.assertIn("methods require review", " ".join(facts["reasons"]))
+        self.assertNotIn("provider usage limit", " ".join(facts["reasons"]))
 
     def test_finished_run_without_a_paper_says_so(self):
         self.add_exp("exp-001", "PASS")
@@ -528,6 +560,15 @@ class IssueCommentTest(unittest.TestCase):
         self.assertIn("experiments: 1 pass, 1 inconclusive, 1 missing", text)
         self.assertIn("| exp-003 | — | MISSING |", text)
         self.assertIn("- exp-003 started but wrote no results.md", text)
+
+    def test_inconclusive_comment_preserves_pilot_findings(self):
+        write(self.run / "experiments" / "exp-001" / "results.md", results("INCONCLUSIVE"))
+        finding = "Accuracy fell on one development seed. Confirmation did not run."
+        write(self.run / "next-steps.md", f"**Outcome**: {finding}\n")
+        text = self.comment("pushed", "https://github.com/o/research-x")
+        self.assertIn("outcome: no-results", text.splitlines()[0])
+        self.assertIn("without a conclusive experiment verdict", text.splitlines()[1])
+        self.assertIn(finding, text)
 
     def test_unpublished_comment_has_no_dead_link(self):
         text = self.comment("failed", "")
@@ -648,6 +689,28 @@ class RunConfigTest(unittest.TestCase):
 
 
 class ResultsEmailTest(unittest.TestCase):
+    def test_decision_mail_sends_clickable_options_and_keeps_the_report_link(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            write(run / "email-draft.html", '<p>Review the <a href="https://example.org/report">report</a>.</p>')
+            write(run / "email-subject.txt", "Choose the next comparison")
+            choices = {"question": "Run the held-out test?", "default": "Wait for a reply",
+                       "options": [{"label": "Run test"}, {"label": "Stop here"}]}
+            write(run / "email-choices.json", json.dumps(choices))
+            # The mail command is the network boundary. Capture its actual arguments and body locally.
+            mail = run / "mail"
+            write(mail, "#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
+                        "args = sys.argv[1:]\nbody = Path(args[args.index('--body-file')+1]).read_text()\n"
+                        "Path(__file__).with_name('sent').write_text(json.dumps([args, body]))\n")
+            mail.chmod(0o700)
+            subprocess.run(["bash", str(SCRIPTS / "send-results-email.sh"), str(run)],
+                           env={**os.environ, "RESEARCHER_AGENT_MAIL": str(mail),
+                                "RESEARCHER_EMAIL_TO": "test@example.org"}, check=True, capture_output=True)
+            args, body = json.loads((run / "sent").read_text())
+            self.assertNotIn("--html", args)
+            self.assertIn("https://example.org/report", body)
+            self.assertEqual(json.loads(body.split("```choices\n")[1].split("\n```")[0]), choices)
+
     def test_plain_text_alternative(self):
         text = lib.html_to_text(
             "<html><head><style>p{color:red}</style></head><body><h1>Bottom&nbsp;line</h1>"

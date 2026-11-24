@@ -20,11 +20,16 @@ source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
 install_mock_next_steps_writer "$MOCK_BIN"
+install_mock_reviews "$MOCK_BIN"
+export MOCK_REVIEW_HELPER="${REPO_DIR}/scripts/methods_review.py"
 
 cat > "${MOCK_BIN}/mock-provider" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ " $* " == *" --output-last-message "* ]]; then
+    exec "$(dirname "$0")/mock-review" "$@"
+fi
 prompt=$(cat)
 printf '%s %s\n' "$(basename "$0")" "$*" >> "$MOCK_CALL_LOG"
 {
@@ -68,6 +73,7 @@ if [ "${MOCK_FAIL_FIRST_STEP:-false}" = "true" ] \
     exit 42
 fi
 
+"$(dirname "$0")/mock-methods" "$step" "$run_dir"
 if [ "$step" = "11" ]; then
     new_status="complete"
 else
@@ -208,7 +214,7 @@ for kb_file in KB-SCHEMA.md index.md log.md AGENTS.md CLAUDE.md \
         || { echo "FAIL: kb-init did not write ${kb_file}" >&2; exit 1; }
 done
 # index.md lists exactly the lessons pages kb-init seeded.
-diff <(cd "${KB_FIXTURE}/lessons" && ls *.md | sed 's/\.md$//') \
+diff <(cd "${KB_FIXTURE}/lessons" && printf '%s\n' ./*.md | sed -e 's,^\./,,' -e 's/\.md$//') \
      <(sed -n 's/^- \[\[\([^]]*\)\]\] — .*/\1/p' "${KB_FIXTURE}/index.md" | sort) \
     || { echo "FAIL: index.md does not list the lessons pages kb-init seeded" >&2; exit 1; }
 test -d "${KB_FIXTURE}/.git"
@@ -253,6 +259,7 @@ grep -q -- '--ignore-user-config' "$MOCK_CALL_LOG"
 grep -q '# Codex Runtime Adapter' "$MOCK_PROMPT_LOG"
 # The adapter is templates/codex-adapter.md, followed by this run's worker models.
 grep -qF "$(head -3 "${REPO_DIR}/templates/codex-adapter.md" | tail -1)" "$MOCK_PROMPT_LOG"
+# shellcheck disable=SC2016 # Match the literal Markdown code spans.
 grep -q '^Worker models for this run: fast `mock-codex-fast` with `medium` reasoning; deep `mock-codex` with `high` reasoning\.$' \
     "$MOCK_PROMPT_LOG"
 
@@ -282,6 +289,7 @@ grep -q '^- Run host SSH alias: mock-host$' "$MOCK_PROMPT_LOG"
 grep -q "^- Plugin directory on the run host: ${REPO_DIR}$" "$MOCK_PROMPT_LOG"
 grep -qE '^- Run directory on the run host: /.*/output-claude/' "$MOCK_PROMPT_LOG"
 grep -qE '^- Continue command: /researcher-continue /' "$MOCK_PROMPT_LOG"
+# shellcheck disable=SC2016 # The Codex command begins with a literal dollar.
 grep -qF -- '- Continue command: $researcher:researcher-continue /' "$MOCK_PROMPT_LOG"
 
 # Every email carries proposed next steps and a continuation path.
@@ -292,6 +300,7 @@ grep -qx '# Autonomous Next-Steps Writer' "$MOCK_PROMPT_LOG"
 grep -qE -- "^- Last step's provider output: /.*/logs/step-11-attempt-1-[0-9-]+\.log$" "$MOCK_PROMPT_LOG"
 
 # Step 11 writes the canonical next-round plan the email and /researcher-continue read.
+# shellcheck disable=SC2016 # Match the literal Markdown code span.
 grep -q 'Write `next-steps.md`' "$MOCK_PROMPT_LOG"
 
 # The step prompt carries the WHOLE workflow document, not alternating chunks of

@@ -162,6 +162,7 @@ read_picked_issue() {
     # researcher_lib.py's followup-meta reads from its title and footer.
     local title body meta
     ISSUE_NUMBER=$(jq -r '.number' <<< "$PICKED")
+    # shellcheck disable=SC2034 # state.sh records the issue key for resumed runs.
     FOLLOWUP_KEY=$(jq -r '.followup_key // ""' <<< "$PICKED")
     title=$(jq -r '.title' <<< "$PICKED")
     body=$(jq -r '.body // ""' <<< "$PICKED")
@@ -193,6 +194,10 @@ write_gitignore() {
     # artifacts, already in the repo it continues).
     local dir="$1"
     cat > "${dir}/.gitignore" << 'GIEOF'
+# Private cross-run lessons and local review lock
+/.harness/
+/.methods-review.lock
+
 # Model checkpoints and weights (GitHub 100MB hard limit)
 *.pt
 *.pth

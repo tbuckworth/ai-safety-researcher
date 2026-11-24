@@ -9,6 +9,7 @@
 # run-outcome.json (a run whose `success` is false gets its outcome in front of
 # the subject, e.g. "[UNPUBLISHED] ...") and the optional email-images.txt
 # (NAME=relative/path.png per line, placed in the HTML as <img src="cid:NAME">).
+# A decision email adds one agent-mail choices object in email-choices.json.
 #
 # The mail is reviewed before it leaves (agent-mail's pre-send review).
 # Exit 3 with "agent-mail: NOT SENT" and the fixes means nothing was sent:
@@ -78,7 +79,15 @@ while IFS= read -r image; do
     [ -n "$image" ] && image_args+=(--image "$image")
 done <<< "$images"
 
-send_args=(send --to "$TO" --subject "$subject" --body-file "${work}/body.txt" --html "${RUN_DIR}/email-draft.html")
+send_args=(send --to "$TO" --subject "$subject" --body-file "${work}/body.txt")
+if [ -e "${RUN_DIR}/email-choices.json" ]; then
+    # agent-mail renders widgets from the plain body and rejects a custom HTML part.
+    choices=$(jq -ces 'if length == 1 and (.[0]|type) == "object" then .[0] else error("expected one choices object") end' \
+        "${RUN_DIR}/email-choices.json") || exit 2
+    printf '\n```choices\n%s\n```\n' "$choices" >> "${work}/body.txt"
+else
+    send_args+=(--html "${RUN_DIR}/email-draft.html")
+fi
 [ -n "$UNROUTED" ] && send_args+=(--unrouted)
 set +e
 out=$("$AGENT_MAIL" "${send_args[@]}" ${image_args[@]+"${image_args[@]}"} 2>&1)

@@ -234,8 +234,9 @@ Before write-up, an independent auditor checks the results and distinguishes a s
    ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
 
    Run directory: output/<run-id>/
-   Frozen anchor: output/<run-id>/success-criteria.md  (do NOT let the goalposts move)
-   Audit only this run's experiments: output/<run-id>/experiments/exp-*  (ignore any prior/ dir)
+   Audit mode: <retained data only, or the specific empirical repeat, verified methods revision and resource limits authorized by the hub>
+   Criteria: <approved methods record and working criteria, plus prior/success-criteria.md on a follow-up; identify the available historical records on a legacy run>
+   Audit only this run's experiments: output/<run-id>/experiments/exp-*
    This is audit round <N>.
    If N > 1: also read every prior output/<run-id>/audit/results-audit.md and the
    claim anchors output/<run-id>/audit/claim-anchor-*.md, and run the stuck-detector.

@@ -79,7 +79,7 @@ Do this yourself; no agent needed.
 
 1. Read `topic.txt` from the run directory. Run the weekly harness lesson review specified in WORKFLOW.md’s Knowledge Bases section.
 
-2. **Check for follow-up context.** First, if `state.md` has `construct_redesign: true`, go straight to 2a-redesign, on a follow-up run too: the redesign replaces the follow-up fast-forward below. Otherwise, if `<run-directory>/followup-context.md` exists, this is a follow-up run:
+2. **Check for follow-up context.** If `<run-directory>/followup-context.md` exists, this is a follow-up run:
 
    a. Read `followup-context.md` to get the user's feedback and parent metadata.
    b. Read `prior/state.md` to get the prior run's clarifications, decisions, experiment results, and novelty verdict.
@@ -117,9 +117,7 @@ Do this yourself; no agent needed.
 
    **Skip to step 3 below** (write state.md with follow-up metadata preserved).
 
-2a-redesign. **Construct-redesign re-entry.** If `state.md` has `construct_redesign: true`, Step 6 sent the plan back here because the covert/target construct was a strawman or the motivating question was being dodged. Read the recorded flaw (`construct_redesign_note` in state.md) and the prior `clarifications`, then generate clarifications that fix *that specific problem*: choose a stronger, faithful construct and re-anchor on the motivating question. Set `construct_loop_count: 1` (so Step 6 won't loop again) and preserve it in state.md. Then continue with the clarification content below, and set `current_step: 1` in step 4 so every later step runs again.
-
-2b. **If this is NOT a follow-up**, self-generate clarifications. Generate reasonable answers by inferring from the topic text:
+   **For a new research line**, self-generate clarifications. Generate reasonable answers by inferring from the topic text:
 
    - **Motivating question (preserve it verbatim)**: State the actual question the topic is asking, in the topic's own framing, especially *directional* framings like "can X be used to **mitigate / detect / prevent / defend against** Y." Do NOT neutralize a directional thesis into a flat characterization ("does X change Y"): if the topic asks whether something *helps*, the deliverable must return a verdict on that, not just measure a quantity. This clarification is the north star for Steps 4 (criteria), 6 (challenge), and 11 (report).
    - **Key terms**: Define key technical terms from the topic in the AI safety context.
@@ -147,7 +145,7 @@ Do this yourself; no agent needed.
 
    If the topic leaves a definition genuinely open, choose the most literal reading of the source wording, and say so. A follow-up keeps the prior spec unless the feedback changes a definition, in which case it records the change.
 
-4. Write `state.md`, keeping every frontmatter field the existing state.md has, including any the template below does not show. Set `current_step` based on `followup_focus` (or `1` for non-follow-ups and for a construct-redesign re-entry):
+4. Write `state.md`, keeping every frontmatter field the existing state.md has, including any the template below does not show. Set `current_step` based on `followup_focus` (use `1` for a new research line):
    ```yaml
    ---
    run_id: <from existing state.md>
@@ -180,7 +178,6 @@ Do this yourself; no agent needed.
      - q: "What assumptions are being made?"
        a: "<your generated answer>"
    decisions: []
-   # If re-entered from a Step 6 construct-redesign, also preserve: construct_loop_count: 1
    ---
 
    Step 1 complete. Topic clarified autonomously. Method spec: method-spec.md.
@@ -471,8 +468,9 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Run directory: <run-dir>/
    Method spec (binding definitions): <run-dir>/method-spec.md
    Pre-flight tooling: ${CLAUDE_PLUGIN_ROOT}/scripts/preflight_checks.py
-   Frozen anchor: <run-dir>/success-criteria.md  (on a follow-up: <run-dir>/prior/success-criteria.md)
-   Audit only this run's experiments: <run-dir>/experiments/exp-*  (IGNORE the prior/ directory)
+   Audit mode: <retained data only, or the specific empirical repeat, verified methods revision and resource limits authorized by the hub>
+   Criteria: <approved methods record and working criteria, plus prior/success-criteria.md on a follow-up; identify the available historical records on a legacy run>
+   Audit only this run's experiments: <run-dir>/experiments/exp-*
    This is audit round <n>.
    If <n> > 1: also read every prior <run-dir>/audit/results-audit.md and the
    round-1 claim anchors <run-dir>/audit/claim-anchor-*.md, and run the stuck-detector.

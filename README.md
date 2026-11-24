@@ -11,7 +11,7 @@ It implements an **11-step research workflow** based on the [Steinhardt fail-fas
 
 Given a research topic, the agent:
 
-1. **Clarifies scope**: asks 3-5 questions to pin down definitions, prior knowledge, and success criteria
+1. **Clarifies scope** from the brief. In interactive mode, it groups any questions whose answers would change the study into one request.
 2. **Searches the literature**: queries arXiv, Semantic Scholar, lab blogs (Anthropic, OpenAI, DeepMind), and community forums (LessWrong, Alignment Forum) in parallel
 3. **Assesses novelty**: determines whether the idea has already been done, is partially novel, or is new
 4. **Defines success criteria**: identifies SOTA baselines, benchmarks, and the minimum publishable contribution
@@ -20,7 +20,7 @@ Given a research topic, the agent:
 7. Prepares a short decision showing what the study can distinguish, the remaining uncertainty and its cost.
 8. Records approval of that version. In interactive mode you decide. In automatic mode a separate reviewer approves, asks for a revision or stops the study.
 9. **Runs experiments**: executes experiments in lambda order, stopping on failure if agreed
-10. **Audits the results**: an independent results-auditor red-teams the outputs (re-derives numbers from raw logs, re-runs the load-bearing experiment, checks for leakage, overclaiming, and reward-hacking), looping to fix genuine methodology defects before write-up
+10. **Audits the results** against primary records. The auditor checks for leakage, overclaiming and grader errors, and can repeat the load-bearing experiment when the hub authorizes it under the approved methods. A separate Codex reviewer challenges the evidence.
 11. **Compiles a LaTeX paper**: produces a full paper with real BibTeX citations, including negative results
 
 ## Prerequisites

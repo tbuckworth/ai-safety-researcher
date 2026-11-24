@@ -318,12 +318,13 @@ An independent auditor red-teams the experiment outputs before write-up. The loo
 1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11. Otherwise copy each experiment's `results.md` to `audit/claim-anchor-<exp>.md` unless that claim anchor already exists, so a remediation re-run cannot overwrite the round-1 claim.
 
 2. **For each round with results**, the hub verifies approval before commissioning any fresh empirical audit or remediation. In parallel, run `evidence RUN` and dispatch a fresh `results-auditor`. The independent evidence critic reads the current primary artifacts. A fresh training seed from the active auditor only counts for the variation it tests. Wait for both reports; record disagreements and which claim each changes in the audit. An evidence review's revise/stop is a scientific objection: qualify, withdraw or re-test the claim within the approved design. A failed reviewer invocation leaves the review incomplete. If a historical run lacks prospective approval, use retained data only, explicitly label the analysis retrospective, and withhold any unverified claim. Give the auditor:
-   - The frozen anchor: original topic + `success-criteria.md` (the pre-registration: goalposts may not move)
+   - The original topic, the criteria saved in the reviewed methods, and the approval record showing which observations were already available. Identify later changes explicitly.
+   - The permitted activity for this audit. Use retained data only for terminal stops and legacy runs lacking approval. For a requested empirical repeat, identify the operation, verified methods revision and resource limits.
    - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log`, `preflight.md` and code files
    - `method-spec.md`, against which it checks method fidelity in the code (a different method under the requested name is `UNSALVAGEABLE` for claims about that method), and `scripts/preflight_checks.py` to re-check generations, metric separation and clustered statistics itself. A FAIL from a pipeline that fails these checks is never `TRUE-NULL`.
    - On round > 1: the prior `audit/results-audit.md` reports + the claim anchors `audit/claim-anchor-*.md`
 
-3. The auditor re-derives every number from the raw logs (and, when prospectively approved and feasible, re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
+3. The auditor re-derives numbers from primary records and, if the hub requested an empirical repeat, checks the load-bearing experiment within the authorized design. It classifies each finding:
    - `SUPPORTED`: the claim is backed by the evidence
    - `FIXABLE-DEFECT`: a defect that could plausibly flip PASS/FAIL (leakage, missing baseline, too few seeds, grader/harness gaming). **Loop on these.**
    - `TRUE-NULL`: sound setup with sufficient precision to exclude effects of the prespecified practical size in the tested population. **Exit to an honest negative** (do not loop: that would be p-hacking).
@@ -482,9 +483,8 @@ decisions:
   - step: 4
     decision: "Success = >80% agreement between automated and human labels on top-100 features"
 novelty_verdict: NOVEL
-criteria_approved: true
-challenge_outcome: proceed
-fail_fast_agreement: true
+criteria_approved: false
+# Step 8 records methodology approval and the agreed stopping rules.
 lambda_table:
   - component: "SAE training convergence"
     p_success: 0.85

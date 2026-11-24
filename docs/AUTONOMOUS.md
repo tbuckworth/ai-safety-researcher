@@ -127,18 +127,21 @@ whole number of at least 1).
 | `RESEARCHER_CODEX_REASONING` | Codex parent reasoning effort |
 | `RESEARCHER_CODEX_FAST_MODEL` | Codex search workers |
 | `RESEARCHER_CODEX_FAST_REASONING` | Codex search-worker effort |
-| `RESEARCHER_CODEX_DEEP_MODEL` | Codex non-search workers (default: the parent model) |
-| `RESEARCHER_CODEX_DEEP_REASONING` | Codex non-search-worker effort (default: the parent's) |
+| `RESEARCHER_CODEX_DEEP_MODEL` | Codex workers for the non-search tasks listed below (default: the parent model) |
+| `RESEARCHER_CODEX_DEEP_REASONING` | Reasoning effort for those workers (default: the parent's) |
 | `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (a Claude run uses its own model) |
 | `RESEARCHER_MODEL` | Overrides the selected backend's model, `RESEARCHER_CLAUDE_MODEL` or `RESEARCHER_CODEX_MODEL` (default: unset) |
 
 The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
 follow) translates Claude `Task(...)` blocks into leaf subagents. It uses the
 fast worker model for search planning and literature collection and the deep
-one for novelty, criteria, decomposition, challenge, experiments, audit,
-reporting and the knowledge base; the runner lists the run's worker models after
-it. If an explicit worker model is unavailable, workers inherit the parent
-model.
+worker model for novelty, criteria, decomposition, experiments, the results
+auditor, reporting and the knowledge base. These workers inherit the parent
+model if an explicit worker override is unavailable. On either backend, the
+hub starts the independent plan critics, automatic methods approver, evidence
+critic and presentation reviewer with `RESEARCHER_REVIEW_MODEL` and
+`RESEARCHER_REVIEW_REASONING`. A failed reviewer invocation leaves the
+corresponding gate incomplete.
 
 A resumed run keeps the backend and models it started with; see
 [Resuming a run](#resuming-a-run).

@@ -52,6 +52,13 @@ assert_grep() { grep -qE -- "$1" "$2" || fail "expected /$1/ in $(basename "$2")
 assert_no_grep() { if grep -qE -- "$1" "$2"; then fail "did not expect /$1/ in $(basename "$2")"; fi; ok; }
 assert_eq() { [ "$1" = "$2" ] || fail "$3: expected '$2', got '$1'"; ok; }
 
+assert_no_run_created() {
+    local entry
+    entry=$(find "$OUT" -mindepth 1 -maxdepth 1 ! -name logs -print -quit)
+    [ -z "$entry" ] || fail "unexpected run output: $entry"
+    ok
+}
+
 # --- mock gh -----------------------------------------------------------------
 cat > "${MOCK_BIN}/gh" <<'MOCK_GH'
 #!/usr/bin/env bash
@@ -598,7 +605,7 @@ run_researcher
 assert_eq "$RC" "0" "exit code"
 assert_grep "skip #1919: duplicate follow-up" "${CASE_DIR}/stdout.log"
 assert_grep "No unprocessed research ideas found" "${CASE_DIR}/stdout.log"
-[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+assert_no_run_created
 
 # =============================================================================
 # 8. Follow-up publishing works in place: the branch continues the prior repo,
@@ -1059,7 +1066,8 @@ jq -e '.reasons | any(test("audit was skipped"))' "${OUT}/2026-01-04-tpr/run-out
 new_case same-day-rerun
 run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Same topic"
 run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Same topic"
-assert_eq "$(ls -d "$OUT"/*-same-topic* | wc -l | tr -d ' ')" "2" "run directories"
+same_topic_runs=("$OUT"/*-same-topic*)
+assert_eq "${#same_topic_runs[@]}" "2" "run directories"
 ls -d "$OUT"/*-same-topic-2 > /dev/null || fail "second run not suffixed"; ok
 # A topic whose 60-character cut ends between two words names its run without
 # a trailing hyphen.
@@ -1212,7 +1220,7 @@ printf '#!/usr/bin/env bash\necho "hostname: mock failure" >&2\nexit 1\n' > "${C
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (hostname failed)"
 assert_grep "ERROR: could not read this machine's hostname \(hostname -s failed\); set RESEARCHER_HOST_ALIAS" "${CASE_DIR}/stdout.log"
-[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+assert_no_run_created
 # A host in RESEARCHER_HOST_ALIASES gets its alias in the email's continuation steps.
 printf '#!/usr/bin/env bash\necho some-laptop\n' > "${CASE_DIR}/bin/hostname"
 run_researcher "PATH=${CASE_DIR}/bin:${MOCK_BIN}:${PATH}" RESEARCHER_HOST_ALIAS= \
@@ -1229,6 +1237,7 @@ assert_grep "^- Run host SSH alias: laptop-alias$" "$(ls -d "$OUT"/*-aliased-hos
 # =============================================================================
 new_case config
 CONFIG_FILE="${CASE_DIR}/researcher.env"
+# shellcheck disable=SC2016 # The test checks that config treats a shell substitution as literal text.
 printf '# a comment\n\nRESEARCHER_TASKS_REPO=file/tasks\nRESEARCHER_DEFAULT_KB_DIR=~/wiki\nRESEARCHER_EMAIL_TO=$(touch %s/ran)\n' \
     "$CASE_DIR" > "$CONFIG_FILE"
 config_get() {
@@ -1262,7 +1271,7 @@ grep -v '^RESEARCHER_GITHUB_OWNER=' "${REPO_DIR}/config/researcher.env" > "$CONF
 run_researcher "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (runner, missing key)"
 assert_grep "ERROR: RESEARCHER_GITHUB_OWNER is not set: define it in ${CONFIG_FILE} or the environment" "${CASE_DIR}/stdout.log"
-[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+assert_no_run_created
 grep -v '^RESEARCHER_EMAIL_TO=' "${REPO_DIR}/config/researcher.env" > "$CONFIG_FILE"
 set +e
 env "RESEARCHER_CONFIG_FILE=${CONFIG_FILE}" RESEARCHER_EMAIL_TO= RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
@@ -1303,12 +1312,12 @@ new_case presets
 run_researcher RESEARCHER_COMPUTE_PROFILE=modal -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (paid preset, no budget)"
 assert_grep "ERROR: the modal compute profile is paid: set RESEARCHER_COMPUTE_BUDGET_USD" "${CASE_DIR}/stdout.log"
-[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+assert_no_run_created
 run_researcher RESEARCHER_COMPUTE_PROFILE=lamda RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (misspelt preset)"
 assert_grep "ERROR: 'lamda' is not a compute-profile preset \(those in config/compute-profiles/ are: lambda local modal\); a profile written out as text has more than one word" \
     "${CASE_DIR}/stdout.log"
-[ -z "$(ls -A "$OUT" | grep -v '^logs$' || true)" ] || fail "a run directory was created"; ok
+assert_no_run_created
 # scripts/config.sh --compute-profile resolves a profile the same way, for the
 # interactive workflow; both paid presets carry the one paid-compute text.
 for preset in modal lambda; do
@@ -1563,7 +1572,9 @@ assert_grep "^--subject \[UNPUBLISHED\] \[Auto-Research\] Helper test \| from=he
 #     here; one with neither stops too.
 # =============================================================================
 no_run_dirs() {
-    [ -z "$(ls -A "$OUT" | grep -v -e '^logs$' -e '^\.tmp$' || true)" ] || fail "a run directory was left: $(ls "$OUT")"
+    local entry
+    entry=$(find "$OUT" -mindepth 1 -maxdepth 1 ! -name logs ! -name .tmp -print -quit)
+    [ -z "$entry" ] || fail "unexpected run output: $entry"
     [ -z "$(ls -A "${OUT}/.tmp" 2>/dev/null)" ] || fail "a prior clone was left"
     ok
 }

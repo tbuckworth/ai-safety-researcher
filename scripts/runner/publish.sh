@@ -5,7 +5,7 @@
 publish_fail() {
     PUBLISH_STATE="failed"
     PUBLISH_ERROR="$1"
-    log "ERROR: publishing failed: $1. Results remain local in ${RUN_DIR}; no repo link will be advertised."
+    log "ERROR: publishing failed: ${PUBLISH_ERROR}. Results remain local in ${RUN_DIR}; no repo link will be advertised."
 }
 
 free_mb() {
@@ -191,6 +191,7 @@ commit_and_push() {
     exclude_nested_repos
     exclude_large_files
     if commit_all "$mode" "$message" && push_and_verify "$branch"; then
+        # shellcheck disable=SC2034 # Final outcome is computed by researcher-cron.sh.
         PUBLISH_STATE="pushed"
         REPO_WEB="${GITHUB_WEB}/${repo}"
         printf '%s\n' "${REPO_WEB}${link_path}" > "${RUN_DIR}/.repo_url"
@@ -214,6 +215,7 @@ require_visibility() {
         publish_fail "$1 is ${vis:-unreadable}, not ${REPO_VISIBILITY}, so nothing was pushed there; re-run with RESEARCHER_REPO_VISIBILITY=${vis:-<visibility>} if that is intended, or $2"
         return 1
     fi
+    # shellcheck disable=SC2034 # Read by notify.sh when it renders the issue comment.
     PUBLISHED_VISIBILITY="$vis"
 }
 
@@ -357,10 +359,10 @@ COMMITEOF
 )
 
     REPO_BRANCH="main"
-    cd "$RUN_DIR"
+    cd "$RUN_DIR" || return 1
     prepare_local_repo "$REPO_BRANCH" "$(git_remote_for "${REPO_OWNER}/${slug}")"
     commit_and_push all "$REPO_BRANCH" "${REPO_OWNER}/${slug}" "" "$message"
-    cd "$REPO_DIR"
+    cd "$REPO_DIR" || return 1
 }
 
 publish_followup() {
@@ -383,7 +385,7 @@ publish_followup() {
     require_visibility "$prior_path" "push the follow-up by hand" || return 1
 
     log "Publishing follow-up results to ${GITHUB_WEB}/${prior_path} on branch ${branch} (based on ${base_branch:-its default branch})"
-    cd "$RUN_DIR"
+    cd "$RUN_DIR" || return 1
     printf '%s\n' "$branch" > .publish_branch
     prepare_local_repo "$branch" "$(git_remote_for "$prior_path")"
     if ! git rev-parse -q --verify HEAD >/dev/null; then
@@ -394,13 +396,13 @@ publish_followup() {
             local refs
             if ! refs=$(git ls-remote origin 2>/dev/null); then
                 publish_fail "could not reach ${prior_path}"
-                cd "$REPO_DIR"
+                cd "$REPO_DIR" || return 1
                 return 1
             elif [ -n "$refs" ]; then
                 # Reachable with history, yet the base would not fetch: an
                 # orphan branch would cut the line's history, so stop here.
                 publish_fail "could not fetch ${base_branch:-the default branch} of ${prior_path}"
-                cd "$REPO_DIR"
+                cd "$REPO_DIR" || return 1
                 return 1
             fi
             log "WARN: ${prior_path} is empty; the branch will hold only this run's files."
@@ -417,7 +419,7 @@ ${COMMIT_ATTRIBUTION}
 COMMITEOF
 )
     commit_and_push overlay "$branch" "$prior_path" "/tree/${branch}" "$message"
-    cd "$REPO_DIR"
+    cd "$REPO_DIR" || return 1
 }
 
 publish_run() {

@@ -170,6 +170,7 @@ run_step() {
     while [ "$spent" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((spent + 1))
         run_log="${LOG_DIR}/step-${step}-attempt-${attempt}-$(date +%Y%m%d-%H%M%S).log"
+        # shellcheck disable=SC2034 # provider.sh includes the path in the next-steps handoff.
         LAST_STEP_LOG="$run_log"
         if [ "$attempt" -eq 1 ]; then
             log "Starting step ${step}..."
@@ -358,6 +359,7 @@ write_next_steps() {
     log "Wrote ${RUN_DIR}/next-steps.md."
 }
 
+# shellcheck disable=SC2034 # These three flags control the wrapper after the step loop.
 pause_run() {
     # Keep provider, guard and review holds resumable and preserve the issue claim.
     log "Run PAUSED at step $1. Skipping repo publish, email, and issue update."

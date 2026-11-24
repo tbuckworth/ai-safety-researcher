@@ -16,18 +16,17 @@ Given a research topic, the agent:
 3. **Assesses novelty**: determines whether the idea has already been done, is partially novel, or is new
 4. **Defines success criteria**: identifies SOTA baselines, benchmarks, and the minimum publishable contribution
 5. **Decomposes into components**: Steinhardt decomposition with lambda ordering (highest-risk-per-hour components first)
-6. **Challenges the plan**: three independent adversarial reviews run in parallel: assumption analysis, mentor-review critique, and pre-mortem failure scenarios
-7. **Reports experiment plan**: presents the lambda-ordered experiment table for approval
-8. **Confirms fail-fast agreement**: explicit agreement that the project stops or pivots if the riskiest experiment fails
+6. Writes each experiment's methods, then obtains three independent Codex critiques of rival explanations, controls and stopping criteria.
+7. Prepares a short decision showing what the study can distinguish, the remaining uncertainty and its cost.
+8. Records approval of that version. In interactive mode you decide. In automatic mode a separate reviewer approves, asks for a revision or stops the study.
 9. **Runs experiments**: executes experiments in lambda order, stopping on failure if agreed
 10. **Audits the results**: an independent results-auditor red-teams the outputs (re-derives numbers from raw logs, re-runs the load-bearing experiment, checks for leakage, overclaiming, and reward-hacking), looping to fix genuine methodology defects before write-up
 11. **Compiles a LaTeX paper**: produces a full paper with real BibTeX citations, including negative results
 
 ## Prerequisites
 
-- One or both model CLIs:
-  - **[Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)**: for the default Claude backend
-  - **[Codex CLI](https://developers.openai.com/codex/cli/)**: for the optional Codex backend
+- An authenticated [Codex CLI](https://developers.openai.com/codex/cli/) for independent methods, evidence and presentation review on either backend.
+- The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) for a Claude orchestrator or routed autonomous results email.
 - **[gh CLI](https://cli.github.com/)**: authenticated (`gh auth login`), used for GitHub issue integration
 - **Python 3**: for experiment execution
 - **tectonic** or **pdflatex**: for LaTeX compilation (Ubuntu: `sudo snap install tectonic`)
@@ -82,7 +81,7 @@ Or with Codex, ask naturally or invoke the installed skill explicitly:
 $researcher:researcher Does gradient routing create isolated loss basins in fine-tuned models?
 ```
 
-The orchestrator walks you through all 11 steps, asking for your input at each decision point (search plan approval, novelty verdict, criteria review, challenge synthesis, experiment plan, fail-fast agreement).
+You set the question and approve the concrete methods, comparisons and stop rules before execution. The hub handles routine work. A material change to the approved design comes back to you.
 
 ### Autonomous Mode (no human interaction)
 
@@ -145,7 +144,7 @@ is for understanding a run; `/researcher-continue` is for proceeding from it.
 
 Two optional knowledge bases carry what runs learn into later runs: a global
 wiki shared by every research line, and a `knowledge/` directory in each
-research repo. A run without them behaves identically. Bootstrap the global
+research repo. A separate local register carries verified harness lessons across runs even when the wiki is disabled. Bootstrap the global
 wiki at `RESEARCHER_DEFAULT_KB_DIR` (`config/researcher.env`) with:
 
 ```bash
@@ -155,6 +154,8 @@ scripts/kb-init.sh
 [`docs/KNOWLEDGE-BASE.md`](docs/KNOWLEDGE-BASE.md) describes both.
 
 ## Documentation
+
+[Designing and reporting an informative experiment](docs/SCIENTIFIC-REPORTING.md) gives the standards for methodology approval, evidence and figures.
 
 - [`docs/WORKFLOW.md`](docs/WORKFLOW.md): the 11-step workflow, the run directory and `state.md`.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): the hub-and-spoke design and the agent catalogue.

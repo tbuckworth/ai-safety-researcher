@@ -29,9 +29,7 @@ agent-spare (or by hand) → researcher-cron.sh
 
 On the machine running the autonomous runs (desktop):
 
-- At least one authenticated model CLI:
-  - **Claude Code CLI** for `RESEARCHER_BACKEND=claude` (the default)
-  - **Codex CLI** for `RESEARCHER_BACKEND=codex`
+- An authenticated **Codex CLI** for independent reviews on either backend, plus the Claude Code CLI when using the Claude backend.
 - **gh CLI**: authenticated (`gh auth login`)
 - **agent-mail** (`~/.local/bin/agent-mail`, from `~/pyg/agent-mailroom`) and
   the Claude Code CLI for the results email. See "The results email" below.
@@ -123,6 +121,8 @@ whole number of at least 1).
 |---------|---------|
 | `RESEARCHER_BACKEND` | Parent CLI and issue-label namespace |
 | `RESEARCHER_CLAUDE_MODEL` | Claude parent model |
+| `RESEARCHER_REVIEW_MODEL` | Independent Codex reviewers and the automatic methods approver on either backend |
+| `RESEARCHER_REVIEW_REASONING` | Reasoning effort for those reviewers |
 | `RESEARCHER_CODEX_MODEL` | Codex parent/deep-worker model |
 | `RESEARCHER_CODEX_REASONING` | Codex parent reasoning effort |
 | `RESEARCHER_CODEX_FAST_MODEL` | Codex search workers |
@@ -207,28 +207,9 @@ spending limit on the provider account or project.
 
 ## Decision Heuristics
 
-The autonomous mode replaces 9 human interaction points:
+The hub clarifies scope from the topic or issue, conducts the search, checks novelty and sets decision-relevant success criteria. Before execution it writes the actual per-experiment methods. Three independent reviewers assess them and a separate automatic approver decides whether that revision can run. A disproof experiment also goes through approval. A theoretical rethink can finish with a rationale and zero experiments. The full criteria, revision rules and approval commands are in [Steps 6–8 of the workflow](WORKFLOW.md#step-6-write-and-challenge-the-methods).
 
-| Step | Interactive Mode | Autonomous Mode |
-|------|-----------------|-----------------|
-| 1. Clarify topic | Ask 3-5 questions | Self-generate from topic + issue body |
-| 2. Search plan | User approves | Auto-approve |
-| 3. Novelty verdict | User decides | NOVEL/PARTIALLY_NOVEL → proceed; ALREADY_DONE → 1 retry then proceed |
-| 4. Success criteria | User approves | Auto-approve |
-| 6. Challenge synthesis | User picks path | Construct-validity gate first (strawman/known-outcome → loop to Step 1 once to redesign); then PROCEED/MINOR → go; MAJOR → 1 re-decomposition; RETHINK → graceful pivot. Fix-now limitations folded into the plan; rest → Future Work |
-| 7. Experiment plan | User confirms | Auto-approve, cap at `RESEARCHER_MAX_EXPERIMENTS` |
-| 8. Fail-fast agreement | User agrees | Always yes |
-| 9. On failure | User decides | Write up negative result |
-| 10. Results audit | User steers the loop | Loop on FIXABLE-DEFECT up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds; exit on SUPPORTED / TRUE-NULL / cap; unresolved findings → Limitations |
-
-### RETHINK_APPROACH Handling
-
-When the mentor-review agent says the approach is fundamentally flawed:
-
-1. If the theoretical argument alone is convincing → skip experiments, compile a "why this doesn't work" paper
-2. If a quick disproof experiment would be more convincing → run just that one experiment, then compile the paper
-
-Both produce valuable output: "here's why this idea doesn't work, and here's the evidence."
+Each critique and approval is saved under `reviews/` in the run directory. Receipts identify their inputs, decision, model, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision.
 
 ## Compute Profile (hardware-agnostic)
 
@@ -361,7 +342,7 @@ never fails a step.
   | `no-results` | Finished, but no experiment produced a valid verdict (e.g. all `INCONCLUSIVE`) | 4 |
   | `partial` | Stopped early (timeout or failure) with some valid results | 4 |
   | `failed` | Stopped early with no valid results | 4 |
-  | `paused` | Provider usage limit; resumable, nothing published | 3 |
+  | `paused` | Resumable hold, including a provider limit or a pending review. See the recorded reason. | 3 |
 
   A timeout does not overwrite a finished run: if the report completes after the timeout fast-track, the status stays `complete` with `timed_out: true` and the skipped audit listed as a caveat. Only an unfinished run becomes `timed_out` (a terminal status).
 
@@ -372,6 +353,7 @@ never fails a step.
   | `PASS`, `FAIL`, `MIXED` | The verdict line of its `results.md` (`PARTIAL` reads as `MIXED`) | yes |
   | `INCONCLUSIVE` | It could not answer its question: a failed pre-flight check, a verdict line of `INCONCLUSIVE` or `INVALID`, or a `FAIL` that names affordability (FAIL-on-affordability) | no |
   | `UNKNOWN` | Its `results.md` has no recognisable verdict line | no |
+  | `PLANNED` | Documented before launch; the experiment has not started | No |
   | `MISSING` | Its directory exists, but it wrote no `results.md` (it started and stopped) | no |
 
   The caveats report the experiments that are not valid, a finished run without `paper/paper.pdf` (with the `paper_compile_error` Step 11 records in `state.md`), and a run that is not paused without `next-steps.md`.
@@ -481,7 +463,7 @@ redesign would answer a question that was never actually asked.
    - Creates a fresh run directory (not inside the prior repo)
 
 3. **Smart fast-forward**: Step 1 reads the prior context and feedback, then decides how much of the workflow to skip:
-   - "Re-run experiments differently" → skips to Step 9 (copies prior literature, decomposition, challenge)
+   - "Re-run experiments differently" → reuses prior context and starts the new methods review before execution
    - "Redesign the approach" → skips to Step 5 (copies prior literature)
    - "Wrong framing, needs new literature" → runs full workflow from Step 2
 
@@ -535,6 +517,8 @@ output/<date>-followup-<slug>/
 ```
 
 ## The results email
+
+The email leads with what the reviewed evidence changes for the original research question. A pilot, an inconclusive primary comparison and a decision to stop can coexist in the first paragraph. When asking the recipient for a decision, the writer adds one agent-mail choices object in `email-choices.json`. The helper appends it to the plain report and lets the Mail tab render buttons. Informational mail uses the HTML draft.
 
 The email goes to `RESEARCHER_EMAIL_TO` from the agents' mail account, like
 every agent's mail, never from the recipient's own Gmail. A Claude session writes it and sends it

@@ -9,15 +9,4 @@ When this skill is triggered, read `../researcher/SKILL.md` completely and
 follow it directly. Do not try to invoke a `/researcher` slash command: that is
 the Claude Code entry point, while Codex uses the sibling skill adapter.
 
-This plugin provides an 11-step interactive research workflow:
-1. Clarify the research topic with the user
-2. Conduct structured literature search (academic, lab blogs, community)
-3. Assess novelty against existing work
-4. Define success criteria and SOTA benchmarks
-5. Steinhardt fail-fast decomposition (lambda ordering)
-6. Challenge the research plan (assumption analysis, mentor review, pre-mortem)
-7. Report planned experiments to user
-8. Confirm fail-fast agreement
-9. Execute experiments in lambda order
-10. Audit the results (independent red-team + remediation loop)
-11. Compile LaTeX research paper
+The orchestrator follows `docs/WORKFLOW.md`, including independent review and approval of the concrete methods before experiments, an evidence audit and a reader’s check of the final report.

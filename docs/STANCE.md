@@ -19,7 +19,8 @@ The voice shift changes **prose, output-template slots, and user-facing language
 | Token | Where it matters |
 |-------|------------------|
 | `PASS` / `FAIL` / `INCONCLUSIVE` / `MIXED` | experiment verdicts (`## Verdict:` in results.md); matched by orchestrator + email composer + `scripts/researcher_lib.py`, which also reads `PARTIAL` as `MIXED`, and `INVALID` or a `FAIL` that names affordability (FAIL-on-affordability) as `INCONCLUSIVE` |
-| `MISSING` / `UNKNOWN` | the verdicts `scripts/researcher_lib.py` gives an experiment directory with no results.md, and a results.md with no verdict line it recognises (run-outcome.json, the issue comment) |
+| `PLANNED` | A methods directory created before dispatch, with no execution artifacts |
+| `MISSING` / `UNKNOWN` | the verdicts `scripts/researcher_lib.py` gives a started experiment with no results.md, and a results.md with no verdict line it recognises (run-outcome.json, the issue comment) |
 | `## Component Tested` | results.md section; `scripts/researcher_lib.py` takes its first line as the experiment's component |
 | `PASS` / `FAIL` / `WARN` / `N/A` in `preflight.md` | pre-flight check table; parsed by `scripts/researcher_lib.py` (a `FAIL` turns the experiment's verdict into `INCONCLUSIVE`) |
 | filename `method-spec.md` | the binding definition of each named method; read by decomposition, experiment, auditor, report |

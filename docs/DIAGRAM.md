@@ -1,136 +1,29 @@
 # Architecture Diagram
 
-## Workflow Overview
+## Workflow overview
 
 ```mermaid
 flowchart TD
-    User(["/researcher &lt;topic&gt;"]) --> S1
-
-    subgraph ORCH["ORCHESTRATOR (commands/researcher.md)"]
-        S1["Step 1: Clarify Topic"]
-        S2["Step 2: Research Literature"]
-        S3["Step 3: Assess Novelty"]
-        S4["Step 4: Define Success Criteria"]
-        S5["Step 5: Steinhardt Decomposition"]
-        S6["Step 6: Challenge Research Plan"]
-        S7["Step 7: Report Experiment Plan"]
-        S8["Step 8: Confirm Fail-Fast"]
-        S9["Step 9: Execute Experiments"]
-        S10["Step 10: Audit Results"]
-        S11["Step 11: Compile Paper"]
-        Done(["Done: paper.pdf"])
-
-        S1 -->|"user answers 3-5 Qs"| S2
-        S2 --> S3
-        S3 --> S4
-        S4 --> S5
-        S5 --> S6
-        S6 --> S7
-        S7 --> S8
-        S8 --> S9
-        S9 --> S10
-        S10 --> S11
-        S11 --> Done
-    end
-
-    %% Loop-backs
-    S3 -.->|"ALREADY_DONE → refine"| S2
-    S4 -.->|"disagree w/ SOTA"| S2
-    S4 -.->|"disagree w/ benchmarks"| S3
-    S6 -.->|"construct-validity flaw → redesign construct"| S1
-    S6 -.->|"revise decomposition"| S5
-    S6 -.->|"revise criteria"| S4
-    S6 -.->|"re-research"| S2
-    S7 -.->|"revise decomposition"| S5
-    S9 -.->|"FAIL → pivot topic"| S1
-    S10 -.->|"FIXABLE-DEFECT → re-run flagged exp"| S9
-
-    %% Agents
-    SP["search-planner ⚡"]:::agent --> S2
-    SE["search ×3 ⚡"]:::agent --> S2
-    NA["novelty-analyst"]:::agent --> S3
-    CR["criteria"]:::agent --> S4
-    DE["decomposition"]:::agent --> S5
-    AC["assumption-challenger"]:::agent --> S6
-    SM2["mentor-review"]:::agent --> S6
-    PM["pre-mortem"]:::agent --> S6
-    EX["experiment ×N"]:::agent --> S9
-    RA["results-auditor ×rounds"]:::agent --> S10
-    RE["report"]:::agent --> S11
-    KN["knowledge"]:::agent --> S2 & S6 & S11
-
-    %% User interaction points
-    S1 ~~~ U1(["🗣 User dialogue"]):::user
-    S2 ~~~ U2(["🗣 Approve search plan"]):::user
-    S3 ~~~ U3(["🗣 Novelty verdict review"]):::user
-    S4 ~~~ U4(["🗣 Criteria approval"]):::user
-    S6 ~~~ U6c(["🗣 Challenge outcome"]):::user
-    S7 ~~~ U7(["🗣 Experiment plan review"]):::user
-    S8 ~~~ U8(["🗣 Fail-fast agreement"]):::user
-    S9 ~~~ U9(["🗣 Failure triage"]):::user
-
-    classDef agent fill:#4a9eff,stroke:#2670c2,color:#fff
-    classDef user fill:#f5a623,stroke:#d48b0c,color:#fff
+    H[Claude or Codex orchestrator] --> Q[1 Clarify the decision]
+    Q --> S[2 Search literature] --> N[3 Assess novelty]
+    N --> C[4 Define criteria] --> D[5 Order experiments]
+    D --> M[6 Write methods and commission three Codex critiques]
+    M --> B[7 Prepare short methods decision]
+    B --> A{8 Approve this revision?}
+    T[Titus in interactive mode] --> A
+    U[Separate reviewer in automatic mode] --> A
+    A -->|Revise| M
+    A -->|Stop| F[Write rationale and next steps]
+    A -->|Approve| E[9 Verify and execute in order]
+    E --> R[10 Results auditor and Codex evidence reviewer]
+    R -->|Approved repair| E
+    R -->|Material change| M
+    R --> P[11 Report and final reader]
+    F --> P
+    P -->|Accepted draft| Z[Release findings]
 ```
 
-## Hub-and-Spoke Architecture
-
-```mermaid
-flowchart LR
-    subgraph Hub
-        O["Orchestrator\n/researcher"]
-    end
-
-    subgraph Agents["Leaf-Node Agents"]
-        A1["search-planner"]
-        A2["search"]
-        A3["novelty-analyst"]
-        A4["criteria"]
-        A5["decomposition"]
-        A6["assumption-challenger"]
-        A7["mentor-review"]
-        A8["pre-mortem"]
-        A9["experiment"]
-        A10["results-auditor"]
-        A11["report"]
-        A12["knowledge"]
-    end
-
-    subgraph State["Persistent State"]
-        SM["state.md"]
-        AR["Artefact files\n(literature, criteria, etc.)"]
-    end
-
-    U(["User"]) <-->|"AskUserQuestion"| O
-    O -->|"Task()"| A1
-    O -->|"Task() ×3"| A2
-    O -->|"Task()"| A3
-    O -->|"Task()"| A4
-    O -->|"Task()"| A5
-    O -->|"Task()"| A6
-    O -->|"Task()"| A7
-    O -->|"Task()"| A8
-    O -->|"Task() ×N"| A9
-    O -->|"Task() ×rounds"| A10
-    O -->|"Task()"| A11
-    O -->|"Task()"| A12
-
-    A1 -->|writes| AR
-    A2 -->|writes| AR
-    A3 -->|writes| AR
-    A4 -->|writes| AR
-    A5 -->|writes| AR
-    A6 -->|writes| AR
-    A7 -->|writes| AR
-    A8 -->|writes| AR
-    A9 -->|writes| AR
-    A10 -->|writes| AR
-    A11 -->|writes| AR
-    A12 -->|writes| AR
-
-    O <-->|"read/write"| SM
-    O <-->|"read"| AR
-```
+The hub dispatches each leaf and owns all user dialogue. The three plan reviewers see the same inputs independently. The separate automatic approver sees their disagreements. See the [workflow](WORKFLOW.md) for loop limits and the [agent inventory](ARCHITECTURE.md#agent-inventory) for responsibilities.
 
 ## Fail-Fast Lambda Ordering
 

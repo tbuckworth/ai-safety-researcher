@@ -18,7 +18,7 @@ send_email() {
     email_log="${LOG_DIR}/email-$(date +%Y%m%d-%H%M%S).log"
     cd "$REPO_DIR"
     rm -f "${RUN_DIR}/email-draft.html" "${RUN_DIR}/email-subject.txt" "${RUN_DIR}/email-images.txt" \
-        "${RUN_DIR}/.email-sent"
+        "${RUN_DIR}/email-choices.json" "${RUN_DIR}/.email-sent"
     EMAIL_SESSION=$(python3 -c 'import uuid; print(uuid.uuid4())')
     set +e
     if command -v "$EMAIL_CLAUDE_BIN" >/dev/null 2>&1; then

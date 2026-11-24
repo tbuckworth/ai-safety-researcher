@@ -77,7 +77,7 @@ WORKFLOW.md says: its table lists the touch points, and it says what to do when
 
 Do this yourself; no agent needed.
 
-1. Read `topic.txt` from the run directory to get the full topic (may include GitHub issue body).
+1. Read `topic.txt` from the run directory. Run the weekly harness lesson review specified in WORKFLOW.md’s Knowledge Bases section.
 
 2. **Check for follow-up context.** First, if `state.md` has `construct_redesign: true`, go straight to 2a-redesign, on a follow-up run too: the redesign replaces the follow-up fast-forward below. Otherwise, if `<run-directory>/followup-context.md` exists, this is a follow-up run:
 
@@ -100,7 +100,7 @@ Do this yourself; no agent needed.
    - "This run should focus on: \<what's different this time\>."
 
    **Determine follow-up scope** from the feedback. Set `followup_focus` in state.md to one of:
-   - `experiments_only`: feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 8` and `fail_fast_agreement: true` to jump to experiments
+   - `experiments_only`: feedback is about re-running/changing experiments (e.g., "use harder training data", "try a different model") → set `current_step: 5` to reuse the decomposition and start at Step 6. Prepare, review and approve new methods for this follow-up
    - `from_decomposition`: feedback changes the research design (e.g., "add a new component", "different approach") → set `current_step: 4` to redo decomposition onward
    - `from_literature`: feedback changes the framing or the literature, or is a substantial pivot → set `current_step: 1` to redo from Step 2
 
@@ -109,7 +109,7 @@ Do this yourself; no agent needed.
    - Copy `prior/novelty-assessment.md` → `novelty-assessment.md`
    - Copy `prior/success-criteria.md` → `success-criteria.md`
    - Copy `prior/decomposition.md` → `decomposition.md`
-   - Copy `prior/challenge/` files → `challenge/`
+   - Keep `prior/challenge/` as historical context. Review this run’s own methods.
    - Copy `prior/references.bib` → `references.bib` (if exists)
    - Copy `prior/method-spec.md` → `method-spec.md` (if exists), then amend it for anything the feedback changes. If the prior run has none, always write one (step 3a below), whatever the `followup_focus`.
 
@@ -332,9 +332,8 @@ If `state.md` contains `is_followup: true`:
    """)
    ```
 
-2. **Auto-approve.** Read the criteria to verify they were produced. Log any warnings about unclear SOTA but proceed.
-
-3. Update `state.md`: `current_step: 4, status: criteria_approved, criteria_approved: true`.
+2. Check whether the criteria were written and address the motivating question. Carry them into the independent methods decision.
+3. Record `current_step: 4, status: criteria_drafted, criteria_approved: false`. The Step 8 approval covers the reviewed criteria.
 
 ---
 
@@ -385,141 +384,17 @@ If `state.md` contains `is_followup: true`:
 
 ---
 
-## Step 6: Challenge the Research Plan
+## Step 6: Write and challenge the methods
 
-### Follow-Up Handling
+Follow WORKFLOW.md Step 6, including on an experiments-only follow-up. Use the current run’s budget and filter before materializing plans. Fold any cheap disproof experiment into the ordinary reviewed order. The hub calls `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN` on actual plans and resolves the independent critiques. Record the triage, objections and revision. Return to this step for a material revision. If a serious defect cannot be resolved within the allowed design revision, record the stopping reason in `methods-stop.md`, set `current_step: 9` and proceed to the audit of whatever ran. Use `rethink-rationale.md` only for a supported theoretical conclusion. Otherwise set `current_step: 6, status: challenge_complete`.
 
-If `state.md` contains `is_followup: true`:
-1. Read `followup-context.md` for the user's feedback.
-2. Read `prior/challenge/` files for the prior challenge analysis.
-3. The challenge agents should focus on NEW risks introduced by the follow-up direction. Include in each agent prompt: "Prior challenge analysis is in \<run-dir\>/prior/challenge/. The user's follow-up feedback: \<feedback summary\>. Focus on risks specific to the changed approach."
+## Step 7: Prepare the decision
 
-### Process
+Prepare the short methods decision from WORKFLOW.md Step 7 for the independent approver. Record the concrete comparison, strongest rival, distinguishing control, cost, stopping rule and exact revision. Set `current_step: 7, status: experiments_planned`.
 
-This step runs three **independent** adversarial review passes on the same plan. They do **not** build on each other: dispatch all three in a single message so they run in parallel, each forming its own view from the base artifacts. Independence is the point: it stops the later passes from anchoring on the earlier ones.
+## Step 8: Obtain independent approval
 
-1. **Create challenge directory** (if not exists):
-   ```bash
-   mkdir -p <run-dir>/challenge/
-   ```
-
-1b. **Pull the accumulated lessons** (skip silently if `knowledge_base:` is `none`).
-   Run this *before* the challenge agents so they can be handed real prior failures
-   instead of hypothetical ones:
-   ```
-   Task(subagent_type="researcher:knowledge", prompt="""
-   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/knowledge.md
-
-   Operation: query
-   Scope: global
-   Global KB path: <knowledge_base from state.md>
-   Subject: Which recorded lessons bear on THIS plan? Read lessons/ in full
-   (common-failures, experiment-design, compute, tooling) and the thread page for
-   this research line if one exists. Return only the lessons that plausibly apply
-   to the decomposition in <run-dir>/decomposition.md under this run's
-   compute_profile, with, for each, the symptom to watch for and the check that
-   catches it early. Return nothing rather than padding with generic advice.
-
-   Write your output to: <run-dir>/challenge/kb-lessons.md
-   """)
-   ```
-   Then add to each of the three challenge agent prompts below: "If
-   `<run-dir>/challenge/kb-lessons.md` exists, read it: it lists failure modes
-   that have actually occurred in prior runs of this workflow. A lesson that
-   applies to this plan is evidence, not speculation: weight it accordingly."
-
-2. **Spawn all three challenge agents in parallel**: issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artifacts; no agent reads another's output.
-   ```
-   Task(subagent_type="researcher:assumption-challenger", prompt="""
-   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
-
-   Read state from: <run-dir>/state.md
-   Read synthesis from: <run-dir>/literature/synthesis.md
-   Read novelty from: <run-dir>/novelty-assessment.md
-   Read criteria from: <run-dir>/success-criteria.md
-   Read decomposition from: <run-dir>/decomposition.md
-   Write output to: <run-dir>/challenge/assumption-analysis.md
-   """)
-
-   Task(subagent_type="researcher:mentor-review", prompt="""
-   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/mentor-review.md
-
-   Read state from: <run-dir>/state.md
-   Read synthesis from: <run-dir>/literature/synthesis.md
-   Read novelty from: <run-dir>/novelty-assessment.md
-   Read criteria from: <run-dir>/success-criteria.md
-   Read decomposition from: <run-dir>/decomposition.md
-   Return your review as text. Do NOT write any files.
-   """)
-
-   Task(subagent_type="researcher:pre-mortem", prompt="""
-   Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
-
-   Read state from: <run-dir>/state.md
-   Read synthesis from: <run-dir>/literature/synthesis.md
-   Read novelty from: <run-dir>/novelty-assessment.md
-   Read criteria from: <run-dir>/success-criteria.md
-   Read decomposition from: <run-dir>/decomposition.md
-   Write output to: <run-dir>/challenge/pre-mortem.md
-   """)
-   ```
-   Wait for all three to complete. **Save the mentor-review agent's returned text** to `<run-dir>/challenge/mentor-review.md` using the Write tool (assumption-challenger and pre-mortem write their own files).
-
-3. **Read all three challenge files.** Extract the mentor-review verdict.
-
-3.5. **Construct-validity gate (runs BEFORE the verdict mapping).** Scan all three challenge files for a construct-validity / known-outcome flaw, regardless of the verdict enum any agent assigned: a headline experiment whose result is fixed by construction (statable on paper without running it), a covert/target construct that is a strawman the operator defeats trivially because it is a surface artifact rather than a real goal, or a plan that never returns a verdict on the motivating question. If such a flaw is present **and** it is not cheaply fixable inside the current plan:
-   - Check `construct_loop_count` in state.md. If 0 or absent: set `current_step: 0, construct_redesign: true, construct_loop_count: 1` (`current_step: 0` makes the wrapper run Step 1 next), and write `construct_redesign_note:` with the specific flaw and the redesign it calls for (e.g. "covert goal is a fixed marker string, trivially defeated by interleaving; replace with a date-conditional behaviour that achieves an objective"). This loops back to Step 1 to redefine the construct; treat it as `RETHINK_APPROACH` for logging. **Stop here** (do not also apply the verdict mapping this pass).
-   - If `construct_loop_count >= 1`: the construct was already redesigned once. Do not loop again; proceed, but record `construct_validity: unresolved` so the flaw is stated plainly in the paper (Limitations) rather than hidden. Continue to the verdict mapping.
-   - If no construct-validity flaw is present, record `construct_validity: ok` and continue.
-
-4. **Autonomous decision based on mentor-review verdict** (only if the construct-validity gate did not loop back):
-
-   - **PROCEED_AS_IS**: Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed`.
-   - **MINOR_REVISIONS**: Log the suggested revisions in state.md. Proceed. Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed_with_notes`.
-   - **MAJOR_REVISIONS**:
-     - Check `challenge_loop_count` in state.md.
-     - If 0 or absent: Set `current_step: 4, challenge_loop_count: 1`. This loops back to Step 5 for re-decomposition with challenge feedback incorporated.
-     - If >= 1: Proceed anyway. Set `current_step: 6, status: challenge_complete, challenge_outcome: proceed_despite_major`.
-   - **RETHINK_APPROACH**: Graceful pivot.
-     1. Read the challenge files carefully. Determine: is the theoretical argument for why this won't work **sufficient on its own**, or would a **quick disproof experiment** make the case stronger and more convincing?
-     2. If theory alone is sufficient (the flaw is obvious):
-        - Write a summary of why the approach won't work to `<run-dir>/rethink-rationale.md`
-        - Set `current_step: 9, status: rethink_theory_only, challenge_outcome: rethink`. The wrapper runs Step 10 (audit), which short-circuits a theory-only rethink (nothing to audit) straight through to Step 11 (report) to compile a negative-result paper.
-     3. If a simple disproof experiment would strengthen the case:
-        - Write a minimal `decomposition.md` with ONLY the disproof experiment
-        - Write `<run-dir>/rethink-rationale.md` explaining the theoretical argument
-        - Set `current_step: 6, status: challenge_complete, challenge_outcome: rethink_with_disproof, rethink_disproof: true`
-        - Steps 7-10 proceed normally but with only the single disproof experiment
-
-5. **Design-time limitation triage** (only when proceeding; skip if 3.5 or a MAJOR/RETHINK verdict looped back). From the three challenge files, collect the residual weaknesses/limitations the passes surfaced. Classify each by the Limitation Triage rubric in WORKFLOW.md, judged against `compute_profile` and the remaining experiment-cap headroom (the experiment limit in the runtime header, minus any already planned). Write `<run-dir>/challenge/limitation-triage.md` with a row per limitation: `{limitation, disposition, if fix-now → the concrete experiment/ablation to add + its cost, if future-work → the resources a fix would need}`. **Fold every fix-now item into the plan** by adding it to `decomposition.md` so Step 7 picks it up (respect the cap: if adding one would exceed it, keep the higher-λ / higher-value one and mark the other future-work). Future-work rows carry forward to Step 11's Future Work section. Log `design_triage: written` in state.md.
-
----
-
-## Step 7: Report Planned Experiments
-
-Do this yourself; no agent needed.
-
-1. Read `decomposition.md` to get the lambda-ordered experiment table.
-
-2. **Auto-approve the experiment plan** with these modifications:
-   - Remove any experiments marked `[SKIP]` (P_success >= 0.9).
-   - Cap at the experiment limit in the runtime header. If there are more, keep the top ones by lambda ordering.
-   - If `rethink_disproof: true` is in state.md, use only the single disproof experiment from the modified decomposition.
-
-3. Write the approved experiment plan to state.md. List each experiment with:
-   - Component it tests
-   - Lambda value
-   - Pass/fail criteria
-
-4. Update `state.md`: `current_step: 8, status: experiments_planned, fail_fast_agreement: true`. An autonomous run always agrees to fail fast, so Step 7 also records Step 8's decision and the wrapper goes straight to Step 9.
-
----
-
-## Step 8: Confirm Fail-Fast Agreement
-
-In autonomous mode Step 7 writes `fail_fast_agreement: true` and `current_step: 8`, so the wrapper does not run this step. If it does run, write those two fields to `state.md` and stop.
-
----
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" approve-auto RUN`. Use only the recorded decision. On exit 0, record the approved revision, `criteria_approved: true`, `current_step: 8` and `fail_fast_agreement: true`. On exit 3, save the objections; if `methods_revision_count` is zero or missing, set it to one and set `current_step: 5` to return to Step 6. On another request for revision or exit 4, write `methods-stop.md` giving the reason and set `current_step: 9, status: methods_declined`. The audit and report must distinguish design insufficiency from empirical evidence against the hypothesis. For an operational failure set `review_hold` to the reason and leave the step number unchanged. An approval for an earlier version or a parent run cannot admit execution.
 
 ## Step 9: Execute Experiments
 
@@ -533,10 +408,10 @@ If `state.md` contains `is_followup: true`:
 
 ### Process
 
-1. Read the approved experiment plan from `state.md`.
+1. Read `methods-order.json` and the approved plan files. This guard also applies when invoked directly outside the cron wrapper.
 
 2. For each experiment in lambda order:
-   a. Create `experiments/exp-NNN/plan.md` with the component details from the decomposition.
+   a. Before each launch run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" verify RUN` and mark `experiments/<id>/started`. Stop before dispatch if verification fails. A material change returns to Steps 6–8; never rebuild the approved plan from state.md.
    b. **Spawn experiment agent**:
       ```
       Task(subagent_type="researcher:experiment", prompt="""
@@ -578,9 +453,9 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 ### Short-circuit cases (no remediation loop)
 
-1. **Zero completed experiments, or `status: rethink_theory_only`**: there is nothing to audit. Write a minimal `<run-dir>/audit/results-audit.md` (disposition `NO-EXPERIMENTS`). Then write state.md atomically with `current_step: 10, status: audit_complete, audit_exit_reason: no-experiments-to-audit`. Stop. (The wrapper advances to Step 11.)
+1. **Zero completed experiments** (including a proposal declined before execution): there is nothing to audit. Write a minimal `<run-dir>/audit/results-audit.md` (disposition `NO-EXPERIMENTS`). Then write state.md atomically with `current_step: 10, status: audit_complete, audit_exit_reason: no-experiments-to-audit`. Stop. (The wrapper advances to Step 11.)
 
-2. **`status: experiments_done_with_failure`** (a fail-fast stop): run a SINGLE audit pass to triage the result (genuine `TRUE-NULL` vs a botched run), but do NOT enter the remediation loop (the run already decided to write up). Write `current_step: 10, status: audit_complete, audit_exit_reason: <true-null | botched-run-noted>`.
+2. **`status: experiments_done_with_failure`** (a fail-fast stop): run a SINGLE audit pass, including the independent evidence check below, to triage the result (genuine `TRUE-NULL` vs a botched run), but do NOT enter the remediation loop (the run already decided to write up). Write `current_step: 10, status: audit_complete, audit_exit_reason: <true-null | botched-run-noted>`.
 
 ### Normal audit round (`status: experiments_complete`, ≥1 experiment)
 
@@ -588,7 +463,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 2. **Freeze the round-1 claim anchor**: for each experiment, if `<run-dir>/audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. This preserves the original claim across remediation re-runs (a defence against narrowing-the-claim-to-pass).
 
-3. **Spawn the results-auditor** (a fresh agent each round, for independence):
+3. **Commission both evidence reviews.** As hub run the helper’s `evidence RUN` in parallel with the fresh active auditor. `verify RUN` must succeed before authorizing any new empirical work, including an auditor’s fresh seed. For a legacy run lacking prospective approval or a terminal stop, request a read-only audit of retained data and record that limitation. On critic exit 3/4 read the objections, reconcile against the raw records and constrain claims accordingly. Other nonzero exits leave the step incomplete. Include the separate critic's disposition and the resolution of each disagreement in `audit/results-audit.md` after both reviews return. Pass the applicable execution restrictions to the auditor:
    ```
    Task(subagent_type="researcher:results-auditor", prompt="""
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
@@ -612,7 +487,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
    - **NEEDS-REMEDIATION**:
      - If `n >= R_MAX` **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
-     - Otherwise: re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
+     - Otherwise: only rerun if the approved plan covers this correction and `verify RUN` succeeds immediately before dispatch. A material change requires a prospective amendment through Steps 6–8; preserve prior outcomes, outstanding experiment IDs and the exposure of the earlier data. Stop if the budget or revision limit is reached. Re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
 
 ### Atomicity
 
@@ -631,8 +506,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
    Templates directory: ${CLAUDE_PLUGIN_ROOT}/templates/
    Write output to: <run-dir>/paper/
 
-   IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
-   mentor-review.md, pre-mortem.md), challenge/limitation-triage.md (if present),
+   Read this revision’s three critiques under reviews/plan/, the evidence critique,
+   challenge/limitation-triage.md (if present),
    audit/results-audit.md (including its Limitation triage table), and the
    compute_profile in state.md. Use the pre-mortem risk analysis plus any unresolved
    audit findings (and the audit_exit_reason) for Limitations. Present positive and
@@ -669,52 +544,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    single-quoted, each `'` in the line written as `''`, backslashes and `"` as they are.
    Carry on either way: the runner reports a missing PDF in the run's outcome.
 
-4. **Generate `briefing.md`**: a concise summary of the entire run for the interactive review command. Read the key artifacts and write `<run-dir>/briefing.md` with this structure:
-
-   ```markdown
-   # Research Briefing: <topic>
-
-   **Run ID**: <run-id>
-   **Status**: <complete/failed/negative result>
-   **Date**: <from run-id>
-
-   ## Topic & Motivation
-   <1-2 paragraphs from state.md clarifications>
-
-   ## Literature Findings
-   <Top 5 most relevant papers/sources from synthesis.md, with 1-line summaries>
-   <Key insight or gap identified>
-
-   ## Novelty
-   <Verdict: NOVEL/PARTIALLY_NOVEL/ALREADY_DONE>
-   <1-2 sentences on closest existing work and differentiation>
-
-   ## Experiment Design
-   <Lambda table from decomposition.md: component, P_success, T, lambda>
-   <Number of experiments planned vs executed>
-
-   ## Challenge Highlights
-   - **Critical assumptions**: <top 2-3 from assumption-analysis.md>
-   - **Mentor-review verdict**: <verdict + 1-sentence rationale>
-   - **Top failure scenario**: <#1 from pre-mortem.md>
-
-   ## Results
-   | # | Component | Result | Key Finding |
-   |---|-----------|--------|-------------|
-   <from experiment results; Result is PASS / FAIL / INCONCLUSIVE>
-
-   <If negative result: 1-paragraph summary of why the approach doesn't work>
-
-   ## Paper Abstract
-   <from paper/sections/abstract.tex, stripped of LaTeX commands>
-
-   ## Surprises & Non-Obvious Findings
-   <Anything unexpected: results that contradicted assumptions, surprising
-    literature findings, experiments that passed/failed contrary to predictions>
-
-   ## Open Questions & Suggested Follow-Ups
-   <2-3 bullet points on what to investigate next>
-   ```
+4. **Generate `briefing.md`** for Titus using the scientific reporting guide. Lead with the answer to the motivating question, the decision it changes and its strongest limitation. Give the primary effect with comparator, uncertainty and independent units, or name the missing comparison. Show a headline figure when appropriate. Put methods, secondary comparisons and exploratory findings below that summary. Identify the cheapest next test that could change the decision.
 
 5. **Write `next-steps.md`** in the run directory from
    `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`, following the rules in its
@@ -761,7 +591,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    If the agent fails, record `kb_ingest_step11: "failed (<reason>)"` in
    `state.md` and continue: the paper is already written.
 
-7. Update `state.md`: `current_step: 11, status: complete`.
+7. Have the knowledge leaf record any missed confounds or harness lessons supported by evidence using `record-harness`. Apply the final reader in WORKFLOW.md Step 11 to `review-figures.json`, actual draft paper, briefing and next steps. Address returned defects once and recheck. If it still objects or cannot run, set `review_hold` and leave the step number unchanged. Only an accepted current draft may set `current_step: 11, status: complete`.
 
 ---
 

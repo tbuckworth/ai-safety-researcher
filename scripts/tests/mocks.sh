@@ -115,3 +115,54 @@ echo "Mock next-steps.md written."
 MOCK_NEXT_STEPS_WRITER
     chmod +x "$1/mock-next-steps-writer"
 }
+
+# The real methods helper still hashes inputs, validates the structured response
+# and persists receipts. Only the external model and the planning hub are mocked.
+install_mock_reviews() {
+    local bin="$1"
+    cat > "${bin}/mock-review" <<'MOCK_REVIEW'
+#!/usr/bin/env bash
+set -euo pipefail
+output=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = --output-last-message ]; then output=$2; shift; fi
+    shift
+done
+[ -n "$output" ] || exit 2
+prompt=$(cat)
+decision=approve
+if [[ "$prompt" == *"Read the draft as a scientist"* ]]; then
+    decision=${MOCK_READER_DECISION:-approve}
+fi
+printf '{"decision":"%s","summary":"Mock review completed.","findings":[]}\n' "$decision" > "$output"
+MOCK_REVIEW
+    cat > "${bin}/mock-methods" <<'MOCK_METHODS'
+#!/usr/bin/env bash
+set -euo pipefail
+step=$1
+run=$2
+case "$step" in
+    6)
+        mkdir -p "${run}/experiments/exp-001"
+        echo 'Compare the two conditions.' > "${run}/method-spec.md"
+        echo 'Measure the paired difference.' > "${run}/success-criteria.md"
+        echo '["exp-001"]' > "${run}/methods-order.json"
+        echo 'Paired comparison with a held-out test.' > "${run}/experiments/exp-001/plan.md"
+        python3 "$MOCK_REVIEW_HELPER" plan "$run"
+        ;;
+    8)
+        python3 "$MOCK_REVIEW_HELPER" approve-auto "$run"
+        if [ "${MOCK_EDIT_AFTER_APPROVAL:-false}" = true ]; then
+            echo 'Changed endpoint' >> "${run}/experiments/exp-001/plan.md"
+        fi
+        ;;
+    9)
+        touch "${run}/experiments/exp-001/started"
+        ;;
+    11)
+        echo '{"figures":[],"reason":"Text-only mock report."}' > "${run}/review-figures.json"
+        ;;
+esac
+MOCK_METHODS
+    chmod +x "${bin}/mock-review" "${bin}/mock-methods"
+}

@@ -130,6 +130,32 @@ wait_for_jobs() {
     fi
 }
 
+review_run() {
+    python3 "${SCRIPT_DIR}/methods_review.py" "$1" "$RUN_DIR"
+}
+
+has_experiment_results() {
+    compgen -G "${RUN_DIR}/experiments/exp-*/results.md" > /dev/null
+}
+
+review_evidence() {
+    # A scientific objection is a completed critique for the auditor/reader.
+    # A process error leaves the evidence unchecked.
+    local rc=0
+    has_experiment_results || return 0
+    review_run evidence || rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        3|4) log "Evidence reviewer raised objections; the audit and final reader must resolve or disclose them." ;;
+        *) return "$rc" ;;
+    esac
+}
+
+set_review_hold() {
+    log "Holding the run for review: $1"
+    set_state_field last_pause_reason "$(yaml_quote "$1")"
+}
+
 run_step() {
     local step="$1"
     local prev_step
@@ -139,7 +165,7 @@ run_step() {
     # while this run's external jobs were running and they have since finished
     # (at most JOB_WAIT_MAX_REFUNDS times): then the attempt is made again.
     local spent=0 refunds=0 attempt
-    local exit_code new_step new_status run_log incomplete
+    local exit_code new_step new_status run_log incomplete evidence_pid
     STEP_JOB_WAITED=0
     while [ "$spent" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((spent + 1))
@@ -158,11 +184,56 @@ run_step() {
         if [ -n "$(state_field "${RUN_DIR}/state.md" step_incomplete)" ]; then
             set_state_field step_incomplete '""'
         fi
+        if [ "$step" = 1 ]; then
+            local weekly
+            if weekly=$(python3 "${SCRIPT_DIR}/harness_lessons.py" weekly "$RUN_DIR"); then
+                log "Weekly harness lesson review: ${weekly}"
+            else
+                log "WARN: could not check the weekly harness lesson register."
+                set_state_field kb_weekly_step1 '"failed (could not read the weekly harness lesson register)"'
+            fi
+        fi
+
+        # Check on every attempt, including a resumed or manually advanced run.
+        if [ "$step" = 9 ] && ! review_run verify; then
+            if ! has_experiment_results && ! compgen -G "${RUN_DIR}/experiments/exp-*/started" >/dev/null \
+                && [ "$(state_field "${RUN_DIR}/state.md" methods_gate_replanned)" != true ]; then
+                log "No current methods approval; returning to design before any experiment launch."
+                set_state_field methods_gate_replanned true
+                set_state_field current_step 5
+                set_status methods_review_required
+                return 0
+            fi
+            set_review_hold "No approval for the current methods. Review the changed design before further execution."
+            return 2
+        fi
+        if [ "$step" = "$AUDIT_STEP" ] && has_experiment_results && ! review_run verify; then
+            log "Prospective approval could not be verified. Skipping active audit and remediation; reviewing retained evidence only."
+            set_state_field audit_exit_reason unverified-prospective-methods
+            set_state_field current_step "$AUDIT_STEP"
+            set_status audit_complete
+            return 0
+        fi
+        if [ "$step" = "$REPORT_STEP" ] && ! review_evidence; then
+            set_review_hold "The independent evidence review could not run. Resume the report once the reviewer is available."
+            return 2
+        fi
+        # Start the read-only critique alongside the active audit. The step
+        # hub reads the same cached review before deciding on any remediation.
+        evidence_pid=""
+        if [ "$step" = "$AUDIT_STEP" ] && has_experiment_results; then
+            review_evidence > "${run_log%.log}-evidence.log" 2>&1 &
+            evidence_pid=$!
+        fi
         cd "$REPO_DIR"
         set +e
         run_step_provider "$step" 2>&1 | tee "$run_log"
         exit_code=${PIPESTATUS[0]}
         set -e
+        if [ -n "$evidence_pid" ] && ! wait "$evidence_pid"; then
+            set_review_hold "The independent evidence review failed. See ${run_log%.log}-evidence.log."
+            return 2
+        fi
         if ! ensure_runtime_state; then
             log "Step ${step} produced invalid state frontmatter; treating it as incomplete."
             exit_code=65
@@ -200,6 +271,13 @@ run_step() {
         # unchanged, so without this gate a drop during the audit would return success
         # here and silently burn an AUDIT_ROUNDS increment upstream instead of retrying.
         # A step that recorded step_incomplete did not finish, whatever its status.
+        if [ -n "$(state_field "${RUN_DIR}/state.md" review_hold)" ]; then
+            local reason
+            reason=$(state_field "${RUN_DIR}/state.md" review_hold)
+            set_state_field review_hold '""'
+            set_review_hold "$reason"
+            return 2
+        fi
         if [ -n "$incomplete" ]; then
             log "Step ${step} stopped without progress: ${incomplete}"
         elif [ "$new_step" != "$prev_step" ] \
@@ -213,6 +291,7 @@ run_step() {
         fi
 
         if [ "$limit_hit" = true ]; then
+            set_state_field last_pause_reason '"provider usage/session limit reached"'
             log "Step ${step} stopped: provider usage/session limit reached."
             log "${last_line}"
             log "Run left resumable at step ${prev_step} (status: ${new_status}). Re-run this script after the limit resets."
@@ -280,11 +359,9 @@ write_next_steps() {
 }
 
 pause_run() {
-    # Paused on a provider limit, not finished: publishing a partial repo,
-    # emailing a non-result, and marking the issue processed would all be
-    # wrong, and would strand the run. Leave everything resumable.
+    # Keep provider, guard and review holds resumable and preserve the issue claim.
     log "Run PAUSED at step $1. Skipping repo publish, email, and issue update."
-    log "Resume with the same command once the provider limit resets."
+    log "Resume with the same command after the recorded hold is resolved."
     SKIP_PUBLISH=true
     SKIP_EMAIL=true
     PAUSED=true

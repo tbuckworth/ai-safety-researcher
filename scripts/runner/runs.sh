@@ -193,6 +193,10 @@ write_gitignore() {
     # artifacts, already in the repo it continues).
     local dir="$1"
     cat > "${dir}/.gitignore" << 'GIEOF'
+# Private cross-run lessons and local review lock
+/.harness/
+/.methods-review.lock
+
 # Model checkpoints and weights (GitHub 100MB hard limit)
 *.pt
 *.pth

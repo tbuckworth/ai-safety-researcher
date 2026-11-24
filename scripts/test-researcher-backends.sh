@@ -20,11 +20,16 @@ source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
 install_mock_next_steps_writer "$MOCK_BIN"
+install_mock_reviews "$MOCK_BIN"
+export MOCK_REVIEW_HELPER="${REPO_DIR}/scripts/methods_review.py"
 
 cat > "${MOCK_BIN}/mock-provider" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ " $* " == *" --output-last-message "* ]]; then
+    exec "$(dirname "$0")/mock-review" "$@"
+fi
 prompt=$(cat)
 printf '%s %s\n' "$(basename "$0")" "$*" >> "$MOCK_CALL_LOG"
 {
@@ -68,6 +73,7 @@ if [ "${MOCK_FAIL_FIRST_STEP:-false}" = "true" ] \
     exit 42
 fi
 
+"$(dirname "$0")/mock-methods" "$step" "$run_dir"
 if [ "$step" = "11" ]; then
     new_status="complete"
 else

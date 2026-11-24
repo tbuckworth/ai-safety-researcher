@@ -155,6 +155,11 @@ source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
 install_mock_next_steps_writer "$MOCK_BIN"
+install_mock_reviews "$MOCK_BIN"
+export MOCK_REVIEW_HELPER="${REPO_DIR}/scripts/methods_review.py"
+
+ln -s mock-review "${MOCK_BIN}/codex"
+export RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex"
 
 cat > "${MOCK_BIN}/claude" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
@@ -212,6 +217,7 @@ if [ "${MOCK_INCOMPLETE_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_INCOMPLETE_ONC
     exit 0
 fi
 
+"$(dirname "$0")/mock-methods" "$step" "$run_dir"
 case "$step" in
     9)
         exp="${run_dir}/experiments/exp-001"
@@ -404,7 +410,41 @@ issue_number: ${5:-none}
 
 Pre-existing run.
 STATE
+    if [ "$2" -ge 8 ] && [ "$2" -le 10 ]; then
+        # This fixture resumes a previously approved run. Bind the same profile
+        # the runner restores on resume and use the real approval verifier.
+        local profile
+        profile=$("${REPO_DIR}/scripts/config.sh" --compute-profile local)
+        sed -i "2i compute_profile: \"$profile\"" "${dir}/state.md"
+        "${MOCK_BIN}/mock-methods" 6 "$dir" >/dev/null 2>&1
+        "${MOCK_BIN}/mock-methods" 8 "$dir" >/dev/null 2>&1
+    fi
 }
+
+# A stale approval returns to design once and then holds, before any real
+# experiment step, even if the planning hub repeatedly claims it is ready.
+new_case stale-methods
+run_researcher MOCK_EDIT_AFTER_APPROVAL=true -- "Stale methods"
+assert_eq "$RC" 3 "stale methods are held"
+assert_no_grep '^9$' "${CASE_DIR}/steps.log"
+assert_no_grep '^repo create' "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "withheld work was mailed"; ok
+
+# A returned draft is retained locally. On resume its revised bytes receive a
+# new review and the original scientific status is delivered without re-training.
+new_case withheld-draft
+run_researcher MOCK_READER_DECISION=revise -- "Withheld draft"
+assert_eq "$RC" 3 "reader held the draft"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+assert_eq "$(field status "$RUN")" release_pending "resumable release status"
+assert_no_grep '^repo create' "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "unreviewed draft was mailed"; ok
+echo 'Revised explanation.' >> "${RUN}/next-steps.md"
+: > "${CASE_DIR}/steps.log"
+run_researcher -- "Withheld draft"
+assert_eq "$RC" 0 "release of revised draft"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "release resume repeated an experiment"; ok
 
 # =============================================================================
 # 1. Publish: private repo, main branch even with init.defaultBranch=master,
@@ -1618,18 +1658,15 @@ assert_no_grep "next-steps.md is missing" "${RUN}/run-outcome.json"
 new_case next-steps-session-fails
 set_issues <(issue_json 502 "Next steps cannot be written" "list:research-ideas")
 run_researcher MOCK_INCOMPLETE_AT_STEP=10 MOCK_NEXT_STEPS_FAIL=true
-assert_eq "$RC" "4" "exit code (partial)"
+assert_eq "$RC" "3" "empirical findings held without a reviewable draft"
 RUN=$(run_dir_for_issue 502)
-SLUG="research-next-steps-cannot-be-written"
-assert_grep "ERROR: the next-steps session failed \(exit 1; its output is in .*/next-steps-[0-9-]*\.log\); removed what it wrote, so the run has no next-steps.md" \
-    "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: the next-steps session failed" "${CASE_DIR}/stdout.log"
 [ ! -e "${RUN}/next-steps.md" ] || fail "the failed session's next-steps.md was kept"; ok
-if git --git-dir="${REMOTES}/tbuckworth/${SLUG}.git" cat-file -e main:next-steps.md 2>/dev/null; then
-    fail "a failed session's next-steps.md was published"
-fi; ok
-jq -e '.reasons | any(test("next-steps.md is missing"))' "${RUN}/run-outcome.json" > /dev/null || fail "missing next-steps.md not in the outcome"; ok
-COMMENT=$(ls "${CASE_DIR}"/comments/502-*.md)
-assert_grep "next-steps.md is missing" "$COMMENT"
-assert_no_grep "blob/main/next-steps.md" "$COMMENT"
+assert_eq "$(field status "$RUN")" release_pending "run remains resumable"
+assert_no_grep '^repo create' "${CASE_DIR}/gh.log"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "unreviewed findings were mailed"; ok
+run_researcher
+assert_eq "$RC" "4" "release a reviewed partial result on resume"
+jq -e '.outcome == "partial" and .next_steps' "${RUN}/run-outcome.json" > /dev/null || fail "partial result lost"; ok
 
 echo "Researcher lifecycle tests passed (${PASSES} assertions)."

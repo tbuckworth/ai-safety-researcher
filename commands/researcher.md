@@ -41,7 +41,7 @@ The user wants to research: **{{argument}}**
 Do this yourself; no agent needed.
 
 1. Acknowledge the topic to the user.
-2. Ask 3-5 clarifying questions via AskUserQuestion. Cover:
+2. Extract the following details from the brief. Ask one bundled clarification only when a missing answer changes the study:
    - What do key terms mean in their context?
    - What prior work have they already read?
    - What does success look like? (survey paper? novel technique? proof of concept?)
@@ -55,7 +55,7 @@ Do this yourself; no agent needed.
    ```
 4. Write `state.md` with the Step 1 frontmatter in WORKFLOW.md (`mode: interactive`, plus `agent_backend`, `agent_model`, `compute_profile` and `knowledge_base`, filled as it says).
 5. Write `output/<run-id>/method-spec.md`: for every named method, condition, intervention and metric in the topic, record the verbatim source wording, an operational definition, a *defining property* a small code test can assert, near-miss methods that must not be substituted under that name, and (for metrics) what a known positive and a known negative should score. Confirm any non-obvious definition with the user. Experiments and the audit are checked against this file.
-6. Advance to Step 2.
+6. Run the weekly harness lesson review in the Knowledge Bases section of WORKFLOW.md. Advance to Step 2.
 
 ---
 
@@ -76,7 +76,7 @@ Do this yourself; no agent needed.
    """)
    ```
 
-2. **Read the search plan** and present a summary to the user via AskUserQuestion. Let them modify it.
+2. Read the search plan. Continue within the agreed scope. Ask only when a proposed scope change would materially change the study.
 
 3. **Spawn 3 parallel search agents** (one per source group):
    ```
@@ -116,7 +116,7 @@ Do this yourself; no agent needed.
 
 2. Read the novelty assessment. Based on the verdict:
    - **NOVEL**: Proceed to Step 4.
-   - **PARTIALLY_NOVEL**: Present findings to user via AskUserQuestion. Ask if differentiation is sufficient. If yes, proceed. If no, loop to Step 2 with refined queries.
+   - **PARTIALLY_NOVEL**: Carry the closest prior result into the methods decision. If the contribution would require a change of research question, ask whether to pursue it.
    - **ALREADY_DONE**: Present to user via AskUserQuestion with options:
      - Refine topic -> loop to Step 2
      - Proceed anyway (user explains why) -> continue
@@ -141,13 +141,8 @@ Do this yourself; no agent needed.
    """)
    ```
 
-2. Read the success criteria and present to the user via AskUserQuestion. Options:
-   - Agree -> proceed to Step 5
-   - Disagree with SOTA -> loop to Step 2
-   - Disagree with benchmarks -> refine, possibly loop to Step 3
-   - Adjust publishability bar -> update and proceed
-
-3. Update `state.md`: `current_step: 4, criteria_approved: true`.
+2. Check that the criteria address the goal. Resolve ordinary benchmark and literature questions within the hub. If the intended decision is genuinely ambiguous, ask Titus. Carry the primary criterion and meaningful effect into the methods decision.
+3. Record `current_step: 4, criteria_approved: false`. Set `criteria_approved: true` when the methods revision containing these criteria receives approval in Step 8.
 
 ---
 
@@ -172,105 +167,22 @@ Do this yourself; no agent needed.
 
 ---
 
-## Step 6: Challenge the Research Plan
+## Step 6: Write and challenge the methods
 
-This step runs three **independent** adversarial review passes before committing to experiments. They do **not** build on each other: dispatch all three in a single message so they run in parallel, each forming its own view from the base artefacts. Independence stops the later passes from anchoring on the earlier ones.
+Follow Step 6 of `${CLAUDE_PLUGIN_ROOT}/docs/WORKFLOW.md`. Write the concrete ordered plan files. As hub, call `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN`. Read the three independent reviews and resolve their objections. Record design-time limitation triage and the revision. Re-review an edited plan.
 
-1. **Create challenge directory**:
-   ```bash
-   mkdir -p output/<run-id>/challenge/
-   ```
-   Then run the Step 6 lessons query from WORKFLOW.md's Knowledge Bases table into `challenge/kb-lessons.md`. If `challenge/kb-lessons.md` exists, add it to each challenge agent's inputs as a record of failures that have actually happened.
+## Step 7: Present the methodology decision
 
-2. **Spawn all three challenge agents in parallel**: issue these three Task calls in a SINGLE message so they run concurrently. Each reads only the base artefacts; no agent reads another's output.
-   ```
-   Task(subagent_type="researcher:assumption-challenger", prompt="""
-   You are the assumption-challenger agent. Read your instructions from:
-   ${CLAUDE_PLUGIN_ROOT}/agents/assumption-challenger.md
+Show the decision and exact revision as specified in WORKFLOW.md Step 7. Offer approval, revision or stop, using buttons in email. Wait for Titus. Incorporate requested changes and return to Step 6 for a fresh review before showing a revised decision.
 
-   Read state from: output/<run-id>/state.md
-   Read synthesis from: output/<run-id>/literature/synthesis.md
-   Read novelty from: output/<run-id>/novelty-assessment.md
-   Read criteria from: output/<run-id>/success-criteria.md
-   Read decomposition from: output/<run-id>/decomposition.md
-   Write output to: output/<run-id>/challenge/assumption-analysis.md
-   """)
+## Step 8: Record approval
 
-   Task(subagent_type="researcher:mentor-review", prompt="""
-   You are the mentor-review agent. Read your instructions from:
-   ${CLAUDE_PLUGIN_ROOT}/agents/mentor-review.md
-
-   Read state from: output/<run-id>/state.md
-   Read synthesis from: output/<run-id>/literature/synthesis.md
-   Read novelty from: output/<run-id>/novelty-assessment.md
-   Read criteria from: output/<run-id>/success-criteria.md
-   Read decomposition from: output/<run-id>/decomposition.md
-   Return your review as text. Do NOT write any files.
-   """)
-
-   Task(subagent_type="researcher:pre-mortem", prompt="""
-   You are the pre-mortem agent. Read your instructions from:
-   ${CLAUDE_PLUGIN_ROOT}/agents/pre-mortem.md
-
-   Read state from: output/<run-id>/state.md
-   Read synthesis from: output/<run-id>/literature/synthesis.md
-   Read novelty from: output/<run-id>/novelty-assessment.md
-   Read criteria from: output/<run-id>/success-criteria.md
-   Read decomposition from: output/<run-id>/decomposition.md
-   Write output to: output/<run-id>/challenge/pre-mortem.md
-   """)
-   ```
-   Wait for all three to complete. **Save the mentor-review agent's returned text** to `output/<run-id>/challenge/mentor-review.md` using the Write tool (assumption-challenger and pre-mortem write their own files).
-
-3. **Synthesise and present**: Read all three challenge files. Summarise:
-   - Critical assumptions that need testing
-   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink), and flag any **construct-validity flaw**: a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. Surface this prominently: it calls for redesigning the construct, not disclaiming it.
-   - Top failure scenarios and their mitigations
-   - **Limitation triage**: each residual weakness classified by the Limitation Triage rubric in WORKFLOW.md; fix-now items fold into the plan, future-work items carry their resource ask into the paper's Future Work section
-
-4. **Ask user** via AskUserQuestion with options:
-   - "Proceed to experiment plan" -> Step 7
-   - "Redesign the construct" -> loop to Step 1 (when a construct-validity flaw makes the result knowable a priori)
-   - "Revise the decomposition" -> loop to Step 5
-   - "Revise success criteria" -> loop to Step 4
-   - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3
-
-5. Update `state.md`: `current_step: 6, status: challenge_complete, challenge_outcome: <proceed/revise>`.
-
----
-
-## Step 7: Report Planned Experiments
-
-Do this yourself; no agent needed.
-
-1. Present the lambda-ordered experiment table to the user.
-2. For each experiment, explain: what it tests, why it's ordered here, what pass/fail means, and **key risks from the pre-mortem** that relate to this experiment.
-3. Identify parallelisable experiments.
-4. Ask user to confirm via AskUserQuestion: "Does each experiment test a crucial component?"
-5. Allow reordering, additions, removals, P_success adjustments.
-6. If decomposition needs revision -> loop to Step 5.
-7. Update `state.md` with approved experiment plan.
-
----
-
-## Step 8: Confirm Fail-Fast Agreement
-
-Do this yourself; no agent needed.
-
-1. State: "If the highest-lambda experiment fails, the project will terminate or pivot. Do you agree?"
-2. Present the **kill criteria from the pre-mortem** as recommended stopping conditions.
-3. Ask via AskUserQuestion:
-   - "Yes, fail fast"
-   - "Discuss conditions" -> dialogue about which findings are decisive vs recoverable
-   - "No, run all regardless"
-4. Update `state.md`: `fail_fast_agreement: <true/false/conditional>`.
-
----
+For an explicit approval of that revision, run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" approve-human RUN REVISION`. Record the stopping conditions already agreed and set `fail_fast_agreement`. Only a successful `verify RUN` admits execution. A stop produces a decision record and, if there is evidence to report, an audit and write-up.
 
 ## Step 9: Execute Experiments
 
 1. For each experiment in lambda order:
-   a. Create `experiments/exp-NNN/plan.md` with the component details from the decomposition.
+   a. Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" verify RUN` immediately before each launch, including on resume. Use the approved file in the order in `methods-order.json` and mark `experiments/<id>/started`. If verification fails, return to Step 6 before executing.
    b. **Spawn experiment agent**:
       ```
       Task(subagent_type="researcher:experiment", prompt="""
@@ -304,7 +216,7 @@ Do this yourself; no agent needed.
 
 ## Step 10: Audit the Results (Audit-Remediation Loop)
 
-Before anything is written up, an **independent auditor red-teams the results**. This loop converges to one of two honest endpoints: a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there). It loops only on genuinely fixable methodology defects, never to grind a null into a positive. WORKFLOW.md's Step 10 defines R_MAX, the most audit rounds that run, and when a round is *stuck*.
+Before write-up, an independent auditor checks the results and distinguishes a supported effect, a bounded negative finding and an unresolved question. It loops only on genuinely fixable methodology defects, never to grind a null into a positive. WORKFLOW.md's Step 10 defines R_MAX, the most audit rounds that run, and when a round is *stuck*.
 
 1. **Create the audit directory**:
    ```bash
@@ -315,7 +227,7 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
    Otherwise, **freeze the claim anchor**: for each experiment, if `audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. A remediation re-run overwrites `results.md`; the claim anchor keeps the round-1 claim, so the claim cannot be narrowed to pass.
 
-3. **Run one audit round**. Spawn the results-auditor (a fresh agent each round, for independence):
+3. **Run one audit round.** Check `verify RUN` before any new empirical work. In parallel run the helper's `evidence RUN` action and dispatch a fresh results-auditor. Wait for both, reconcile discrepancies against the primary records, and restrict or withdraw claims with unresolved objections. If the independent review returns no usable response, keep the audit incomplete. A historical experiment without prospective approval can undergo a read-only audit of retained evidence only. Pass that restriction explicitly to the auditor when applicable:
    ```
    Task(subagent_type="researcher:results-auditor", prompt="""
    You are the results-auditor agent. Read your instructions from:
@@ -333,11 +245,11 @@ Before anything is written up, an **independent auditor red-teams the results**.
 
 4. **Read `audit/results-audit.md` and act on the overall disposition**:
    - **CONVERGED-POSITIVE** (all SUPPORTED) or **HONEST-NEGATIVE** (only TRUE-NULL remain): record `audit_exit_reason`; go to Step 11.
-   - **NEEDS-REMEDIATION** (a FIXABLE-DEFECT, round < R_MAX, not stuck): present the finding (the defect *class*, never a fix to copy) to the user via AskUserQuestion. On confirm, re-run ONLY the flagged experiment (re-spawn the experiment agent for that `exp-NNN`, requiring it to fix and report its seed before seeing results), then increment the round and re-audit from sub-step 3.
+   - **NEEDS-REMEDIATION** (a FIXABLE-DEFECT, round < R_MAX, not stuck): record the defect class and the decision it affects. For a material change return to Steps 6–8. For a rerun within the approved conditions, verify the receipt again and re-run ONLY the flagged experiment (re-spawn the experiment agent for that `exp-NNN`, requiring it to fix and report its seed before seeing results), then increment the round and re-audit from sub-step 3.
    - **UNSALVAGEABLE** (the framing itself is broken): present to the user. Options: loop back to Step 5 / Step 4, or write up "why this doesn't work" (Step 11).
    - **round == R_MAX or stuck**: present the residual findings; go to Step 11 carrying them into Limitations.
 
-   The user can override at any gate (re-run again, accept as-is, or stop).
+   Titus can stop or change direction at any gate. Record any change to methods before further execution.
 
 5. **Stuck**: when the auditor reports the round stuck, go to Step 11 with `audit_exit_reason: narrowed-claim-residual` and surface it.
 
@@ -357,23 +269,25 @@ Before anything is written up, an **independent auditor red-teams the results**.
    Templates directory: ${CLAUDE_PLUGIN_ROOT}/templates/
    Write output to: output/<run-id>/paper/
 
-   IMPORTANT: Read the challenge/ directory files (assumption-analysis.md,
-   mentor-review.md, pre-mortem.md) and audit/results-audit.md. Use the
+   Read the plan critiques under reviews/plan/, challenge/limitation-triage.md,
+   the independent evidence critique and audit/results-audit.md. Use the
    pre-mortem risk analysis plus any unresolved audit findings (and the
    audit_exit_reason) to inform the Limitations section. Present positive and
    negative/null results with the same framing.
    """)
    ```
 
-2. Once complete, inform the user where to find the paper.
+2. Write the significance-first `briefing.md` from the results and reconciled audit, using the scientific reporting guide.
 
 3. **Write `next-steps.md`** from `${CLAUDE_PLUGIN_ROOT}/templates/next-steps.md`,
    following the rules in its header; a negative result gets one too. This is
    what `/researcher-continue` reads.
 
-4. **Ingest the run into the knowledge bases** (the Step 11 row of WORKFLOW.md's Knowledge Bases table).
+4. Run the final reader on the actual draft as specified in WORKFLOW.md Step 11 (`review-figures.json`, `presentation RUN`, fix and recheck). Deliver the reviewed briefing and paper. Have the knowledge leaf record any verified missed confounds or broader harness lessons, including on a stopped run.
 
-5. Update `state.md`: `current_step: 11, status: complete`.
+5. **Ingest the run into the knowledge bases** (the Step 11 row of WORKFLOW.md's Knowledge Bases table).
+
+6. Update `state.md`: `current_step: 11, status: complete`.
 
 ---
 

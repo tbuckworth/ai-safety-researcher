@@ -41,11 +41,11 @@ output/<run-id>/
 ├── novelty-assessment.md
 ├── success-criteria.md
 ├── decomposition.md            # Steinhardt lambda table + component details
+├── methods-order.json          # Experiment IDs in their reviewed execution order
+├── reviews/                    # Plan critiques, approval, evidence and final reader receipts
+├── review-figures.json         # Headline figure files for the final reader
 ├── challenge/
 │   ├── kb-lessons.md           # The wiki's lessons/ for this design (Step 6, with a knowledge base)
-│   ├── assumption-analysis.md  # Unstated assumptions surfaced
-│   ├── mentor-review.md        # Senior researcher perspective
-│   ├── pre-mortem.md           # Failure scenario analysis
 │   └── limitation-triage.md    # Design-time limitation triage (autonomous)
 ├── rethink-rationale.md        # Why the approach does not hold, after RETHINK or UNSALVAGEABLE (autonomous)
 ├── experiments/
@@ -85,7 +85,7 @@ output/<run-id>/
 ### Process
 
 1. Acknowledge the user's topic.
-2. Ask 3-5 clarifying questions via AskUserQuestion. Cover:
+2. Extract the following from the brief. Bundle any clarifications that would materially change the study into one question:
    - **Key terms**: What do specific terms mean in their context? What definitions are they working with?
    - **Prior exposure**: What papers, blog posts, or resources have they already read? What do they already know?
    - **Success criteria**: What would a successful outcome look like? A survey paper? A novel technique? A proof of concept?
@@ -120,7 +120,7 @@ decisions: []
 
 ### Completion Criteria
 
-- At least 3 clarifying questions asked and answered.
+- The question, scope and decision that would change are established.
 - `state.md` exists with clarifications recorded.
 - `method-spec.md` exists. Later steps implement and audit against it, so a method cannot drift into a different one under the same name (for example, a method defined as token alternation implemented as logit ensembling).
 
@@ -136,7 +136,7 @@ decisions: []
    - Input: topic + clarifications from `state.md`
    - Output: `search-plan.md` containing structured search tasks grouped by source (academic, lab blogs, community). `agents/search-planner.md` defines the APIs and sites for each group.
 
-2. **Review search plan**: Present the plan summary to the user via AskUserQuestion. Allow them to add/remove/modify search tasks.
+2. **Review search plan**: The hub checks scope and proceeds. Ask Titus about a material change to the study.
 
 3. **Execute searches in parallel**: Spawn one `search` agent per source group (typically 3 agents running concurrently):
    - Agent 1: Academic sources (arXiv API + Semantic Scholar API)
@@ -189,7 +189,7 @@ BibTeX sources (in order of preference):
    - "Proceed anyway: my approach differs because..." -> User explains differentiation, continue
    - "Abandon this topic" -> End the workflow
 
-4. **If `PARTIALLY_NOVEL`**: Present findings, ask user to confirm differentiation is sufficient.
+4. **If `PARTIALLY_NOVEL`**: Carry the overlap into the methods decision. Ask about a pivot if the research question would change.
 
 5. **If `NOVEL`**: Proceed to Step 4.
 
@@ -217,13 +217,8 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
    - **Publishability criteria**: What would make this work publishable? What venue? What bar?
    - **Minimum viable contribution**: The smallest result that would still be valuable
 
-3. Present criteria to user via AskUserQuestion. The user may:
-   - Agree -> proceed to Step 5
-   - Disagree with SOTA assessment -> loop to Step 2 for more research
-   - Disagree with benchmarks -> dialogue to refine, possibly loop to Step 3
-   - Adjust publishability bar -> update criteria and proceed
-
-4. Update `state.md`: `current_step: 4, criteria_approved: true/false`.
+3. The hub resolves routine benchmark choices and drafts the primary criterion and smallest meaningful effect. Ask Titus when the intended decision is ambiguous. Include the criteria in the methods decision.
+4. Record `current_step: 4, criteria_approved: false`. Approval in Step 8 covers this revision of the criteria.
 
 ### Loop Conditions
 
@@ -257,90 +252,27 @@ Step 3 can loop back to Step 2 if the user wants to refine the search after disc
 
 ---
 
-## Step 6: Challenge the Research Plan
+## Step 6: Write and challenge the methods
 
-**Agents**: `assumption-challenger`, `mentor-review`, `pre-mortem` (independent, parallel)
+The hub writes the actual methods before commissioning a review or starting any experiment. The shared helper is `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" ACTION RUN`, where RUN is the current run directory. Both interactive and autonomous hubs use this entry point.
 
-This step runs three **independent** adversarial review passes on the research plan before committing to experiments. They do not build on each other: all three are dispatched in a single message and run in parallel, each forming its own view from the base artefacts. The goal is to catch flawed assumptions, blind spots, and predictable failure modes early; independence keeps the later passes from anchoring on the earlier ones.
+1. Retrieve design lessons from the wiki when enabled and run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/harness_lessons.py" checks RUN` for applicable checks. Use relevant lessons to design controls. Keep other projects’ private records out of published artifacts.
+2. Select the experiments that answer the motivating question within budget. Use the lambda order and account for dependencies. In autonomous mode omit components marked `[SKIP]` and apply the experiment cap. On follow-ups, reuse prior evidence and number new experiments `exp-f01`, `exp-f02`, etc. Exclude a prior pass unless the follow-up calls for a repeat. Write `methods-order.json` as a JSON array of the selected directory names in execution order.
+3. Write `experiments/<id>/plan.md` for each selected experiment, using [the scientific reporting guide](SCIENTIFIC-REPORTING.md). Specify the decision the answer would change, comparison, strongest competing explanations (including known results), and the observation that distinguishes each. Give the unit, train/validation/test partition or a justified equivalent, controls, training-readiness diagnostic, uncertainty and stopping rule, time and compute. Include how a failure of measurement or a tooling limit would affect the conclusion. A cheap prerequisite that can settle whether to proceed goes first. Include the conditions for any authorised rerun, and what happens on a failed or inconclusive prerequisite. These conditions are part of the version Titus or the automatic approver decides on.
+4. From the hub, run `plan RUN` with the helper. It starts independent assumption, mentor and pre-mortem reviews of the same revision in parallel. It prints the revision and records the three reports under `reviews/plan/`. Read all three. Record the rivals, proposed checks, disposition and remaining uncertainty in `challenge/limitation-triage.md` using [limitation triage](#limitation-triage). A conclusion fixed by construction requires a new design or a stop. If changing any reviewed input, run the reviews again. Retain historical observations and revisions.
+5. If a tractable plan remains, record `current_step: 6, status: challenge_complete`. If no feasible comparison can resolve the question, record why and proceed to the audit and write-up without running experiments. Only a supported theoretical result warrants `rethink-rationale.md`; an unresolved design merits an inconclusive account.
 
-### Process
+## Step 7: Present the methodology decision
 
-1. **Create challenge directory**: `mkdir -p output/<run-id>/challenge/`
+Present one short decision covering the motivating question, proposed contrast, strongest competing explanation and distinguishing control, scope of any inference, cost, stopping rule and the specific revision. Link the reviewed plan and individual objections for detail. Include a concrete example of what the measurement means. State which decision the pilot could change and which conclusion needs confirmation. The underlying plan files carry technical detail.
 
-2. **Spawn all three challenge agents in parallel** (one message, three Task calls). Each reads only the base artefacts (`state.md`, `literature/synthesis.md`, `novelty-assessment.md`, `success-criteria.md`, `decomposition.md`), and no agent reads another's output:
-   - `assumption-challenger` → `challenge/assumption-analysis.md`
-   - `mentor-review` → returns text; orchestrator saves it to `challenge/mentor-review.md`
-   - `pre-mortem` → `challenge/pre-mortem.md`
+In interactive mode offer **approve these methods**, **revise** and **stop**. For a decision already being handled by email, use the mailroom’s native plain-text Markdown `choices` block with no `--html`. Set the default to wait. Wait for an explicit answer before execution. Record the approved revision, the source of the response and any conditions in state.md. Treat a conditional answer that changes the methods as a revision. In automatic mode the separate approver sees the same dossier. Routine progress, reviewer coordination and execution belong to the hub.
 
-   Wait for all three to complete.
+## Step 8: Record approval
 
-3. **Construct-validity gate**: Before anything else, check the passes for a construct-validity / known-outcome flaw: a headline experiment whose result is fixed by construction (statable without running it), a covert/target construct that is a strawman the operator defeats trivially, or a plan that never answers the motivating question. `mentor-review` treats such a flaw as `RETHINK_APPROACH`. If present and not cheaply fixable, the construct must be **redesigned** (in autonomous mode this loops back to Step 1 once), not disclaimed in Limitations.
-
-4. **Synthesise findings**: Read all three challenge files and synthesise the key findings into a brief summary for the user. Highlight:
-   - Critical assumptions that need testing
-   - The mentor-review verdict (proceed / minor revisions / major revisions / rethink) and any construct-validity flaw
-   - Top failure scenarios and their mitigations
-
-5. **Design-time limitation triage**: Classify each residual weakness by the [Limitation Triage](#limitation-triage) rubric. Fold fix-now items into the plan (`challenge/limitation-triage.md`); future-work items carry to Step 11's Future Work section.
-
-6. **Present to user** via AskUserQuestion with options:
-   - "Proceed to experiment plan" -> Step 7
-   - "Redesign the construct" -> loop to Step 1
-   - "Revise the decomposition" -> loop to Step 5
-   - "Revise success criteria" -> loop to Step 4
-   - "Go back further (re-research or re-scope)" -> loop to Step 2 or 3
-
-7. Update `state.md`: `current_step: 6, status: challenge_complete, challenge_outcome: <proceed/revise>`.
-
-### Loop Conditions
-
-- Revise decomposition -> Step 5
-- Revise criteria -> Step 4
-- Re-research -> Step 2
-- Re-scope -> Step 3
-
----
-
-## Step 7: Report Planned Experiments
-
-**Actor**: Orchestrator (direct user dialogue)
-
-### Process
-
-1. Present the lambda-ordered experiment table to the user.
-2. For each experiment, explain:
-   - Which component it tests
-   - Why it's ordered where it is (lambda rationale)
-   - What a pass/fail means for the project
-   - **Key risks from the pre-mortem** that relate to this experiment
-3. Identify experiments that can run in parallel (independent components).
-4. Ask user to confirm: "Does each experiment test a crucial component? Any missing?"
-5. Allow user to:
-   - Reorder experiments
-   - Add/remove experiments
-   - Adjust P_success estimates
-   - Loop back to Step 5 if decomposition needs revision
-
-6. Update `state.md` with approved experiment plan.
-
----
-
-## Step 8: Confirm Fail-Fast Agreement
-
-**Actor**: Orchestrator (direct user dialogue)
-
-### Process
-
-1. State clearly: "If the highest-lambda experiment fails, the project will either terminate or pivot. Do you agree to this protocol?"
-2. Present the **kill criteria from the pre-mortem** as recommended stopping conditions alongside the standard fail-fast agreement.
-3. Ask user to explicitly agree via AskUserQuestion:
-   - "Yes, I agree: fail fast" -> proceed
-   - "I want to discuss conditions" -> dialogue about which failures are fatal vs recoverable
-   - "No, run all experiments regardless" -> note this, adjust workflow (all experiments run regardless of failure)
-
-4. Record the agreement in `state.md`: `fail_fast_agreement: true/false/conditional`.
-
----
+- **Interactive.** After Titus explicitly approves the revision presented in Step 7, run `approve-human RUN REVISION`. Recheck the receipt with `verify RUN`. A reply about a previous revision cannot approve the new one.
+- **Autonomous.** Run `approve-auto RUN`. The fresh approver may approve (exit 0), request a revision (3) or stop (4). On 3 address the reason, returning to Step 6 for new plan reviews. Allow one design revision in automatic mode; a second revision request or a stop ends this experiment proposal. Record why in `methods-stop.md` and go to the no-experiments audit. If experiments already ran, preserve their scope and audit their evidence without further empirical work. Other nonzero exits are operational errors, which leave the run resumable and confer no approval.
+- Record the disposition, revision, `criteria_approved` and stopping agreement in state.md. Interactive mode carries out the decision already made in Step 7. Automatic mode agrees to fail fast. A material change to criteria, inputs, controls, analysis, execution order or stopping rules needs another round of reviews and approval before the changed work runs. Record when prior outcomes were observed.
 
 ## Step 9: Execute Experiments
 
@@ -351,7 +283,7 @@ This step runs three **independent** adversarial review passes on the research p
 1. Execute experiments in **lambda order** (highest lambda first).
 
 2. For each experiment:
-   a. Create `experiments/exp-NNN/plan.md` from the decomposition table
+   a. Verify the approved revision with `verify RUN`. Use the already reviewed `experiments/<id>/plan.md`; create an empty `experiments/<id>/started` marker immediately before dispatch. On a failed verification stop before the launch and return to Step 6.
    b. Spawn `experiment` agent with:
       - Input: experiment plan + relevant literature + success criteria + `method-spec.md`
       - Output: `experiments/exp-NNN/preflight.md`, then `experiments/exp-NNN/results.md` with clear **PASS** or **FAIL** against predefined criteria, or **INCONCLUSIVE** when the pipeline could not answer the question
@@ -379,29 +311,29 @@ This step runs three **independent** adversarial review passes on the research p
 
 **Agent**: `results-auditor` (one per round)
 
-An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a *defensible positive* (every claim traces to real evidence) or an *honest negative* (the effect isn't there), and loops only on genuinely fixable methodology defects. At most R_MAX audit rounds run: `RESEARCHER_MAX_AUDIT_ROUNDS`, which an autonomous run's runtime header gives and `scripts/config.sh RESEARCHER_MAX_AUDIT_ROUNDS` prints. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
+An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a defensible positive, negative or inconclusive result, and loops only on genuinely fixable methodology defects. At most R_MAX audit rounds run: `RESEARCHER_MAX_AUDIT_ROUNDS`, which an autonomous run's runtime header gives and `scripts/config.sh RESEARCHER_MAX_AUDIT_ROUNDS` prints. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 ### Process
 
 1. **Zero completed experiments** (e.g. a theory-only rethink): write a minimal `audit/results-audit.md` (`NO-EXPERIMENTS`) and advance to Step 11. Otherwise copy each experiment's `results.md` to `audit/claim-anchor-<exp>.md` unless that claim anchor already exists, so a remediation re-run cannot overwrite the round-1 claim.
 
-2. **For each round**, spawn a FRESH `results-auditor` with:
+2. **For each round with results**, the hub verifies approval before commissioning any fresh empirical audit or remediation. In parallel, run `evidence RUN` and dispatch a fresh `results-auditor`. The independent evidence critic reads the current primary artifacts. A fresh training seed from the active auditor only counts for the variation it tests. Wait for both reports; record disagreements and which claim each changes in the audit. An evidence review's revise/stop is a scientific objection: qualify, withdraw or re-test the claim within the approved design. A failed reviewer invocation leaves the review incomplete. If a historical run lacks prospective approval, use retained data only, explicitly label the analysis retrospective, and withhold any unverified claim. Give the auditor:
    - The frozen anchor: original topic + `success-criteria.md` (the pre-registration: goalposts may not move)
    - This run's experiments only (`experiments/exp-*`; ignore `prior/`), including each `run.log`, `preflight.md` and code files
    - `method-spec.md`, against which it checks method fidelity in the code (a different method under the requested name is `UNSALVAGEABLE` for claims about that method), and `scripts/preflight_checks.py` to re-check generations, metric separation and clustered statistics itself. A FAIL from a pipeline that fails these checks is never `TRUE-NULL`.
    - On round > 1: the prior `audit/results-audit.md` reports + the claim anchors `audit/claim-anchor-*.md`
 
-3. The auditor re-derives every number from the raw logs (and re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
+3. The auditor re-derives every number from the raw logs (and, when prospectively approved and feasible, re-runs the load-bearing experiment with a fresh seed/split), then classifies each finding:
    - `SUPPORTED`: the claim is backed by the evidence
    - `FIXABLE-DEFECT`: a defect that could plausibly flip PASS/FAIL (leakage, missing baseline, too few seeds, grader/harness gaming). **Loop on these.**
-   - `TRUE-NULL`: sound setup, effect absent. **Exit to an honest negative** (do not loop: that would be p-hacking).
+   - `TRUE-NULL`: sound setup with sufficient precision to exclude effects of the prespecified practical size in the tested population. **Exit to an honest negative** (do not loop: that would be p-hacking).
    - `UNSALVAGEABLE`: the framing itself is broken → write up "why this doesn't work".
 
    It also produces a **results-time limitation triage** by the [Limitation Triage](#limitation-triage) rubric. Fix-now-free re-analyses are done in the write-up; fix-now items that would flip a claim become `FIXABLE-DEFECT`; future-work items carry their resource asks into Step 11's Future Work section.
 
 4. **Orchestrator/executor acts on the disposition**:
    - All `SUPPORTED`, or only `TRUE-NULL` → record `audit_exit_reason`, go to Step 11.
-   - `FIXABLE-DEFECT` and round < R_MAX and not stuck → re-run ONLY the flagged experiment (handing back the defect *class*, not a fix; requiring a reported seed), then re-audit.
+   - `FIXABLE-DEFECT` and round < R_MAX and not stuck → check `verify RUN` immediately before any rerun; return to Step 6 first for a method change. Re-run ONLY the flagged experiment (handing back the defect *class*, not a fix; requiring a reported seed), then re-audit.
    - round == R_MAX or stuck → go to Step 11 with the unresolved findings carried into Limitations.
 
 5. **Stuck**: a stuck round exits with `audit_exit_reason: narrowed-claim-residual`.
@@ -445,14 +377,16 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
 
 4. **LaTeX compilation**: run `make` in `paper/`; `templates/Makefile` chooses the LaTeX toolchain. If the build fails because no toolchain is installed, inform the user and leave the .tex files for manual compilation.
 
-5. Present the final paper location to the user.
+5. Draft a short `briefing.md` with the answer, decision, uncertainty, and strongest remaining rival. Follow the scientific reporting guide in the report, briefing and figures.
 
 6. **Write `next-steps.md`** from `templates/next-steps.md`: the ranked
    next-round plan, written for whoever picks the work up rather than for a
    reader of the paper, and written for every outcome. The results email and
    `/researcher-continue` both read it.
 
-7. **Ingest into the knowledge bases** (see [Knowledge Bases](#knowledge-bases)).
+7. Before publication or presentation to Titus, write `review-figures.json` listing every headline figure, for example `{"figures":["paper/figures/primary.png"],"reason":""}`. Use run-relative PNG or JPEG paths. For a report without figures give the reason, for example `{"figures":[],"reason":"Only a theoretical bound was derived."}`. A diagnostic containing only next steps can omit the manifest. Run `presentation RUN` on the actual paper, figures, briefing and next steps. Read the reviewer’s findings. Correct factual, statistical or visual issues, then rerun the reader on the edited files. A stop or an unresolved objection withholds the draft; an operational failure is resumable. The same check applies to partial reports and early-exit findings, with the missing evidence stated. Present the approved summary and paper location.
+
+8. **Ingest into the knowledge bases** (see [Knowledge Bases](#knowledge-bases)).
    Global: thread page, the result (including a null) into concept pages, and what
    the *process* learned into `lessons/`. Repo: write `knowledge/`, extending
    `prior/knowledge/` on a follow-up rather than restarting it. A failed ingest is
@@ -497,9 +431,12 @@ Two optional knowledge bases let research compound across runs; see
 - **Per-repo**: `<run-dir>/knowledge/`, published with the research line's repo
   so a follow-up run can resume without re-deriving.
 
-All knowledge-base work goes through the `researcher:knowledge` agent
-(`agents/knowledge.md`, whose Input section lists what to pass it), at these
-points and no others:
+The private cross-run register also serves runs without a global wiki. At the start of Step 1 the hub runs `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/harness_lessons.py" weekly RUN`. The cron runner starts the same check before dispatching Step 1. When `review` contains a packet path, dispatch the knowledge leaf with `Operation: review-harness`, that packet and the run directory. Wait for its decisions. The leaf records an acceptance with a prospective check and a proposed regression test, a deferral with a reason, or a rejection. If the worker fails, the hub runs `release RUN` with the same helper, records the failure and continues the research. The next run can pick up the packet. The [lesson register](KNOWLEDGE-BASE.md#harness-lessons) defines how accepted changes reach a tested PR.
+
+At Step 6, `checks RUN` returns prospective checks and `pending_pr`. Include the count of pending harness changes in the private update to Titus when positive. Keep packet paths, private evidence and correspondence in the register. At audit or early exit, have the knowledge leaf capture a verified missed confound or harness fault under `Operation: record-harness`, including evidence of what happened and which earlier check would have caught it.
+
+Wiki queries and ingestion go through the `researcher:knowledge` agent
+(`agents/knowledge.md`, whose Input section lists what to pass it), at these points:
 
 | Step | Operation | Scope | Purpose |
 |------|-----------|-------|---------|

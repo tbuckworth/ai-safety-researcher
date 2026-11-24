@@ -47,6 +47,8 @@ prepare_local_repo() {
     mkdir -p .git/info
     grep -qxF '/.repo_url' "$exclude" 2>/dev/null \
         || printf '%s\n' '/.repo_url' '/.publish_repo' '/.publish_branch' '/run-outcome.json' '*.runtime.tmp' >> "$exclude"
+    grep -qxF '/.harness/' "$exclude" 2>/dev/null || printf '%s\n' '/.harness/' >> "$exclude"
+    grep -qxF '/.methods-review.lock' "$exclude" 2>/dev/null || printf '%s\n' '/.methods-review.lock' >> "$exclude"
     grep -qxF '/.email-sent' "$exclude" 2>/dev/null || printf '%s\n' '/.email-sent' >> "$exclude"
 }
 

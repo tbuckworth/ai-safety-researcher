@@ -311,7 +311,7 @@ In interactive mode offer **approve these methods**, **revise** and **stop**. Fo
 
 **Agent**: `results-auditor` (one per round)
 
-An independent auditor red-teams the experiment outputs before write-up. The loop converges to one of two honest endpoints, a defensible positive, negative or inconclusive result, and loops only on genuinely fixable methodology defects. At most R_MAX audit rounds run: `RESEARCHER_MAX_AUDIT_ROUNDS`, which an autonomous run's runtime header gives and `scripts/config.sh RESEARCHER_MAX_AUDIT_ROUNDS` prints. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
+An independent auditor checks the experiment outputs before write-up. The result can be positive, negative or inconclusive. Repeat the audit only when a repair could change a claim. `RESEARCHER_MAX_AUDIT_ROUNDS` sets the maximum number of rounds (R_MAX). The autonomous runtime header records it, and `scripts/config.sh RESEARCHER_MAX_AUDIT_ROUNDS` prints it. A round is *stuck* when the defect set has not shrunk since the previous round, or a claim has narrowed while its verdict improved.
 
 ### Process
 
@@ -481,7 +481,7 @@ decisions:
   - step: 3
     decision: "Novel: no prior work on automated SAE feature labelling at scale"
   - step: 4
-    decision: "Success = >80% agreement between automated and human labels on top-100 features"
+    decision: "Proposed criterion: more than 80% agreement between automated and human labels on the top 100 features"
 novelty_verdict: NOVEL
 criteria_approved: false
 # Step 8 records methodology approval and the agreed stopping rules.
@@ -514,7 +514,7 @@ Completed. Found 23 relevant sources across academic, blog, and community channe
 Verdict: NOVEL. Closest existing work is manual labelling by Anthropic team.
 
 ## Step 4: Success Criteria
-Approved. Targeting 80% human-automated agreement on feature labels.
+Draft criterion for the methods decision. Target more than 80% agreement between human and automated labels on the top 100 features.
 
 ## Step 5: Decomposition
 Lambda table computed. 6 components identified, ordered by information rate.

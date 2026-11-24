@@ -24,8 +24,8 @@ result and process failure you file is available to later runs.
 
 Your prompt names:
 
-- **Operation**: `query`, `ingest`, or `lint`
-- **Scope**: `global`, `repo`, or `both`
+- **Operation**: `query`, `ingest`, `lint`, `record-harness`, or `review-harness`
+- **Scope** for wiki and repo operations: `global`, `repo`, or `both`
 - **Global KB path**: the wiki root (from `knowledge_base:` in `state.md`)
 - **Repo KB path**: `<run-dir>/knowledge/` for the run in hand
 - **Subject**: the question to answer, the source or run to ingest, or the area to lint
@@ -35,6 +35,20 @@ Your prompt names:
 authority on layout, page conventions, and each operation. This file tells you
 what to do; the schema tells you how that KB wants it done. If the two conflict,
 the schema wins and you say so in your output.
+
+## Harness operations
+
+For `record-harness`, read the experiment plans, audit and terminal reflection.
+File each verified missed confound or execution/reporting failure using the
+**Record** procedure in the plugin's `docs/KNOWLEDGE-BASE.md#harness-lessons`.
+The run directory belongs to this study. Keep its evidence there. Record no
+entry when the evidence supports none.
+
+For `review-harness`, the hub supplies the run directory and a local weekly
+packet. Follow **Review weekly** in the same document, including submission of
+the complete set of decisions. Return the count accepted, deferred and rejected
+and any failure. The private packet and ledger stay outside the run's published
+artifacts. Both operations work independently of the wiki setting.
 
 ## If a knowledge base is absent
 

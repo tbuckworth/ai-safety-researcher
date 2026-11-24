@@ -10,6 +10,7 @@ objections are returned to the auditor for disposition.
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -27,11 +28,6 @@ ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "templates" / "review"
 ROLES = ("assumption-challenger", "mentor-review", "pre-mortem")
 EXIT = {"approve": 0, "revise": 3, "stop": 4}
-TASK = {
-    "approval": "Act as the independent methodology approver. Read each critic's findings. Resolve material disagreements and name the exact control, revision or reason to stop. Decide whether these specific experiments should start.",
-    "evidence": "Check the main experiment claims against the approved comparison, preflights and raw observations. Identify measurement failures, dependence, selection, alternative explanations, deviations and untested endpoints. Say what the auditor must resolve or downgrade.",
-    "presentation": "Read the draft as a scientist deciding what to do next. Compare its headline, quantitative claims and any supplied figures with the evidence and audit. Check the actual images, axes, denominators, uncertainty and readability. Require an accurate account of pilot-only, unrun or unaudited work. Specify exact repairs where necessary.",
-}
 MODEL_KEY = "RESEARCHER_REVIEW_MODEL"
 EFFORT_KEY = "RESEARCHER_REVIEW_REASONING"
 # A reviewer gets both ends of a long log, with the omission explicitly marked.
@@ -103,7 +99,7 @@ def packet(run: Path, phase: str) -> Packet:
     required = []
     dirs = sorted(d for d in (run / "experiments").glob("exp-*") if d.is_dir())
     completed = [d for d in dirs if (d / "results.md").is_file()]
-    if phase == "plan" or (phase == "evidence" and (run / "methods-order.json").exists()):
+    if phase == "plan":
         required.extend(["method-spec.md", "success-criteria.md"])
         p.add(run, "methods-order.json")
         order = string_list(json.loads(p.documents["methods-order.json"]), "methods-order.json")
@@ -116,10 +112,20 @@ def packet(run: Path, phase: str) -> Packet:
     if phase == "evidence":
         if not completed:
             raise ValueError("no completed experiment to review")
-        if "methods-order.json" not in p.hashes:
-            p.documents["design provenance"] = "No versioned methods order is available. Prospective agreement cannot be verified."
-            optional.extend(["method-spec.md", "success-criteria.md"])
-            optional.extend(str((d / "plan.md").relative_to(run)) for d in dirs)
+        optional.extend(["method-spec.md", "success-criteria.md", "methods-order.json"])
+        optional.extend(str((d / "plan.md").relative_to(run)) for d in dirs)
+        # A missing or stale design precludes new execution. The same condition
+        # is a finding for a retrospective audit of existing observations.
+        try:
+            plan_revision = packet(run, "plan").revision()
+            approval_path = receipt_path(run, "approval", plan_revision)
+            approval = checked_approval(run, plan_revision, "human" if mode == "interactive" else "auto")
+            provenance = f"Recorded methods decision: {approval['reviews'][0]['decision']}."
+            p.add(run, str(approval_path.relative_to(run)))
+        except (FileNotFoundError, ValueError) as error:
+            provenance = f"Prospective agreement cannot be verified: {error}"
+        p.documents["design provenance"] = provenance
+        p.hashes["design provenance"] = digest(provenance.encode())
         for d in completed:
             for name in ("results.md", "preflight.md", "run.log"):
                 relative = str((d / name).relative_to(run))
@@ -139,7 +145,7 @@ def packet(run: Path, phase: str) -> Packet:
         drafts = ["briefing.md", "next-steps.md", "paper/paper.tex"]
         if not any((run / name).is_file() for name in drafts):
             raise ValueError("no briefing, next steps or paper to review")
-        optional.extend([*drafts, "rethink-rationale.md", "audit/results-audit.md", "success-criteria.md"])
+        optional.extend([*drafts, "rethink-rationale.md", "methods-stop.md", "audit/results-audit.md", "success-criteria.md"])
         optional.extend(str(path.relative_to(run)) for path in sorted(run.glob("paper/sections/*.tex")))
         if (run / "briefing.md").is_file() or (run / "paper/paper.tex").is_file() or (run / "review-figures.json").exists():
             p.add(run, "review-figures.json")
@@ -173,7 +179,6 @@ def settings(run: Path) -> tuple[str, str, str]:
     return binary, model, effort
 
 
-
 def validate(report: dict) -> dict:
     if not isinstance(report, dict) or set(report) != {"decision", "summary", "findings"}:
         raise ValueError("review response must contain decision, summary and findings")
@@ -185,12 +190,8 @@ def validate(report: dict) -> dict:
 
 def review(role: str, p: Packet, config: tuple[str, str, str]) -> dict:
     binary, model, effort = config
-    if role in ROLES:
-        task = ("Use the scientific questions in this role description. Use the JSON review format for your reply.\n"
-                + (ROOT / "agents" / f"{role}.md").read_text())
-    else:
-        task = TASK[role]
-    prompt = "\n\n".join([task, (TEMPLATES / "instructions.md").read_text(),
+    role_dir = ROOT / "agents" if role in ROLES else TEMPLATES
+    prompt = "\n\n".join([(role_dir / f"{role}.md").read_text(), (TEMPLATES / "instructions.md").read_text(),
                           (ROOT / "docs/SCIENTIFIC-REPORTING.md").read_text(),
                           "Study materials (JSON keyed by source path):", json_bytes(p.documents).decode()])
     start = time.monotonic()
@@ -223,6 +224,15 @@ def receipt_path(run: Path, phase: str, revision: str) -> Path:
     return run / "reviews" / phase / f"{revision}.json"
 
 
+def checked_approval(run: Path, revision: str, actor: str) -> dict:
+    panel = receipt_path(run, "plan", revision)
+    load_receipt(panel, revision, ROLES)
+    saved = load_receipt(receipt_path(run, "approval", revision), revision, (actor,))
+    if saved.get("panel_digest") != digest(panel.read_bytes()):
+        raise ValueError("approval does not match the recorded independent critiques")
+    return saved
+
+
 def run_action(action: str, run: Path, approved_revision: str | None) -> int:
     phase = {"approve-auto": "approval", "approve-human": "approval", "verify": "approval"}.get(
         action, action.removeprefix("verify-"))
@@ -242,10 +252,8 @@ def run_action(action: str, run: Path, approved_revision: str | None) -> int:
         panel = load_receipt(panel_file, rev, ROLES)
         p.documents["independent critiques"] = json_bytes(panel["reviews"]).decode()
     if action.startswith("verify") or path.is_file():
-        expected = ROLES if phase == "plan" else (actor,) if phase == "approval" else (phase,)
-        saved = load_receipt(path, rev, expected)
-        if phase == "approval" and saved.get("panel_digest") != digest(panel_file.read_bytes()):
-            raise ValueError("approval does not match the recorded independent critiques")
+        saved = (checked_approval(run, rev, actor) if phase == "approval"
+                 else load_receipt(path, rev, ROLES if phase == "plan" else (phase,)))
         decision = saved["reviews"][0]["decision"]
     else:
         if action == "approve-human":
@@ -262,7 +270,8 @@ def run_action(action: str, run: Path, approved_revision: str | None) -> int:
                 reviews = [report]
         if packet(run, source_phase).revision() != rev:
             raise ValueError("review inputs changed during review; rerun on the current revision")
-        record = {"revision": rev, "inputs": p.hashes, "reviews": reviews}
+        record = {"revision": rev, "inputs": p.hashes, "reviews": reviews,
+                  "recorded_at": datetime.now(timezone.utc).isoformat()}
         if phase == "plan":
             # Preserve the version Titus or the automatic approver could authorize.
             # Literature, wiki lessons and prior discussions are fingerprinted only.
@@ -271,6 +280,9 @@ def run_action(action: str, run: Path, approved_revision: str | None) -> int:
                                  if name in bound or name.endswith("/plan.md")}
         if phase == "approval":
             record["panel_digest"] = digest(panel_file.read_bytes())
+            record["results_already_present"] = sorted(
+                path.parent.name for path in (run / "experiments").glob("exp-*/results.md") if path.is_file()
+            )
         path.parent.mkdir(parents=True, exist_ok=True)
         write_json(path, record)
         decision = reviews[0]["decision"]

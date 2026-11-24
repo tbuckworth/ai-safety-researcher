@@ -209,7 +209,7 @@ spending limit on the provider account or project.
 
 The hub clarifies scope from the topic or issue, conducts the search, checks novelty and sets decision-relevant success criteria. Before execution it writes the actual per-experiment methods. Three independent reviewers assess them and a separate automatic approver decides whether that revision can run. A disproof experiment also goes through approval. A theoretical rethink can finish with a rationale and zero experiments. The full criteria, revision rules and approval commands are in [Steps 6–8 of the workflow](WORKFLOW.md#step-6-write-and-challenge-the-methods).
 
-Each critique and approval is saved under `reviews/` in the run directory. Receipts identify their inputs, decision, model, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision.
+Each critique and approval is saved under `reviews/` in the run directory. The plan receipt preserves the text of the reviewed methods. Approval records when it was given and which experiments already had results. Model review receipts record the decision, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision.
 
 ## Compute Profile (hardware-agnostic)
 

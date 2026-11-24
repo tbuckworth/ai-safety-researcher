@@ -1,0 +1,1 @@
+Read the draft as a scientist deciding what to do next. Compare its headline, quantitative claims and any supplied figures with the evidence and audit. Check the actual images, axes, denominators, uncertainty and readability. Require an accurate account of pilot-only, unrun or unaudited work. Specify exact repairs where necessary.

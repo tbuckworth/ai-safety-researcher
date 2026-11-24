@@ -379,6 +379,13 @@ class OutcomeTest(unittest.TestCase):
         self.add_exp("exp-001", "INCONCLUSIVE")
         self.assertEqual(self.outcome()["outcome"], "no-results")
 
+    def test_run_summary_only_attributes_observed_causes(self):
+        # A timeout can skip straight from design to a report. A valid pilot
+        # can also be inconclusive because its estimate is too imprecise.
+        self.assertNotIn("after experiments", " ".join(self.outcome(timed_out=True)["reasons"]))
+        self.add_exp("exp-001", "INCONCLUSIVE")
+        self.assertNotIn("invalid measurement", " ".join(self.outcome()["reasons"]))
+
     def test_failed_preflight_makes_a_claimed_verdict_inconclusive(self):
         # tasks#1863: gibberish fine-tunes reported as a negative finding.
         self.add_exp("exp-001", "FAIL", PREFLIGHT_BAD)

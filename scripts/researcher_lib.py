@@ -535,12 +535,12 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
                     publish_error: str = "", paused: bool = False, notes: list[str] | None = None) -> dict:
     """Decide the run's final outcome from what actually exists on disk.
 
-    complete        workflow finished, valid results, pushed and verified
+    complete        workflow finished, qualifying verdict or theory result, pushed and verified
     complete-local  as complete, but publishing was deliberately skipped
     unpublished     workflow finished with valid results, but the push failed
     no-results      workflow finished, but no experiment produced a valid verdict
     partial         workflow stopped early (timeout / failure) with some valid results
-    failed          workflow stopped early with no valid results
+    failed          workflow stopped early without a qualifying verdict
     paused          resumable hold; state.md records the cause
 
     `success` is whether the outcome is one of SUCCESS_OUTCOMES. The `reasons`
@@ -585,7 +585,9 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
 
     if timed_out:
         if finished:
-            reasons.append("hit the run timeout after experiments; the results audit was skipped")
+            reasons.append("the run reached its time limit and skipped ahead to the report"
+                           if (run_dir / "audit" / "results-audit.md").is_file()
+                           else "the run reached its time limit and the results audit was skipped")
         else:
             reasons.append("hit the run timeout before the workflow finished")
     elif not finished and not paused:
@@ -593,7 +595,7 @@ def compute_outcome(run_dir: Path, *, status: str, timed_out: bool, publish_stat
     if publish_state == "failed" and not paused:
         reasons.append(f"not on GitHub: {publish_error or 'push failed'}")
     if counts.get("INCONCLUSIVE"):
-        reasons.append(f"{counts['INCONCLUSIVE']} experiment(s) inconclusive (pre-flight failed or invalid measurement)")
+        reasons.append(f"{counts['INCONCLUSIVE']} experiment(s) had an inconclusive verdict")
     if counts.get("UNKNOWN"):
         reasons.append(f"{counts['UNKNOWN']} experiment(s) without a '## Verdict: PASS|FAIL|INCONCLUSIVE' line")
     missing = [e["id"] for e in experiments if e["verdict"] == "MISSING"]

@@ -58,8 +58,9 @@ MOCK_AGENT_MAIL
 # MOCK_EMAIL_FAIL_LOGINS (space-separated) fails at once with a usage-limit
 # notice; one in MOCK_EMAIL_HANG_LOGINS hangs; one in MOCK_EMAIL_DROP_LOGINS
 # fails after writing the draft. MOCK_EMAIL_NO_SEND=true stops it before
-# sending; MOCK_EMAIL_BAD_IMAGE=true also lists an image that does not exist in
-# email-images.txt.
+# sending; MOCK_EMAIL_NO_REVISE=true makes it fail, unrevised, once the review
+# holds its email; MOCK_EMAIL_BAD_IMAGE=true also lists an image that does not
+# exist in email-images.txt.
 install_mock_email_composer() {
     cat > "$1/mock-email-composer" <<'MOCK_EMAIL_COMPOSER'
 #!/usr/bin/env bash
@@ -107,6 +108,10 @@ if [[ "$prompt" == *"Send it yourself"* ]] && [ "${MOCK_EMAIL_NO_SEND:-false}" !
     set +e
     CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"
     rc=$?
+    if [ "$rc" -eq 3 ] && [ "${MOCK_EMAIL_NO_REVISE:-false}" = "true" ]; then
+        echo "You've hit your weekly limit (the session stops before revising the held email)"
+        exit 1
+    fi
     if [ "$rc" -eq 3 ]; then
         printf '%s\n' '<p>Revised after the review.</p>' >> "${run_dir}/email-draft.html"
         CLAUDE_CODE_SESSION_ID="$sid" "$helper" "$run_dir"

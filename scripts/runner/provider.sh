@@ -61,6 +61,16 @@ Worker models for this run: fast \`${CODEX_FAST_MODEL}\` with \`${CODEX_FAST_REA
 EOF
 }
 
+# shellcheck disable=SC2034 # The globals it sets are read by the other runner files.
+runtime_limits() {
+    # Sets the limits the runtime header gives every prompt, from the run
+    # settings: MAX_FILE_MB, MAX_EXPERIMENTS, EXPERIMENT_MINUTES, MAX_AUDIT_ROUNDS.
+    MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
+    MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
+    EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
+    MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
+}
+
 build_runtime_header() {
     cat <<EOF
 # Injected Runtime Configuration

@@ -98,8 +98,9 @@ def _badge(verdict: str) -> str:
 
 def split_repo_url(url: str) -> tuple[str, str]:
     """(repository web address, branch) of a run's .repo_url: https://github.com/OWNER/NAME, or a
-    follow-up's https://github.com/OWNER/NAME/tree/BRANCH (scripts/runner/common.sh repo_url_branch
-    reads it the same way). The branch is "main" when the address names none."""
+    follow-up's https://github.com/OWNER/NAME/tree/BRANCH. The runner reads the same addresses in
+    bash (scripts/runner/common.sh repo_path_of and repo_url_branch); a change of form goes in both.
+    The branch is "main" when the address names none."""
     url = url.strip().rstrip("/")
     repo, _, rest = url.partition("/tree/")
     return repo.removesuffix(".git"), (rest.split("/")[0] if rest else "main")
@@ -133,10 +134,6 @@ def headline_figures(run_dir: Path) -> list[Path]:
     return figures[:MAX_FIGURES]
 
 
-def tally(counts: dict[str, int]) -> str:
-    return ", ".join(f"{counts[v]} {v.lower()}" for v in lib.VERDICTS if counts.get(v)) or "none ran"
-
-
 def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: str, plugin_dir: str,
                     agent_bin: str, continue_command: str, agent_label: str, why: list[str],
                     today: date) -> dict:
@@ -145,17 +142,18 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
     published repository (.repo_url, present only after a verified push), its headline figures
     (headline_figures) and the continuation facts the runner gives a model writer. `why` says why
     no model wrote it. Returns {"subject", "html", "images"}: images are (NAME, path) pairs the HTML
-    places as cid:NAME. The subject carries no outcome prefix; send-results-email.sh adds it."""
+    places as cid:NAME. The subject carries no outcome prefix; send-results-email.sh adds it. Raises
+    KeyError when `facts` lacks a field compute_outcome writes."""
     title = report_title(run_dir)
     outcome = facts["outcome"]
     headline = lib.OUTCOME_HEADLINES.get(outcome, outcome)
-    counts = facts.get("counts") or {}
+    counts = facts["counts"]
     repo_file = run_dir / ".repo_url"
     repo_url = repo_file.read_text(encoding="utf-8").strip() if repo_file.is_file() else ""
     repo_web, branch = split_repo_url(repo_url) if repo_url else ("", "")
     figures = headline_figures(run_dir)
     images = [(f"figure{i}", path) for i, path in enumerate(figures, 1)]
-    success = bool(facts.get("success"))
+    success = facts["success"]
 
     parts = [f'<div style="{FONT}; max-width: 700px; margin: 0 auto; color: #1a1a1a; line-height: 1.6;">']
 
@@ -167,7 +165,7 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
         f'{_esc(today.strftime("%-d %b %Y"))}{original}</div></div>')
 
     colours = ("#f0fdf4", "#bbf7d0") if success else ("#fef2f2", "#fecaca")
-    finding = facts.get("findings") or "The run's next-steps.md gives no one-line outcome."
+    finding = facts["findings"] or "The run's next-steps.md gives no one-line outcome."
     parts.append(
         f'<div style="background: {colours[0]}; border: 1px solid {colours[1]}; {BOX} font-size: 14px;">'
         f'<strong>Headline: the run {_esc(headline)}.</strong> {_esc(finding)}</div>')
@@ -181,13 +179,13 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
         f'detail.<ul style="margin: 8px 0 0 0; padding-left: 20px;">{reasons}</ul></div>')
 
     rows = [("Outcome", f"<code>{_esc(outcome)}</code>: {_esc(headline)}"),
-            ("Experiments", _esc(tally(counts)))]
-    if facts.get("audit"):
+            ("Experiments", _esc(lib.verdict_tally(counts) or "none ran"))]
+    if facts["audit"]:
         rows.append(("Results audit", _esc(facts["audit"])))
     if repo_web:
         where = f"{repo_web}/tree/{branch}"
         rows.append(("Repo", _link(where, "GitHub") + (f" (branch {_esc(branch)})" if branch != "main" else "")))
-        if facts.get("paper"):
+        if facts["paper"]:
             rows.append(("Paper", _link(f"{repo_web}/blob/{branch}/paper/paper.pdf", "paper.pdf")))
     else:
         rows.append(("Repo", "not on GitHub: the results are only in the run directory"))
@@ -205,17 +203,17 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
             f'<p style="font-size: 13px; color: #475569; margin: 4px 0 0 0;">A headline figure of the paper '
             f'({_esc(path.relative_to(run_dir.resolve()))}); its caption in the paper says what it shows.</p></div>')
 
-    experiments = facts.get("experiments") or []
+    experiments = facts["experiments"]
     if experiments:
         body = []
         for exp in experiments:
             notes = []
-            if exp.get("preflight_failed"):
+            if exp["preflight_failed"]:
                 notes.append("pre-flight checks failed: " + ", ".join(exp["preflight_failed"]))
-            if exp.get("note"):
+            if exp["note"]:
                 notes.append(exp["note"])
             body.append(
-                f'<tr><td style="{CELL}">{_esc(exp["id"])}</td><td style="{CELL}">{_esc(exp.get("component") or "")}</td>'
+                f'<tr><td style="{CELL}">{_esc(exp["id"])}</td><td style="{CELL}">{_esc(exp["component"])}</td>'
                 f'<td style="{CELL}">{_badge(exp["verdict"])}</td><td style="{CELL}">{_esc("; ".join(notes))}</td></tr>')
         head = "".join(f'<th style="{HEAD_CELL}">{h}</th>' for h in ("#", "What was tested", "Result", "Note"))
         parts.append(
@@ -223,17 +221,17 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
             f' margin-bottom: 24px;"><thead><tr style="background: #f8fafc;">{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table>')
 
-    caveats = facts.get("reasons") or []
+    caveats = facts["reasons"]
     if caveats:
         items = "".join(f'<li style="margin-bottom: 8px;">{_esc(reason)}</li>' for reason in caveats)
         parts.append(f'<div style="margin-bottom: 24px;"><h2 style="{H2}">Caveats</h2>'
                      f'<ol style="font-size: 14px; padding-left: 20px;">{items}</ol></div>')
 
-    steps = facts.get("next_step_titles") or []
+    steps = facts["next_step_titles"]
     if steps:
         items = "".join(f'<li style="margin-bottom: 8px;">{_esc(step)}</li>' for step in steps)
         plan = (f' The full plan, with the cost of each step, is {_link(f"{repo_web}/blob/{branch}/next-steps.md", "next-steps.md")}.'
-                if repo_web and facts.get("next_steps") else "")
+                if repo_web and facts["next_steps"] else "")
         next_steps = f'<ol style="font-size: 14px; padding-left: 20px; margin: 0;">{items}</ol>' \
                      f'<p style="font-size: 14px; margin: 12px 0 0 0;">The run ranks these steps in this order.{plan}</p>'
     else:
@@ -262,7 +260,7 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
 
     if repo_web:
         links = [_link(f"{repo_web}/tree/{branch}", "GitHub repository") + " (code, paper and records)"]
-        if facts.get("paper"):
+        if facts["paper"]:
             links.append(_link(f"{repo_web}/blob/{branch}/paper/paper.pdf", "Paper (PDF)"))
         if (run_dir / "briefing.md").is_file():
             links.append(_link(f"{repo_web}/blob/{branch}/briefing.md", "Briefing") + " (the run's own summary)")
@@ -275,7 +273,7 @@ def template_report(run_dir: Path, *, facts: dict, issue_url: str, host_alias: s
                  f'Generated by the autonomous AI safety researcher agent · {_esc(agent_label)} · assembled without a'
                  f' model</div></div>')
 
-    subject = f"[Auto-Research] {title} — {headline} — {tally(counts)}"
+    subject = f"[Auto-Research] {title} — {headline} — {lib.verdict_tally(counts) or 'none ran'}"
     return {"subject": subject, "html": "\n".join(parts) + "\n", "images": images}
 
 

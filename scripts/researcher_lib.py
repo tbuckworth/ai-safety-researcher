@@ -653,6 +653,11 @@ OUTCOME_HEADLINES = {
 }
 
 
+def verdict_tally(counts: dict[str, int]) -> str:
+    """The experiments' verdict counts in VERDICTS order, e.g. "1 pass, 2 inconclusive"; "" for none."""
+    return ", ".join(f"{counts[v]} {v.lower()}" for v in VERDICTS if counts.get(v))
+
+
 def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, branch: str,
                   agent_label: str, host: str, is_followup: bool, visibility: str) -> str:
     """The findings comment for the run's issue, in Markdown, formatted from
@@ -665,8 +670,7 @@ def issue_comment(facts: dict, *, run_dir: Path, run_id: str, repo_web: str, bra
         f"### Autonomous research run: {OUTCOME_HEADLINES.get(outcome, outcome)}",
         "",
     ]
-    counts = facts["counts"]
-    tally = ", ".join(f"{counts[v]} {v.lower()}" for v in VERDICTS if counts.get(v))
+    tally = verdict_tally(facts["counts"])
     lines.append(f"**Outcome:** `{outcome}`" + (f" — experiments: {tally}" if tally else ""))
     for reason in facts["reasons"]:
         lines.append(f"- {reason}")

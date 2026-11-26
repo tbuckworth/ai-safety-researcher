@@ -164,6 +164,11 @@ class TemplateTest(unittest.TestCase):
         self.assertEqual(out["images"], [("figure1", (self.run / "paper/figures/main.png").resolve())])
         self.assertIn('src="cid:figure1"', out["html"])
 
+    def test_a_record_missing_a_field_fails(self):
+        facts = {k: v for k, v in self.facts.items() if k != "next_step_titles"}
+        with self.assertRaises(KeyError):
+            self.build(facts=facts)
+
     def test_title_falls_back_to_the_topic(self):
         (self.run / "briefing.md").unlink()
         self.assertTrue(self.build()["subject"].startswith("[Auto-Research] The raw topic <b> — "))

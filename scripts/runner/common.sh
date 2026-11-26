@@ -11,7 +11,8 @@ is_true() {
 }
 
 # Repo URLs come as owner/name, https://github.com/owner/name[.git], or a
-# follow-up's https://github.com/owner/name/tree/<branch>.
+# follow-up's https://github.com/owner/name/tree/<branch>. results_report.py
+# split_repo_url reads them the same way in Python; a change of form goes in both.
 repo_path_of() {
     local path="${1%/}"
     path="${path#"${GITHUB_WEB}/"}"

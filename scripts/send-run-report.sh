@@ -7,17 +7,20 @@
 #
 #   send-run-report.sh RUN_DIR
 #
-# Reads, in RUN_DIR: state.md (the backend, model, issue and knowledge base the
-# run used), run-outcome.json (the outcome the runner recorded) and, when
-# present, run-config.json, whose saved settings (the email model, the Codex
-# models, the limits) win over the configuration file's but not over the
-# environment's. The email's continuation steps name RESEARCHER_RUNNER_DIR, the
+# Reads, in RUN_DIR: run-config.json, the settings the run saved (its backend
+# and models, the email model, the limits), restored as a resume restores them
+# (restore_run_settings: a setting the environment sets to another value exits
+# 2 without RESEARCHER_ALLOW_CONFIG_CHANGE); state.md (the issue and knowledge
+# base); and run-outcome.json (the outcome the runner recorded). The email's
+# continuation steps name RESEARCHER_RUNNER_DIR, the
 # checkout that runs autonomous runs, and its writers run there, so that a
 # reply resumes the session there; the prompts and helpers are this checkout's.
 # A run whose report already went or is held by the pre-send review
-# (.email-sent or .email-held) is refused. Exit 0: sent; 1: nothing was
-# sent (why is above), or the report already went; 2: a setting or the run
-# directory is invalid.
+# (.email-sent or .email-held) is refused. Exit 0: the report went (or the
+# review holds it, to go after the mailroom's fallback wait); 1: the report did
+# not go (why is above: nothing was sent, or only a plain-text notice, as when
+# the runner counts the email undelivered), or it already went; 2: a setting or
+# the run directory is invalid.
 
 set -euo pipefail
 
@@ -57,25 +60,22 @@ done
 source "${SCRIPT_DIR}/runner/common.sh"
 # shellcheck source=runner/state.sh
 source "${SCRIPT_DIR}/runner/state.sh"
+# shellcheck source=runner/settings.sh
+source "${SCRIPT_DIR}/runner/settings.sh"
 # shellcheck source=runner/provider.sh
 source "${SCRIPT_DIR}/runner/provider.sh"
 # shellcheck source=runner/notify.sh
 source "${SCRIPT_DIR}/runner/notify.sh"
 
-# The settings the run was made with, for each one the environment leaves to
-# the configuration file.
-if [ -s "${RUN_DIR}/run-config.json" ]; then
-    while IFS= read -r -d '' name && IFS= read -r -d '' value; do
-        if [ -z "${!name:-}" ] || config_from_file "$name"; then
-            printf -v "$name" '%s' "$value"
-        fi
-    done < <(jq -j '.settings | to_entries[] | select(.value != null) | .key, "\u0000", .value, "\u0000"' \
-        "${RUN_DIR}/run-config.json")
-fi
-# The backend and model the run used, from its state.
-RESEARCHER_BACKEND=$(state_field "${RUN_DIR}/state.md" agent_backend)
-RESEARCHER_MODEL=$(state_field "${RUN_DIR}/state.md" agent_model)
+# The settings the run was made with, as a resume restores them. This script
+# records no launch, so it has no owner and its accepted changes are not kept.
+mapfile -t RUN_SETTINGS < <(python3 "$LIB" run-settings)
+RUN_OWNER=""
+ALLOW_CONFIG_CHANGE="${RESEARCHER_ALLOW_CONFIG_CHANGE:-false}"
+ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
+restore_run_settings "$RUN_DIR"
 select_backend
+runtime_limits
 email_settings
 HOST_ALIAS=$(resolve_host_alias) || exit 2
 CONTINUE_DIR="$RESEARCHER_RUNNER_DIR"
@@ -88,17 +88,12 @@ RUN_ID=$(basename "$RUN_DIR")
 OUTPUT_DIR=$(dirname "$RUN_DIR")
 LOG_DIR="${RESEARCHER_LOG_DIR:-${OUTPUT_DIR}/logs}"
 mkdir -p "$LOG_DIR"
-GITHUB_WEB="https://github.com"
 TASKS_REPO="$RESEARCHER_TASKS_REPO"
 ISSUE_NUMBER=$(state_field "${RUN_DIR}/state.md" issue_number)
 [ "$ISSUE_NUMBER" = "none" ] && ISSUE_NUMBER=""
 KB_DIR=$(state_field "${RUN_DIR}/state.md" knowledge_base)
 [ "$KB_DIR" = "none" ] && KB_DIR=""
 CODE_SEARCH_DIR="$RESEARCHER_CODE_SEARCH_DIR"
-MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
-EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
-MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
-MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
 
 # The outcome the runner recorded. The run does not keep the visibility it read
 # back from GitHub, so the writer is told it is unknown.
@@ -115,3 +110,7 @@ OUTCOME_REASONS=$(jq -r '.reasons[]?' "$OUTCOME_FILE" | sed 's/^/  - /')
 
 log "Sending the results email of ${RUN_DIR} (outcome ${FINAL_OUTCOME}, backend ${BACKEND} ${MODEL})."
 send_email || exit 1
+if [ "$EMAIL_WRITER" = notice ]; then
+    log "ERROR: the report itself did not go, only the plain-text notice (why is above)."
+    exit 1
+fi

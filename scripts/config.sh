@@ -12,6 +12,9 @@
 #   scripts/config.sh --compute-profile lambda   # with RESEARCHER_COMPUTE_BUDGET_USD set
 
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config"
+# GitHub's web address, for repo and issue links.
+# shellcheck disable=SC2034 # read by the scripts that source this file
+GITHUB_WEB="https://github.com"
 RESEARCHER_CONFIG_FILE="${RESEARCHER_CONFIG_FILE:-${CONFIG_DIR}/researcher.env}"
 
 # load_config: sets each key of RESEARCHER_CONFIG_FILE that the environment

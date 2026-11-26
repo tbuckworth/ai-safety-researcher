@@ -532,11 +532,31 @@ rm "${CASE_RUN}/.email-sent"
 jq '.experiments = 5' "${CASE_RUN}/run-outcome.json" > "${CASE_RUN}/run-outcome.json.tmp"
 mv "${CASE_RUN}/run-outcome.json.tmp" "${CASE_RUN}/run-outcome.json"
 send_run_report "MOCK_EMAIL_FAIL_LOGINS=personal arrow codex"
-test "$CASE_RC" = "0"
+# Only the notice went, not the report: the script says so and exits 1.
+test "$CASE_RC" = "1"
 grep -q 'template: the report could not be assembled' "${TEST_ROOT}/resend.stdout"
+grep -q 'ERROR: the report itself did not go, only the plain-text notice' "${TEST_ROOT}/resend.stdout"
 grep -q '^--subject \[Auto-Research\] Results report not written: run .*(complete-local) | from=unrouted ' "$MOCK_EMAIL_LOG"
 grep -q -- '--body-file' "$MOCK_EMAIL_LOG"
 if grep -q -- '--html' "$MOCK_EMAIL_LOG"; then echo "FAIL: the notice has an HTML part" >&2; exit 1; fi
+
+# An email the pre-send review holds goes after the mailroom's fallback wait: a
+# writer that stops before revising it has delivered it, so no other writer
+# sends a second one, and send-run-report.sh refuses that run.
+: > "${MOCK_EMAIL_LOG}.held"
+email_case held MOCK_REVIEW_PUSHBACK=true MOCK_EMAIL_NO_REVISE=true
+test "$CASE_RC" = "0"
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "personal"
+test -s "${CASE_RUN}/.email-held"
+test ! -e "${CASE_RUN}/.email-sent"
+test ! -s "$MOCK_EMAIL_LOG"
+test "$(wc -l < "${MOCK_EMAIL_LOG}.held" | tr -d ' ')" = "1"
+grep -q 'the pre-send review held the email; the mailroom sends it unchanged after its fallback wait' "${TEST_ROOT}/held.stdout"
+grep -q '^undelivered: none$' "${CASE_RUN}/state.md"
+send_run_report
+test "$CASE_RC" = "1"
+grep -q 'already went or is held (.email-held' "${TEST_ROOT}/resend.stdout"
+test ! -s "$MOCK_EMAIL_LOG"
 
 # build_email_prompt takes exactly send or compose.
 if bash -c 'source "$1/runner/common.sh"; source "$1/runner/provider.sh"; build_email_prompt sned' _ "$SCRIPT_DIR" \

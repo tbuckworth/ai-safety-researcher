@@ -82,8 +82,6 @@ ALLOW_RERUN="${RESEARCHER_ALLOW_RERUN:-false}"
 REPO_OWNER="$RESEARCHER_GITHUB_OWNER"
 TASKS_REPO="$RESEARCHER_TASKS_REPO"
 REPO_VISIBILITY="${RESEARCHER_REPO_VISIBILITY:-private}"
-# GitHub's web address, for repo and issue links.
-GITHUB_WEB="https://github.com"
 # Where git pushes to. Only tests override this (with a file:// directory of bare repos).
 GIT_REMOTE_BASE="${RESEARCHER_GIT_REMOTE_BASE:-$GITHUB_WEB}"
 # Publishing refuses to start below this much free space on the run volume, and
@@ -202,13 +200,10 @@ if [ -n "$IN_PROGRESS" ]; then
     restore_run_settings "$IN_PROGRESS"
 fi
 
-# The limits the steps keep to, which the runtime header gives them. The step
-# ends the audit loop at MAX_AUDIT_ROUNDS; the runner's own ceiling (in the step
-# loop below) is one round more, so it only stops a step that ignores the limit.
-MAX_FILE_MB="$RESEARCHER_MAX_FILE_MB"
-MAX_EXPERIMENTS="$RESEARCHER_MAX_EXPERIMENTS"
-EXPERIMENT_MINUTES="$RESEARCHER_EXPERIMENT_MINUTES"
-MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
+# The limits the steps keep to (runtime_limits). The step ends the audit loop at
+# MAX_AUDIT_ROUNDS; the runner's own ceiling (in the step loop below) is one
+# round more, so it only stops a step that ignores the limit.
+runtime_limits
 # Optional hook: a shell command printing the still-outstanding external
 # (e.g. Slurm) job ids for this run; "{run_id}" is substituted. It exits 0 with
 # its answer (no output: no jobs); a non-zero exit is an error, logged, and the

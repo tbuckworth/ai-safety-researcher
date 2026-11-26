@@ -68,6 +68,30 @@ require_config() {
     done
 }
 
+# add_local_bin_to_path: puts ~/.local/bin on PATH when it is not there, since
+# cron and non-login SSH shells often omit user-installed CLIs.
+add_local_bin_to_path() {
+    case ":${PATH}:" in
+        *":${HOME}/.local/bin:"*) ;;
+        *) export PATH="${HOME}/.local/bin:${PATH}" ;;
+    esac
+}
+
+# mailroom_tool NAME: the path of the agent mailroom's command NAME (agent-mail,
+# agent-usage or agent-status): RESEARCHER_<NAME>, with dashes as underscores,
+# when set (the tests point it at a mock), else the one on PATH, else
+# ~/.local/bin/NAME, where the mailroom installs it. The caller checks that it
+# exists.
+mailroom_tool() {
+    local var="RESEARCHER_${1//-/_}"
+    var="${var^^}"
+    if [ -n "${!var:-}" ]; then
+        printf '%s\n' "${!var}"
+    else
+        command -v "$1" || printf '%s\n' "${HOME}/.local/bin/$1"
+    fi
+}
+
 # joined_lines FILE: the text of FILE on one line, its lines joined with spaces.
 joined_lines() {
     local text

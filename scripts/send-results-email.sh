@@ -15,13 +15,15 @@
 # Exit 3 with "agent-mail: NOT SENT" and the fixes means nothing was sent:
 # revise the draft and run this once more; that send goes out whatever the
 # review says. A held draft nobody revises is sent unchanged by the mailroom
-# after its fallback wait. Exit 0: sent, recorded in RUN_DIR/.email-sent. Exit 2:
+# after its fallback wait; the hold is recorded in RUN_DIR/.email-held. Exit 0:
+# sent, recorded in RUN_DIR/.email-sent. Exit 2:
 # nothing was sent because an input is missing or invalid (a configuration that
 # is malformed or names no recipient, no draft or subject, a run-outcome.json jq
 # cannot read, a bad email-images.txt line); fix it and run this again.
 #
 # --unrouted: no session, so no review, and replies go to the orchestrator.
-# Only the wrapper uses it, when the Claude CLI is not installed.
+# Only the wrapper uses it, for a draft that Codex wrote or that was assembled
+# with no model (scripts/runner/notify.sh send_email).
 
 set -euo pipefail
 
@@ -34,7 +36,7 @@ require_config RESEARCHER_EMAIL_TO || exit 2
 RUN_DIR="${1:?usage: send-results-email.sh RUN_DIR [--unrouted]}"
 UNROUTED="${2:-}"
 TO="$RESEARCHER_EMAIL_TO"
-AGENT_MAIL="${RESEARCHER_AGENT_MAIL:-$(command -v agent-mail || echo "${HOME}/.local/bin/agent-mail")}"
+AGENT_MAIL=$(mailroom_tool agent-mail)
 
 if [ -n "$UNROUTED" ] && [ "$UNROUTED" != "--unrouted" ]; then
     echo "error: unknown option ${UNROUTED}" >&2
@@ -96,5 +98,7 @@ set -e
 printf '%s\n' "$out"
 if [ "$rc" -eq 0 ]; then
     printf '%s\t%s\n' "$(date -Iseconds)" "$(printf '%s\n' "$out" | head -1)" > "${RUN_DIR}/.email-sent"
+elif [ "$rc" -eq 3 ]; then
+    printf '%s\t%s\n' "$(date -Iseconds)" "$(printf '%s\n' "$out" | head -1)" > "${RUN_DIR}/.email-held"
 fi
 exit "$rc"

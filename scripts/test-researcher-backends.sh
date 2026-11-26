@@ -18,6 +18,7 @@ mkdir -p "$MOCK_BIN"
 # shellcheck source=tests/mocks.sh
 source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
+install_mock_mailroom "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
 install_mock_next_steps_writer "$MOCK_BIN"
 install_mock_reviews "$MOCK_BIN"
@@ -38,15 +39,6 @@ printf '%s %s\n' "$(basename "$0")" "$*" >> "$MOCK_CALL_LOG"
 } >> "$MOCK_PROMPT_LOG"
 
 if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
-    if [ "${MOCK_CLAUDE_EMAIL_FAIL:-false}" = "true" ] && [ "$(basename "$0")" = "claude" ]; then
-        echo "Claude AI usage limit reached" >&2
-        exit 1
-    fi
-    if [ "${MOCK_CODEX_EMAIL_FAIL:-false}" = "true" ] && [ "$(basename "$0")" = "codex" ]; then
-        "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
-        echo "codex: stream disconnected after writing the draft" >&2
-        exit 1
-    fi
     exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
 fi
 if [[ "$prompt" == *"# Autonomous Next-Steps Writer"* ]]; then
@@ -149,7 +141,6 @@ run_case() {
     RESEARCHER_RETRY_DELAY_SECONDS="0" \
     PATH="${MOCK_BIN}:${PATH}" \
     RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
-    MOCK_CLAUDE_EMAIL_FAIL="${MOCK_CLAUDE_EMAIL_FAIL:-false}" \
     RESEARCHER_EMAIL_TO="self@example.test" \
     RESEARCHER_HOST_ALIAS="mock-host" \
     RESEARCHER_KB_DIR="$kb_dir" \
@@ -399,68 +390,153 @@ grep -q 'WARN: parent issue #42 has no importance label' "${TEST_ROOT}/followup.
 grep -q 'Created follow-up issue: https://github.com/tbuckworth/tasks/issues/123' \
     "${TEST_ROOT}/followup.stdout"
 
-# With no Claude CLI installed, a Codex run's own backend writes the email and
-# it goes unrouted (unreviewed; replies to the orchestrator).
+# --- The results email's writers ---------------------------------------------
+# The email is written by each writer of the mailroom's login order in turn (here
+# the Claude logins personal and arrow, then Codex; install_mock_mailroom) until
+# one succeeds; with none left, it is assembled with no model.
+
+# email_case LABEL [VAR=value ...]: a Codex run of its own (publishing skipped),
+# with the given variables; sets CASE_RUN (its run directory) and CASE_RC (its
+# exit code), and empties the email and status logs first.
+email_case() {
+    local label="$1"
+    shift
+    : > "$MOCK_EMAIL_LOG"
+    : > "$MOCK_STATUS_LOG"
+    set +e
+    env RESEARCHER_BACKEND=codex \
+        RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+        RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+        RESEARCHER_CODEX_FAST_MODEL="mock-codex-fast" \
+        RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/${label}-output" \
+        RESEARCHER_LOCKFILE="${TEST_ROOT}/${label}.lock" \
+        RESEARCHER_LINK_OUTPUT=false \
+        RESEARCHER_SKIP_PUBLISH=true \
+        RESEARCHER_SKIP_GPU_CHECK=true \
+        RESEARCHER_RETRY_DELAY_SECONDS=0 \
+        PATH="${MOCK_BIN}:${PATH}" \
+        RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+        RESEARCHER_EMAIL_TO="self@example.test" \
+        RESEARCHER_HOST_ALIAS="mock-host" \
+        RESEARCHER_KB_DIR=none \
+        "$@" \
+        "$REPO_DIR/scripts/researcher-cron.sh" "Email case ${label}" > "${TEST_ROOT}/${label}.stdout" 2>&1
+    CASE_RC=$?
+    set -e
+    CASE_RUN=$(find "${TEST_ROOT}/${label}-output" -mindepth 2 -maxdepth 2 -name state.md -printf '%h\n' | head -1)
+    test -n "$CASE_RUN"
+}
+
+# With no Claude CLI installed, both Claude logins fail, Codex writes the email
+# and it goes unrouted (unreviewed; replies to the orchestrator).
 : > "$MOCK_EMAIL_LOG"
 CASE_CLAUDE_BIN="${TEST_ROOT}/no-claude-here" run_case codex "" none noclaude
 test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
 grep -q 'from=unrouted .*--unrouted' "$MOCK_EMAIL_LOG"
-grep -q 'WARN: no Claude CLI .*no-claude-here.* to write the email' "${TEST_ROOT}/codex-noclaude.stdout"
+grep -q 'WARN: the results email was not delivered by personal: the writer failed (exit 127' "${TEST_ROOT}/codex-noclaude.stdout"
+grep -q 'WARN: the results email was not delivered by arrow: the writer failed (exit 127' "${TEST_ROOT}/codex-noclaude.stdout"
+grep -q 'Writing the results email with Codex mock-codex-fast, to send unrouted' "${TEST_ROOT}/codex-noclaude.stdout"
+grep -q 'sent (outcome complete-local), written on the codex login; before it: personal: ' "$MOCK_STATUS_LOG"
 
-# A Claude email session that fails is a failed deliverable, not a cue for
-# Codex: nothing is sent, and the run exits 5.
-: > "$MOCK_EMAIL_LOG"
-: > "$MOCK_PROMPT_LOG"
-set +e
-RESEARCHER_BACKEND=codex \
-RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
-RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
-RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/claudedown-output" \
-RESEARCHER_LOCKFILE="${TEST_ROOT}/claudedown.lock" \
-RESEARCHER_LINK_OUTPUT=false \
-RESEARCHER_SKIP_PUBLISH=true \
-RESEARCHER_SKIP_GPU_CHECK=true \
-RESEARCHER_RETRY_DELAY_SECONDS=0 \
-PATH="${MOCK_BIN}:${PATH}" \
-RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
-MOCK_CLAUDE_EMAIL_FAIL=true \
-RESEARCHER_EMAIL_TO="self@example.test" \
-RESEARCHER_HOST_ALIAS="mock-host" \
-RESEARCHER_KB_DIR=none \
-"$REPO_DIR/scripts/researcher-cron.sh" "Claude email session fails" > "${TEST_ROOT}/claudedown.stdout" 2>&1
-claudedown_status=$?
-set -e
-test "$claudedown_status" = "5"
-test ! -s "$MOCK_EMAIL_LOG"
-grep -q 'ERROR: the email writer (session) failed (exit 1' "${TEST_ROOT}/claudedown.stdout"
-grep -q 'not delivered in full: email' "${TEST_ROOT}/claudedown.stdout"
-if grep -q 'Compose only; the wrapper sends it' "$MOCK_PROMPT_LOG"; then echo "FAIL: Codex wrote the email" >&2; exit 1; fi
+# A Claude login at its usage limit passes the email to the next login, whose
+# session writes it and sends it itself (routed and reviewed, not unrouted).
+email_case limit MOCK_EMAIL_FAIL_LOGINS=personal
+test "$CASE_RC" = "0"
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "personal arrow"
+grep -q "WARN: the results email was not delivered by personal: the writer failed (exit 1: You've hit your weekly limit" \
+    "${TEST_ROOT}/limit.stdout"
+arrow_session=$(sed -n 's/.*on the arrow login (session \([0-9a-f-]\{36\}\)).*/\1/p' "${TEST_ROOT}/limit.stdout")
+test -n "$arrow_session"
+test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
+grep -q "from=${arrow_session} " "$MOCK_EMAIL_LOG"
+if grep -q -- 'unrouted' "$MOCK_EMAIL_LOG"; then echo "FAIL: the arrow login's email went unrouted" >&2; exit 1; fi
+grep -q '^undelivered: none$' "${CASE_RUN}/state.md"
 
-# A Codex email writer that fails after writing a draft is a failed deliverable
-# too: the draft is not sent unreviewed, and the run exits 5.
-: > "$MOCK_EMAIL_LOG"
-set +e
-RESEARCHER_BACKEND=codex \
-RESEARCHER_CLAUDE_BIN="${TEST_ROOT}/no-claude-here" \
-RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
-RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/codexfail-output" \
-RESEARCHER_LOCKFILE="${TEST_ROOT}/codexfail.lock" \
-RESEARCHER_LINK_OUTPUT=false \
-RESEARCHER_SKIP_PUBLISH=true \
-RESEARCHER_SKIP_GPU_CHECK=true \
-RESEARCHER_RETRY_DELAY_SECONDS=0 \
-PATH="${MOCK_BIN}:${PATH}" \
-RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
-MOCK_CODEX_EMAIL_FAIL=true \
-RESEARCHER_EMAIL_TO="self@example.test" \
-RESEARCHER_HOST_ALIAS="mock-host" \
-RESEARCHER_KB_DIR=none \
-"$REPO_DIR/scripts/researcher-cron.sh" "Codex email writer fails" > "${TEST_ROOT}/codexfail.stdout" 2>&1
-codexfail_status=$?
-set -e
-test "$codexfail_status" = "5"
+# A writer that hangs is stopped at RESEARCHER_EMAIL_TIMEOUT_SECONDS and the next writes it.
+email_case hang MOCK_EMAIL_HANG_LOGINS=personal RESEARCHER_EMAIL_TIMEOUT_SECONDS=2
+test "$CASE_RC" = "0"
+grep -q 'WARN: the results email was not delivered by personal: the writer failed (exit 124' "${TEST_ROOT}/hang.stdout"
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "personal arrow"
+
+# With every login failing, the report is assembled from the run's saved files
+# with no model and sent unrouted; it says why no model wrote it.
+email_case nomodel "MOCK_EMAIL_FAIL_LOGINS=personal arrow codex"
+test "$CASE_RC" = "0"
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "personal arrow codex"
+test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
+grep -q '^--subject \[Auto-Research\] .* — complete (not published by request) — 1 pass | from=unrouted ' "$MOCK_EMAIL_LOG"
+grep -q 'Written without a model' "${MOCK_EMAIL_LOG}.last.html"
+grep -q "codex: the writer failed (exit 1: You&#x27;ve hit your weekly limit" "${MOCK_EMAIL_LOG}.last.html"
+grep -q 'How to Continue This Research' "${MOCK_EMAIL_LOG}.last.html"
+grep -qF "\$researcher:researcher-continue ${CASE_RUN}" "${MOCK_EMAIL_LOG}.last.html"
+grep -q 'sent (outcome complete-local), assembled without a model; before it: personal: ' "$MOCK_STATUS_LOG"
+
+# A Codex writer that fails after writing its draft does not have that draft sent:
+# the report with no model goes instead.
+email_case codexdrop "MOCK_EMAIL_FAIL_LOGINS=personal arrow" MOCK_EMAIL_DROP_LOGINS=codex
+test "$CASE_RC" = "0"
+grep -q 'Written without a model' "${MOCK_EMAIL_LOG}.last.html"
+if grep -q 'Mock research report' "${MOCK_EMAIL_LOG}.last.html"; then echo "FAIL: the failed writer's draft was sent" >&2; exit 1; fi
+
+# Without the mailroom's login order, no model is tried and the report with no
+# model goes, saying why.
+email_case noorder RESEARCHER_AGENT_USAGE="${TEST_ROOT}/no-agent-usage"
+test "$CASE_RC" = "0"
+test ! -e "${CASE_RUN}/.email-writers"
+grep -q "login order: agent-usage (the mailroom&#x27;s ${TEST_ROOT}/no-agent-usage) is not installed" "${MOCK_EMAIL_LOG}.last.html"
+
+# With the mailroom down nothing can be sent: the run exits 5, state.md names the
+# email as undelivered, and the status note says how to send it later.
+email_case maildown MOCK_AGENT_MAIL_FAIL=true
+test "$CASE_RC" = "5"
 test ! -s "$MOCK_EMAIL_LOG"
-grep -q 'ERROR: the email writer (unrouted) failed (exit 1' "${TEST_ROOT}/codexfail.stdout"
+grep -q '^undelivered: email$' "${CASE_RUN}/state.md"
+grep -q 'ERROR: nothing was sent to self@example.test about this run' "${TEST_ROOT}/maildown.stdout"
+grep -q "NOT SENT; before it: personal: .*re-send with ${REPO_DIR}/scripts/send-run-report.sh ${CASE_RUN}" "$MOCK_STATUS_LOG"
+
+# send-run-report.sh sends that run's report later, through the same writers,
+# with the settings the run saved; a second call is refused.
+send_run_report() {
+    : > "$MOCK_EMAIL_LOG"
+    : > "$MOCK_PROMPT_LOG"
+    : > "$MOCK_CALL_LOG"
+    set +e
+    env PATH="${MOCK_BIN}:${PATH}" \
+        RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+        RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+        RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+        RESEARCHER_EMAIL_TO="self@example.test" \
+        RESEARCHER_HOST_ALIAS="mock-host" \
+        RESEARCHER_RUNNER_DIR="${TEST_ROOT}/runner-checkout" \
+        "$@" "$REPO_DIR/scripts/send-run-report.sh" "$CASE_RUN" > "${TEST_ROOT}/resend.stdout" 2>&1
+    CASE_RC=$?
+    set -e
+}
+mkdir -p "${TEST_ROOT}/runner-checkout"
+send_run_report
+test "$CASE_RC" = "0"
+test "$(wc -l < "$MOCK_EMAIL_LOG" | tr -d ' ')" = "1"
+# The continuation names the runner checkout, where a reply resumes the session.
+grep -qx -- "- Plugin directory on the run host: ${TEST_ROOT}/runner-checkout" "$MOCK_PROMPT_LOG"
+grep -q '^claude --print .*--model sonnet .*--session-id ' "$MOCK_CALL_LOG"
+grep -qx -- '- Final outcome: complete-local' "$MOCK_PROMPT_LOG"
+grep -qx -- '- Agent to start in the plugin directory: '"${MOCK_BIN}/codex" "$MOCK_PROMPT_LOG"
+grep -qF -- "- Continue command: \$researcher:researcher-continue ${CASE_RUN}" "$MOCK_PROMPT_LOG"
+send_run_report
+test "$CASE_RC" = "1"
+grep -q 'already went or is held (.email-sent' "${TEST_ROOT}/resend.stdout"
+test ! -s "$MOCK_EMAIL_LOG"
+
+# A run record the report with no model cannot read leaves a plain-text notice.
+rm "${CASE_RUN}/.email-sent"
+jq '.experiments = 5' "${CASE_RUN}/run-outcome.json" > "${CASE_RUN}/run-outcome.json.tmp"
+mv "${CASE_RUN}/run-outcome.json.tmp" "${CASE_RUN}/run-outcome.json"
+send_run_report "MOCK_EMAIL_FAIL_LOGINS=personal arrow codex"
+test "$CASE_RC" = "0"
+grep -q 'template: the report could not be assembled' "${TEST_ROOT}/resend.stdout"
+grep -q '^--subject \[Auto-Research\] Results report not written: run .*(complete-local) | from=unrouted ' "$MOCK_EMAIL_LOG"
+grep -q -- '--body-file' "$MOCK_EMAIL_LOG"
+if grep -q -- '--html' "$MOCK_EMAIL_LOG"; then echo "FAIL: the notice has an HTML part" >&2; exit 1; fi
 
 # build_email_prompt takes exactly send or compose.
 if bash -c 'source "$1/runner/common.sh"; source "$1/runner/provider.sh"; build_email_prompt sned' _ "$SCRIPT_DIR" \

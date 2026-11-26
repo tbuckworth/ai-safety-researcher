@@ -25,18 +25,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Cron and non-login SSH shells often omit user-installed CLIs.
-case ":${PATH}:" in
-    *":${HOME}/.local/bin:"*) ;;
-    *) export PATH="${HOME}/.local/bin:${PATH}" ;;
-esac
-
 # shellcheck source=config.sh
 source "${SCRIPT_DIR}/config.sh"
+add_local_bin_to_path
 load_config || exit 2
-require_config RESEARCHER_STORAGE_ROOT RESEARCHER_GITHUB_OWNER RESEARCHER_TASKS_REPO RESEARCHER_EMAIL_TO \
+require_config RESEARCHER_STORAGE_ROOT RESEARCHER_GITHUB_OWNER RESEARCHER_TASKS_REPO \
     RESEARCHER_DEFAULT_KB_DIR RESEARCHER_BACKEND RESEARCHER_CLAUDE_BIN RESEARCHER_CODEX_BIN \
-    RESEARCHER_CLAUDE_MODEL RESEARCHER_EMAIL_CLAUDE_MODEL RESEARCHER_CODEX_MODEL RESEARCHER_CODEX_REASONING \
+    RESEARCHER_CLAUDE_MODEL RESEARCHER_CODEX_MODEL RESEARCHER_CODEX_REASONING \
     RESEARCHER_CODEX_FAST_MODEL RESEARCHER_CODEX_FAST_REASONING RESEARCHER_CODEX_SANDBOX \
     RESEARCHER_CODEX_APPROVAL_POLICY RESEARCHER_CODEX_IGNORE_USER_CONFIG RESEARCHER_CODEX_MAX_SUBAGENTS \
     RESEARCHER_COMPUTE_PROFILE RESEARCHER_CODE_SEARCH_DIR RESEARCHER_MAX_EXPERIMENTS \
@@ -52,7 +47,9 @@ LOCKFILE="${RESEARCHER_LOCKFILE:-/tmp/researcher-auto.lock}"
 # whole number would otherwise switch a check off without a word (a non-numeric
 # `[ -gt ]` is just false), and a leading zero reads as octal in $(( )). The
 # second list cannot be 0 (a poll interval of 0 would spin, and `timeout 0` does
-# not time out). A numeric setting added below goes in one of these lists.
+# not time out). A numeric setting added below goes in one of these lists
+# (email_settings checks RESEARCHER_EMAIL_TIMEOUT_SECONDS itself, since
+# send-run-report.sh reads it too).
 for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RESUME_MAX_AGE_DAYS \
     RESEARCHER_MIN_FREE_MB RESEARCHER_RETRY_DELAY_SECONDS RESEARCHER_JOB_WAIT_MAX_SECONDS \
     RESEARCHER_JOB_WAIT_MAX_REFUNDS; do
@@ -220,85 +217,19 @@ MAX_AUDIT_ROUNDS="$RESEARCHER_MAX_AUDIT_ROUNDS"
 # refunded instead of spent. Empty: no hook.
 JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 
-# Provider selection. RESEARCHER_MODEL, when set, overrides the selected
-# backend's model (RESEARCHER_CLAUDE_MODEL or RESEARCHER_CODEX_MODEL).
-BACKEND="$RESEARCHER_BACKEND"
-CODEX_IGNORE_USER_CONFIG="$RESEARCHER_CODEX_IGNORE_USER_CONFIG"
-
-# One branch per backend in researcher_lib.py BACKENDS (and in runner/provider.sh).
-case "$BACKEND" in
-    claude)
-        PROVIDER_BIN="$RESEARCHER_CLAUDE_BIN"
-        MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CLAUDE_MODEL}"
-        AGENT_LABEL="Claude ${MODEL}"
-        CONTINUE_COMMAND="/researcher-continue"
-        COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
-        ;;
-    codex)
-        PROVIDER_BIN="$RESEARCHER_CODEX_BIN"
-        MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CODEX_MODEL}"
-        CODEX_REASONING="$RESEARCHER_CODEX_REASONING"
-        CODEX_FAST_MODEL="$RESEARCHER_CODEX_FAST_MODEL"
-        CODEX_FAST_REASONING="$RESEARCHER_CODEX_FAST_REASONING"
-        # The deep workers run the parent's model and effort unless set apart.
-        CODEX_DEEP_MODEL="${RESEARCHER_CODEX_DEEP_MODEL:-${MODEL}}"
-        CODEX_DEEP_REASONING="${RESEARCHER_CODEX_DEEP_REASONING:-${CODEX_REASONING}}"
-        CODEX_SANDBOX="$RESEARCHER_CODEX_SANDBOX"
-        CODEX_APPROVAL_POLICY="$RESEARCHER_CODEX_APPROVAL_POLICY"
-        CODEX_MAX_SUBAGENTS="$RESEARCHER_CODEX_MAX_SUBAGENTS"
-        AGENT_LABEL="OpenAI Codex ${MODEL} (${CODEX_REASONING})"
-        CONTINUE_COMMAND="\$researcher:researcher-continue"
-        COMMIT_ATTRIBUTION="Generated-By: OpenAI Codex (${MODEL}, ${CODEX_REASONING})"
-        ;;
-    *)
-        echo "ERROR: RESEARCHER_BACKEND must be one of: $(python3 "$LIB" backends); got '${BACKEND}'." >&2
-        exit 2
-        ;;
-esac
+# Provider selection (select_backend). RESEARCHER_MODEL, when set, overrides
+# the selected backend's model (RESEARCHER_CLAUDE_MODEL or RESEARCHER_CODEX_MODEL).
+select_backend
 
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)
-EMAIL_TO="$RESEARCHER_EMAIL_TO"
-# The results email goes from the agents' mail account (agent-mail), never from
-# the recipient's own Gmail, and through the mailroom's pre-send review like
-# every agent's mail. A Claude session writes and sends it, so the reply comes
-# back to that session, whichever backend ran the research; a Codex run uses
-# EMAIL_CLAUDE_MODEL for it. Only when the Claude CLI is not installed does the
-# run's own backend write it, and it then goes unrouted (no review, replies to
-# the orchestrator).
-SEND_EMAIL="${SCRIPT_DIR}/send-results-email.sh"
-EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
-if [ "$BACKEND" = "claude" ]; then
-    EMAIL_CLAUDE_MODEL="$MODEL"
-else
-    EMAIL_CLAUDE_MODEL="$RESEARCHER_EMAIL_CLAUDE_MODEL"
-fi
+# Who writes and sends the results email, and how (email_settings). Its
+# continuation steps name this checkout, the one the run runs in.
+email_settings
+CONTINUE_DIR="$REPO_DIR"
 
-# How the reader of the results email reaches the machine this run executed on, so
-# the email's "How to Continue This Research" steps are literally runnable. This is
-# an SSH *alias* as configured in the reader's ~/.ssh/config, not a hostname: a
-# machine whose short hostname has no "hostname=alias" pair in RESEARCHER_HOST_ALIASES
-# (space-separated) must set RESEARCHER_HOST_ALIAS, or the run exits 2.
-# The value "local" suppresses the ssh step entirely (run and reader on the same machine).
-if [ -z "${RESEARCHER_HOST_ALIAS:-}" ]; then
-    if ! RUN_HOSTNAME=$(hostname -s); then
-        echo "ERROR: could not read this machine's hostname (hostname -s failed); set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for it, or to 'local'." >&2
-        exit 2
-    fi
-    HOST_ALIAS=""
-    read -ra HOST_ALIAS_PAIRS <<< "${RESEARCHER_HOST_ALIASES:-}"
-    for pair in ${HOST_ALIAS_PAIRS[@]+"${HOST_ALIAS_PAIRS[@]}"}; do
-        if [ "${pair%%=*}" = "$RUN_HOSTNAME" ]; then
-            HOST_ALIAS="${pair#*=}"
-        fi
-    done
-    if [ -z "$HOST_ALIAS" ]; then
-        echo "ERROR: host '${RUN_HOSTNAME}' is not in RESEARCHER_HOST_ALIASES; set RESEARCHER_HOST_ALIAS to the SSH alias the email's reader uses for this machine, or to 'local'." >&2
-        exit 2
-    fi
-else
-    HOST_ALIAS="$RESEARCHER_HOST_ALIAS"
-fi
+# How the reader of the results email reaches this machine (resolve_host_alias).
+HOST_ALIAS=$(resolve_host_alias) || exit 2
 
 # Compute profile for this run: a human-readable description of the hardware and
 # budget experiments may use. Every step reads it from state.md (compute_profile:)
@@ -708,8 +639,10 @@ log "Final outcome: ${FINAL_OUTCOME} (workflow status ${STATUS}, publish ${PUBLI
 if is_true "$SKIP_EMAIL"; then
     log "Skipping email (RESEARCHER_SKIP_EMAIL=${SKIP_EMAIL})."
 elif ! send_email; then
-    log "ERROR: the results email was not sent. Results remain in ${RUN_DIR}."
     FAILED_DELIVERABLES+=("email")
+elif [ "$EMAIL_WRITER" = notice ]; then
+    # A notice went, but not the report itself.
+    FAILED_DELIVERABLES+=("email (a notice went instead)")
 fi
 
 # --- Post-completion: report back on the GitHub issue ---
@@ -720,18 +653,24 @@ if ! is_true "$SKIP_PUBLISH" && [ -n "$ISSUE_NUMBER" ] && [ "$ISSUE_NUMBER" != "
     mark_issue_processed || FAILED_DELIVERABLES+=("issue labels")
 fi
 
-# Recorded after the deliverables, so that a state.md the runner cannot write
-# (which stops it) does not also keep the results from Titus.
-set_state_field final_outcome "$FINAL_OUTCOME"
-set_state_field publish_state "$PUBLISH_STATE"
-
+FAILED_LIST="none"
 if [ "${#FAILED_DELIVERABLES[@]}" -gt 0 ]; then
     printf -v FAILED_LIST '%s, ' "${FAILED_DELIVERABLES[@]}"
-    log "ERROR: not delivered in full: ${FAILED_LIST%, }."
+    FAILED_LIST="${FAILED_LIST%, }"
+    log "ERROR: not delivered in full: ${FAILED_LIST}."
 fi
 
+# Recorded after the deliverables, so that a state.md the runner cannot write
+# (which stops it) does not also keep the results from Titus. `undelivered`
+# names the deliverables that failed, or none, whatever the exit code says: a
+# launcher reads it there, since exits 3 and 4 take precedence over 5.
+set_state_field final_outcome "$FINAL_OUTCOME"
+set_state_field publish_state "$PUBLISH_STATE"
+set_state_field undelivered "$FAILED_LIST"
+
 # Exit 3 (paused) and 4 (no usable result) take precedence over 5: they say
-# more about the run, and the line above already names what was not delivered.
+# more about the run, and the line above and state.md's `undelivered` already
+# name what was not delivered.
 if is_true "$PAUSED"; then
     # Distinct exit code: a paused run must not look like a completed one to
     # cron, `at`, or any wrapper checking the status.

@@ -26,7 +26,7 @@ Given a research topic, the agent:
 ## Prerequisites
 
 - An authenticated [Codex CLI](https://developers.openai.com/codex/cli/) for independent methods, evidence and presentation review on either backend.
-- The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) for a Claude orchestrator or routed autonomous results email.
+- The [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) for a Claude orchestrator or a routed autonomous results email.
 - **[gh CLI](https://cli.github.com/)**: authenticated (`gh auth login`), used for GitHub issue integration
 - **Python 3**: for experiment execution
 - **tectonic** or **pdflatex**: for LaTeX compilation (Ubuntu: `sudo snap install tectonic`)
@@ -35,9 +35,10 @@ Given a research topic, the agent:
 For autonomous mode only:
 - **Compute**: sized to a per-run compute profile (`RESEARCHER_COMPUTE_PROFILE`): the `local` preset is a local NVIDIA GPU with CUDA drivers; the `modal` and `lambda` presets use paid cloud GPUs, and need a Modal or Lambda login, the `cloud-watch` CLI and a budget (`RESEARCHER_COMPUTE_BUDGET_USD`). See [`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md#compute-profile-hardware-agnostic).
 - **Configuration**: the deployment's defaults (storage, GitHub owner and task queue, email recipient, models, limits) are in `config/researcher.env`; set a variable in the environment to override one.
-- **agent-mail**: the results email goes from the agents' mail account
-  through the mailroom (`~/pyg/agent-mailroom`), with its pre-send review, never
-  from the recipient's own Gmail (`scripts/send-results-email.sh`)
+- **The agent mailroom** (`~/pyg/agent-mailroom`): the results email goes from
+  the agents' mail account through it (`agent-mail`), never from the recipient's
+  own Gmail, written on the first of its logins that can (`agent-usage`), or with
+  no model when none can ([`docs/AUTONOMOUS.md`](docs/AUTONOMOUS.md#the-results-email))
 
 ## Installation
 

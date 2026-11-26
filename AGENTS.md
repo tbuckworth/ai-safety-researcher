@@ -49,6 +49,7 @@ Entry points:
 - `/researcher-continue [run-dir]` (Codex: `$researcher:researcher-continue`): queue the next round from a finished run, `commands/researcher-continue.md`.
 - `scripts/researcher-cron.sh [topic]`: the autonomous runner; its functions are in `scripts/runner/`, one file per concern.
 - `scripts/researcher_lib.py`: the runner's decisions, as the subcommands its docstring lists.
+- `scripts/results_report.py`: the results email's model-free parts: the mailroom's login order for its writers, and the report assembled with no model.
 - `scripts/methods_review.py`: review and approve versioned methods, evidence and presentation (see `docs/WORKFLOW.md`).
 - `scripts/harness_lessons.py`: record and review cross-run improvements (see `docs/KNOWLEDGE-BASE.md`).
 - `scripts/preflight_checks.py`: an experiment's pre-flight checks.
@@ -56,6 +57,7 @@ Entry points:
 - `scripts/kb-init.sh [path]`: bootstraps the global knowledge base.
 - `scripts/create-followup-issue.sh`: files a follow-up research issue.
 - `scripts/send-results-email.sh <run-dir>`: sends a run's results email through agent-mail.
+- `scripts/send-run-report.sh <run-dir>`: sends a finished run's results email later, from what the run saved, when it did not go.
 - `scripts/check-voice-blocks.sh`: checks the Voice block copies and the parsed tokens of `docs/STANCE.md`.
 - `scripts/test-researcher-backends.sh`, `scripts/test-researcher-lifecycle.sh`: the runner's integration tests, against the mock CLIs in `scripts/tests/mocks.sh`.
 - `scripts/tests/`: unit tests for the Python helpers and the plugin manifests.

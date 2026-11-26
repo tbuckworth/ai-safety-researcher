@@ -41,7 +41,7 @@ require_config RESEARCHER_STORAGE_ROOT RESEARCHER_GITHUB_OWNER RESEARCHER_TASKS_
     RESEARCHER_CODEX_APPROVAL_POLICY RESEARCHER_CODEX_IGNORE_USER_CONFIG RESEARCHER_CODEX_MAX_SUBAGENTS \
     RESEARCHER_COMPUTE_PROFILE RESEARCHER_CODE_SEARCH_DIR RESEARCHER_MAX_EXPERIMENTS \
     RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_FILE_MB RESEARCHER_MAX_AUDIT_ROUNDS \
-    || exit 2
+    RESEARCHER_MAX_REVIEW_ROUNDS || exit 2
 
 STORAGE_ROOT="$RESEARCHER_STORAGE_ROOT"
 OUTPUT_DIR="${RESEARCHER_OUTPUT_DIR:-${STORAGE_ROOT}/researcher-output}"
@@ -63,7 +63,8 @@ for setting in RESEARCHER_TIMEOUT_HOURS RESEARCHER_TIMEOUT_SECONDS RESEARCHER_RE
 done
 for setting in RESEARCHER_MAX_FILE_MB RESEARCHER_STEP_ATTEMPTS RESEARCHER_JOB_WAIT_CMD_TIMEOUT_SECONDS \
     RESEARCHER_JOB_WAIT_POLL_SECONDS RESEARCHER_CODEX_MAX_SUBAGENTS RESEARCHER_COMPUTE_BUDGET_USD \
-    RESEARCHER_MAX_EXPERIMENTS RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_AUDIT_ROUNDS; do
+    RESEARCHER_MAX_EXPERIMENTS RESEARCHER_EXPERIMENT_MINUTES RESEARCHER_MAX_AUDIT_ROUNDS \
+    RESEARCHER_MAX_REVIEW_ROUNDS; do
     if [ -n "${!setting:-}" ] && ! [[ "${!setting}" =~ ^[1-9][0-9]*$ ]]; then
         echo "ERROR: ${setting} must be a whole number of at least 1, got '${!setting}'." >&2
         exit 2
@@ -625,10 +626,19 @@ fi
 # failure notice to deliver.
 if ! is_true "$PAUSED" && { [ -s "${RUN_DIR}/next-steps.md" ] || [ -s "${RUN_DIR}/briefing.md" ] \
     || [ -s "${RUN_DIR}/paper/paper.tex" ] || has_experiment_results; }; then
-    if ! review_evidence || ! review_run presentation; then
+    REVIEW_RC=0
+    review_evidence || REVIEW_RC=$?
+    if [ "$REVIEW_RC" -eq 0 ]; then
+        review_run presentation || REVIEW_RC=$?
+    fi
+    if [ "$REVIEW_RC" -ne 0 ]; then
         set_state_field release_status "$STATUS"
         set_status release_pending
-        set_review_hold "Review of the release draft failed or requested changes. Resolve the review and resume to retry delivery."
+        if [ "$REVIEW_RC" -eq 5 ]; then
+            set_review_hold "The final reader reached its round cap with blocking findings open (reviews/presentation/ledger.json), so the draft gets no further review in this cycle. To have a revised draft read again, run methods_review.py presentation RUN --new-cycle REASON on it, then resume."
+        else
+            set_review_hold "Review of the release draft failed or requested changes. Resolve the review and resume to retry delivery."
+        fi
         pause_run "$REPORT_STEP"
     fi
 fi

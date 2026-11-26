@@ -453,6 +453,26 @@ run_researcher -- "Withheld draft"
 assert_eq "$RC" 0 "release of revised draft"
 [ ! -s "${CASE_DIR}/steps.log" ] || fail "release resume repeated an experiment"; ok
 
+# The final reader's round cap ends its loop: once the run's cap is spent, a
+# revised draft gets no further review until a new review cycle starts with a
+# reason, and the hold says so.
+new_case reader-round-cap
+run_researcher RESEARCHER_MAX_REVIEW_ROUNDS=1 MOCK_READER_DECISION=revise -- "Capped reader"
+assert_eq "$RC" 3 "reader held the draft"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+echo 'Revised explanation.' >> "${RUN}/next-steps.md"
+run_researcher -- "Capped reader"
+assert_eq "$RC" 3 "capped reader holds the revised draft"
+assert_grep '^last_pause_reason: .*round cap' "${RUN}/state.md"
+assert_eq "$(jq '.rounds | length' "${RUN}/reviews/presentation/ledger.json")" 1 "no review beyond the cap"
+python3 "$MOCK_REVIEW_HELPER" presentation "$RUN" --new-cycle "Titus asked for one more reading" \
+    > /dev/null 2>&1 || fail "new review cycle"
+run_researcher -- "Capped reader"
+assert_eq "$RC" 0 "release after the new cycle's review"
+assert_eq "$(jq -r '.rounds[1].cycle_reason' "${RUN}/reviews/presentation/ledger.json")" \
+    "Titus asked for one more reading" "recorded cycle reason"
+
 # =============================================================================
 # 1. Publish: private repo, main branch even with init.defaultBranch=master,
 #    verified push, oversized file left out, findings posted to the issue.

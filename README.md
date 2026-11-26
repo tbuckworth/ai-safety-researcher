@@ -16,7 +16,7 @@ Given a research topic, the agent:
 3. **Assesses novelty**: determines whether the idea has already been done, is partially novel, or is new
 4. **Defines success criteria**: identifies SOTA baselines, benchmarks, and the minimum publishable contribution
 5. **Decomposes into components**: Steinhardt decomposition with lambda ordering (highest-risk-per-hour components first)
-6. Writes each experiment's methods, then obtains three independent Codex critiques of rival explanations, controls and stopping criteria.
+6. Writes each experiment's methods, then obtains three independent Codex critiques of rival explanations, controls and stopping criteria. Later rounds of every review re-check the earlier findings recorded in a ledger instead of starting over, and only blocking findings ask for revision.
 7. Prepares a short decision showing what the study can distinguish, the remaining uncertainty and its cost.
 8. Records approval of that version. In interactive mode you decide. In automatic mode a separate reviewer approves, asks for a revision or stops the study.
 9. **Runs experiments**: executes experiments in lambda order, stopping on failure if agreed

@@ -29,7 +29,7 @@ You will be given:
 - Steinhardt decomposition (from `decomposition.md`)
 - The run directory path for output
 
-Read all specified files before beginning your analysis. You are one of three independent challenge passes running in parallel. Form your own view directly from the plan; you will not see the other reviewers' output, so do not defer to or assume it.
+Read all specified files before beginning your analysis. You are one of three independent challenge passes running in parallel. Form your own view directly from the plan; you will not see the other reviewers' output on this revision, so do not defer to or assume it. From the second round on, the review ledger shows the findings of earlier rounds; follow the reviewer instructions on it.
 
 ## Process
 

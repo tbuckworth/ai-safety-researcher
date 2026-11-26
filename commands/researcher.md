@@ -169,11 +169,11 @@ Do this yourself; no agent needed.
 
 ## Step 6: Write and challenge the methods
 
-Follow Step 6 of `${CLAUDE_PLUGIN_ROOT}/docs/WORKFLOW.md`. Write the concrete ordered plan files. As hub, call `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN`. Read the three independent reviews and resolve their objections. Record design-time limitation triage and the revision. Re-review an edited plan.
+Follow Step 6 of `${CLAUDE_PLUGIN_ROOT}/docs/WORKFLOW.md`. Write the concrete ordered plan files. As hub, call `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN`. Read the three independent reviews and answer their open blocking findings as WORKFLOW.md's Review Ledger describes. Record design-time limitation triage and the revision. Re-review an edited plan, up to the round cap; when `plan` exits 5, go to Step 7 with the revision it prints, first restoring any file edited since that round from the `methods` of `reviews/plan/<revision>.json`.
 
 ## Step 7: Present the methodology decision
 
-Show the decision and exact revision as specified in WORKFLOW.md Step 7. Offer approval, revision or stop, using buttons in email. Wait for Titus. Incorporate requested changes and return to Step 6 for a fresh review before showing a revised decision.
+Show the decision and exact revision as specified in WORKFLOW.md Step 7. Offer approval, revision or stop, using buttons in email. Wait for Titus. Incorporate requested changes and return to Step 6 for a fresh review, in a new cycle (`plan RUN --new-cycle REASON`, citing his reply), before showing a revised decision.
 
 ## Step 8: Record approval
 
@@ -227,7 +227,7 @@ Before write-up, an independent auditor checks the results and distinguishes a s
 
    Otherwise, **freeze the claim anchor**: for each experiment, if `audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. A remediation re-run overwrites `results.md`; the claim anchor keeps the round-1 claim, so the claim cannot be narrowed to pass.
 
-3. **Run one audit round.** Check `verify RUN` before any new empirical work. In parallel run the helper's `evidence RUN` action and dispatch a fresh results-auditor. Wait for both, reconcile discrepancies against the primary records, and restrict or withdraw claims with unresolved objections. If the independent review returns no usable response, keep the audit incomplete. A historical experiment without prospective approval can undergo a read-only audit of retained evidence only. Pass that restriction explicitly to the auditor when applicable:
+3. **Run one audit round.** Check `verify RUN` before any new empirical work. In parallel run the helper's `evidence RUN` action and dispatch a fresh results-auditor. Wait for both, reconcile discrepancies against the primary records, and restrict or withdraw claims with unresolved objections. Answer each open blocking evidence finding with the helper's `respond` action. If the independent review returns no usable response, keep the audit incomplete. A historical experiment without prospective approval can undergo a read-only audit of retained evidence only. Pass that restriction explicitly to the auditor when applicable:
    ```
    Task(subagent_type="researcher:results-auditor", prompt="""
    You are the results-auditor agent. Read your instructions from:
@@ -284,7 +284,7 @@ Before write-up, an independent auditor checks the results and distinguishes a s
    following the rules in its header; a negative result gets one too. This is
    what `/researcher-continue` reads.
 
-4. Run the final reader on the actual draft as specified in WORKFLOW.md Step 11 (`review-figures.json`, `presentation RUN`, fix and recheck). Deliver the reviewed briefing and paper. Have the knowledge leaf record any verified missed confounds or broader harness lessons, including on a stopped run.
+4. Run the final reader on the actual draft as specified in WORKFLOW.md Step 11 (`review-figures.json`, `presentation RUN`, fix the blocking findings, answer them with `respond` and recheck). When `presentation` exits 5, take the presentation exit in WORKFLOW.md's Review Ledger. Deliver the reviewed briefing and paper. Have the knowledge leaf record any verified missed confounds or broader harness lessons, including on a stopped run.
 
 5. **Ingest the run into the knowledge bases** (the Step 11 row of WORKFLOW.md's Knowledge Bases table).
 

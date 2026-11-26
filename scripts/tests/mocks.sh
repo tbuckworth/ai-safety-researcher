@@ -124,17 +124,29 @@ install_mock_reviews() {
 #!/usr/bin/env bash
 set -euo pipefail
 output=""
+schema=""
 while [ "$#" -gt 0 ]; do
     if [ "$1" = --output-last-message ]; then output=$2; shift; fi
+    if [ "$1" = --output-schema ]; then schema=$2; shift; fi
     shift
 done
-[ -n "$output" ] || exit 2
+[ -n "$output" ] && [ -n "$schema" ] || exit 2
 prompt=$(cat)
 decision=approve
 if [[ "$prompt" == *"Read the draft as a scientist"* ]]; then
     decision=${MOCK_READER_DECISION:-approve}
 fi
-printf '{"decision":"%s","summary":"Mock review completed.","findings":[]}\n' "$decision" > "$output"
+# Re-check every open finding the schema names, resolving it, and give a revise
+# decision the blocking finding a real reviewer needs to withhold a draft.
+new='[]'
+if [ "$decision" = revise ]; then
+    new='[{"blocking":true,"title":"Mock objection","text":"The draft overstates the result.","reopens":""}]'
+fi
+jq -n --arg decision "$decision" --argjson new "$new" --slurpfile schema "$schema" \
+    '{decision: $decision, summary: "Mock review completed.", new_findings: $new,
+      rechecks: ($schema[0].properties.rechecks.required
+                 | map({key: ., value: {status: "resolved", blocking: true, text: "Resolved."}}) | from_entries)}' \
+    > "$output"
 MOCK_REVIEW
     cat > "${bin}/mock-methods" <<'MOCK_METHODS'
 #!/usr/bin/env bash

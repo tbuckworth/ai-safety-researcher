@@ -20,7 +20,7 @@ specialised leaf-node agents for focused work.
 
 ## Pipeline
 
-The [workflow diagram](DIAGRAM.md#workflow-overview) shows all eleven steps. Either hub calls the same review helper for the parallel methods critiques, autonomous approval, evidence challenge and final reading. Each reviewer works in a fresh Codex session with the supplied inputs. The hub records decisions and handles disagreements. The experiment worker executes approved methods. The results auditor still independently recalculates or reruns the load-bearing comparison when appropriate. The final reader checks the report and the rendered headline figures before release.
+The [workflow diagram](DIAGRAM.md#workflow-overview) shows all eleven steps. Either hub calls the same review helper for the parallel methods critiques, autonomous approval, evidence challenge and final reading. Each reviewer works in a fresh Codex session with the supplied inputs and, from a stage's second round on, that stage's [review ledger](WORKFLOW.md#review-ledger) of earlier findings. The hub records decisions and handles disagreements. The experiment worker executes approved methods. The results auditor still independently recalculates or reruns the load-bearing comparison when appropriate. The final reader checks the report and the rendered headline figures before release.
 
 ## Agent Inventory
 

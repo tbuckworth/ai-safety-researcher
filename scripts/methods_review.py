@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 """Independent scientific review and verification of versioned research plans.
 
-Usage: methods_review.py ACTION RUN [REVISION] (REVISION only for approve-human).
+Usage:
+  methods_review.py plan|presentation RUN [--new-cycle REASON]
+  methods_review.py evidence|approve-auto|verify|verify-evidence|verify-presentation RUN
+  methods_review.py approve-human RUN REVISION
+  methods_review.py respond RUN STAGE FINDING fixed|limit|declined NOTE
+
 The hub calls the review actions; verify actions are offline. Decisions use exit 0
-(approved), 3 (revision requested), or 4 (stop). Errors use exit 1. All completed
-design critiques are returned to the approver, including objections. Evidence
-objections are returned to the auditor for disposition.
+(approved), 3 (revision requested), or 4 (stop); a review asks for revision only
+for an open blocking finding. Exit 5 means a capped stage (plan, presentation) has
+had RESEARCHER_MAX_REVIEW_ROUNDS rounds in its current cycle: no review ran, and
+the last reviewed revision is printed. Errors use exit 1. Each stage keeps a
+review ledger (review_ledger.py) that every later round of it sees; respond
+records the hub's answer to one finding. All completed design critiques are
+returned to the approver, including objections. Evidence objections are returned
+to the auditor for disposition.
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -23,13 +33,23 @@ import time
 
 from researcher_files import digest, file_digest, write_json
 from researcher_lib import RUN_CONFIG_FILE, log, read_frontmatter
+from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "templates" / "review"
 ROLES = ("assumption-challenger", "mentor-review", "pre-mortem")
 EXIT = {"approve": 0, "revise": 3, "stop": 4}
+ROUND_CAP_EXIT = 5
 MODEL_KEY = "RESEARCHER_REVIEW_MODEL"
 EFFORT_KEY = "RESEARCHER_REVIEW_REASONING"
+ROUNDS_KEY = "RESEARCHER_MAX_REVIEW_ROUNDS"
+# Stages whose loop only the hub ends get a round cap per cycle. The evidence
+# critic runs once per audit round, which RESEARCHER_MAX_AUDIT_ROUNDS caps, and
+# the automatic approver allows one design revision (WORKFLOW.md Step 8).
+CAPPED_STAGES = ("plan", "presentation")
+# The ledgers each stage's reviewers see: their own, and the one the stage builds on.
+CONTEXT_STAGES = {"plan": ("plan",), "approval": ("plan", "approval"),
+                  "evidence": ("evidence",), "presentation": ("evidence", "presentation")}
 # A reviewer gets both ends of a long log, with the omission explicitly marked.
 # The receipt fingerprints all its bytes. Active re-execution belongs to the auditor.
 LOG_EXCERPT_BYTES = 32768
@@ -165,59 +185,147 @@ def packet(run: Path, phase: str) -> Packet:
     return p
 
 
-def settings(run: Path) -> tuple[str, str, str]:
-    keys = ["RESEARCHER_CODEX_BIN", MODEL_KEY, EFFORT_KEY]
+@dataclass
+class ReviewSettings:
+    """The reviewer CLI and model, and the round cap of a capped stage's cycle."""
+    binary: str
+    model: str
+    effort: str
+    max_rounds: int
+
+
+def settings(run: Path) -> ReviewSettings:
+    keys = ["RESEARCHER_CODEX_BIN", MODEL_KEY, EFFORT_KEY, ROUNDS_KEY]
     environment = os.environ.copy()
     if (run / RUN_CONFIG_FILE).is_file():
         saved = json.loads((run / RUN_CONFIG_FILE).read_text())["settings"]
-        for key in (MODEL_KEY, EFFORT_KEY):
+        for key in (MODEL_KEY, EFFORT_KEY, ROUNDS_KEY):
             if saved.get(key):
                 environment[key] = saved[key]
     result = subprocess.run([ROOT / "scripts/config.sh", *keys], env=environment, text=True,
                             stdout=subprocess.PIPE, check=True)
-    binary, model, effort = result.stdout.splitlines()
-    return binary, model, effort
+    binary, model, effort, rounds = result.stdout.splitlines()
+    if not re.fullmatch(r"[1-9][0-9]*", rounds):
+        raise ValueError(f"{ROUNDS_KEY} must be a whole number of at least 1, got {rounds!r}")
+    return ReviewSettings(binary, model, effort, int(rounds))
 
 
-def validate(report: dict) -> dict:
-    if not isinstance(report, dict) or set(report) != {"decision", "summary", "findings"}:
-        raise ValueError("review response must contain decision, summary and findings")
-    if report["decision"] not in EXIT or not isinstance(report["summary"], str) or not report["summary"].strip():
+def check_report(report: dict) -> None:
+    """A stored review's decision, summary and findings. Receipts recorded before the
+    review ledger give findings as plain text; verify still reads them."""
+    if report.get("decision") not in EXIT or not isinstance(report.get("summary"), str) or not report["summary"].strip():
         raise ValueError("invalid review decision or missing summary")
-    string_list(report["findings"], "review findings")
-    return report
+    findings = report.get("findings")
+    if not isinstance(findings, list) or not all(
+            (isinstance(f, str) and f.strip()) or (isinstance(f, dict) and RECEIPT_FINDING_KEYS <= set(f))
+            for f in findings):
+        raise ValueError("review findings: expected ledger findings, or text in a receipt that predates them")
 
 
-def review(role: str, p: Packet, config: tuple[str, str, str]) -> dict:
-    binary, model, effort = config
-    role_dir = ROOT / "agents" if role in ROLES else TEMPLATES
-    prompt = "\n\n".join([(role_dir / f"{role}.md").read_text(), (TEMPLATES / "instructions.md").read_text(),
-                          (ROOT / "docs/SCIENTIFIC-REPORTING.md").read_text(),
+def review(prompt_name: str, p: Packet, config: ReviewSettings, schema: dict, context: list[str]) -> dict:
+    """One reviewer's raw response to packet `p`, with the call's model, time and usage.
+    `context` holds the prompt's review stage, round and ledger sections."""
+    role_dir = ROOT / "agents" if prompt_name in ROLES else TEMPLATES
+    prompt = "\n\n".join([(role_dir / f"{prompt_name}.md").read_text(), (TEMPLATES / "instructions.md").read_text(),
+                          (ROOT / "docs/SCIENTIFIC-REPORTING.md").read_text(), *context,
                           "Study materials (JSON keyed by source path):", json_bytes(p.documents).decode()])
     start = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="researcher-review-") as temp:
         work = Path(temp)
         answer = work / "answer.json"
-        args = [binary, "--ask-for-approval", "never", "exec", "--ephemeral", "--ignore-user-config",
+        schema_file = work / "verdict.schema.json"
+        schema_file.write_text(json.dumps(schema))
+        args = [config.binary, "--ask-for-approval", "never", "exec", "--ephemeral", "--ignore-user-config",
                 "--skip-git-repo-check", "--cd", str(work), "--sandbox", "read-only",
-                "--model", model, "-c", f"model_reasoning_effort={json.dumps(effort)}",
+                "--model", config.model, "-c", f"model_reasoning_effort={json.dumps(config.effort)}",
                 "-c", 'web_search="disabled"', "--json",
-                "--output-schema", str(TEMPLATES / "verdict.schema.json"), "--output-last-message", str(answer)]
+                "--output-schema", str(schema_file), "--output-last-message", str(answer)]
         for feature in ("multi_agent", "multi_agent_v2", "shell_tool", "unified_exec",
                         "apps", "plugins", "hooks", "goals", "view_image"):
             args.extend(["--disable", feature])
         for figure in p.figures:
             args.extend(["--image", str(figure)])
-        log(f"Reviewing {role} with {model} ({effort})")
+        log(f"Reviewing {prompt_name} with {config.model} ({config.effort})")
         # Only the last message and usage totals are retained; no tool transcript is published.
         with tempfile.TemporaryFile(mode="w+") as events:
             subprocess.run([*args, "-"], input=prompt, text=True, cwd=work, stdout=events, check=True)
             events.seek(0)
             usage = [event["usage"] for line in events if line.strip()
                      for event in [json.loads(line)] if event.get("type") == "turn.completed" and "usage" in event]
-        response = validate(json.loads(answer.read_text()))
-    return {"role": role, "model": model, "reasoning": effort, "elapsed_seconds": round(time.monotonic() - start, 2),
-            "usage": usage, **response}
+        response = json.loads(answer.read_text())
+    return {"model": config.model, "reasoning": config.effort, "elapsed_seconds": round(time.monotonic() - start, 2),
+            "usage": usage, "response": response}
+
+
+def input_changes(run: Path, stage: str, ledger: Ledger, hashes: dict[str, str]) -> str | None:
+    """Which reviewed inputs changed since the stage's last round, for its next reviewer."""
+    if not ledger.rounds:
+        return None
+    last = ledger.rounds[-1]
+    before = json.loads(receipt_path(run, stage, last["revision"]).read_text())["inputs"]
+    changes = {"changed": sorted(name for name in hashes if name in before and before[name] != hashes[name]),
+               "added": sorted(set(hashes) - set(before)), "removed": sorted(set(before) - set(hashes))}
+    return f"Reviewed inputs changed since ledger round {last['round']} (JSON): {json.dumps(changes)}"
+
+
+def commission(stage: str, actor: str, run: Path, p: Packet, config: ReviewSettings, ledger: Ledger,
+               new_cycle: str | None) -> list[dict]:
+    """Run one review round of `stage` on `p`, record it in `ledger`, and return its reports."""
+    roles = ROLES if stage == "plan" else (actor if stage == "approval" else stage,)
+    prompt_names = dict(zip(roles, ROLES if stage == "plan" else (stage,)))
+    unanswered = ledger.unanswered()
+    if unanswered:
+        log(f"WARNING: no hub response recorded for open blocking findings: {', '.join(unanswered)}")
+    in_cycle = 1 if new_cycle else ledger.rounds_in_cycle() + 1
+    header = f"Review stage: {stage}. Ledger round {len(ledger.rounds) + 1}."
+    if stage in CAPPED_STAGES:
+        header += f" Round {in_cycle} of at most {config.max_rounds} in this review cycle."
+    context = [header]
+    for name in CONTEXT_STAGES[stage]:
+        shown = ledger if name == stage else Ledger.load(run, name)
+        if shown.findings:
+            context.append(f"Review ledger of the {name} stage (JSON):\n{shown.context()}")
+    changes = input_changes(run, stage, ledger, p.hashes)
+    if changes:
+        context.append(changes)
+    template = json.loads((TEMPLATES / "verdict.schema.json").read_text())
+
+    def one(role: str) -> dict:
+        return review(prompt_names[role], p, config, ledger.response_schema(template, role), context)
+
+    if stage == "plan":
+        with ThreadPoolExecutor(max_workers=len(ROLES)) as workers:
+            calls = list(workers.map(one, roles))
+    else:
+        calls = [one(roles[0])]
+    responses = [(role, ledger.check_response(role, call.pop("response"))) for role, call in zip(roles, calls)]
+    reports = []
+    for (role, response), call, (findings, decided) in zip(
+            responses, calls, ledger.record_round(p.revision(), responses, new_cycle)):
+        report = {"role": role, **call, "decision": decided, "summary": response["summary"], "findings": findings}
+        if decided != response["decision"]:
+            report["stated_decision"] = response["decision"]
+        reports.append(report)
+    blocking = [f["id"] for f in ledger.open_blocking()]
+    log(f"{stage} ledger round {len(ledger.rounds)}: "
+        + ", ".join(f"{r['role']} {r['decision']}" + (f" (stated {r['stated_decision']})" if "stated_decision" in r else "")
+                    for r in reports)
+        + f"; open blocking findings: {', '.join(blocking) or 'none'}")
+    if stage in CAPPED_STAGES and in_cycle == config.max_rounds:
+        log(f"NOTE: this was the last round of the {stage} review cycle. Take the stage's exit on this revision "
+            "without editing its inputs (docs/WORKFLOW.md, Review Ledger).")
+    return reports
+
+
+def round_cap_reached(ledger: Ledger, cap: int) -> int:
+    last = ledger.rounds[-1]["revision"]
+    listing = "; ".join(f"{f['id']} ({f['title']})" for f in ledger.open_blocking()) or "none"
+    log(f"{ledger.stage} review: round cap reached ({cap} rounds in cycle {ledger.cycle()}), so no review ran. "
+        f"Open blocking findings: {listing}. Last reviewed revision: {last}. Take this stage's exit "
+        "(docs/WORKFLOW.md, Review ledger); start a new cycle with --new-cycle REASON only on a decision "
+        "by Titus or the automatic approver.")
+    print(last)
+    return ROUND_CAP_EXIT
 
 
 def receipt_path(run: Path, phase: str, revision: str) -> Path:
@@ -233,7 +341,7 @@ def checked_approval(run: Path, revision: str, actor: str) -> dict:
     return saved
 
 
-def run_action(action: str, run: Path, approved_revision: str | None) -> int:
+def run_action(action: str, run: Path, approved_revision: str | None, new_cycle: str | None) -> int:
     phase = {"approve-auto": "approval", "approve-human": "approval", "verify": "approval"}.get(
         action, action.removeprefix("verify-"))
     source_phase = "plan" if phase == "approval" else phase
@@ -255,19 +363,20 @@ def run_action(action: str, run: Path, approved_revision: str | None) -> int:
         saved = (checked_approval(run, rev, actor) if phase == "approval"
                  else load_receipt(path, rev, ROLES if phase == "plan" else (phase,)))
         decision = saved["reviews"][0]["decision"]
+        if new_cycle:
+            raise ValueError(f"a receipt already covers revision {rev}; a new cycle starts on a revision not yet reviewed")
+        if not action.startswith("verify") and action != "approve-human":
+            note_cached(run, phase, rev)
     else:
+        ledger = None
         if action == "approve-human":
             reviews = [{"role": "human", "decision": "approve", "summary": "Explicit approval of this revision.", "findings": []}]
         else:
             config = settings(run)
-            if phase == "plan":
-                with ThreadPoolExecutor(max_workers=len(ROLES)) as workers:
-                    reviews = list(workers.map(lambda role: review(role, p, config), ROLES))
-            else:
-                report = review(phase, p, config)
-                if phase == "approval":
-                    report["role"] = actor
-                reviews = [report]
+            ledger = Ledger.load(run, phase)
+            if phase in CAPPED_STAGES and not new_cycle and ledger.rounds_in_cycle() >= config.max_rounds:
+                return round_cap_reached(ledger, config.max_rounds)
+            reviews = commission(phase, actor, run, p, config, ledger, new_cycle)
         if packet(run, source_phase).revision() != rev:
             raise ValueError("review inputs changed during review; rerun on the current revision")
         record = {"revision": rev, "inputs": p.hashes, "reviews": reviews,
@@ -285,6 +394,8 @@ def run_action(action: str, run: Path, approved_revision: str | None) -> int:
             )
         path.parent.mkdir(parents=True, exist_ok=True)
         write_json(path, record)
+        if ledger is not None:
+            ledger.save()
         decision = reviews[0]["decision"]
     log(f"{phase} review: {path}")
     if action == "verify-evidence":
@@ -292,6 +403,15 @@ def run_action(action: str, run: Path, approved_revision: str | None) -> int:
         return 0
     print(rev)
     return 0 if phase == "plan" else EXIT[decision]
+
+
+def note_cached(run: Path, stage: str, revision: str) -> None:
+    """Say why a repeated review call reused its receipt instead of running a round."""
+    ledger = Ledger.load(run, stage)
+    reviewed = ledger.round_of(revision)
+    if reviewed is not None and ledger.responses_after(reviewed):
+        log(f"NOTE: the responses recorded after ledger round {reviewed} change no reviewed input, so its review "
+            "stands. State a limit or the reason for a declined finding in the reviewed material itself.")
 
 
 def load_receipt(path: Path, revision: str, roles) -> dict:
@@ -302,24 +422,47 @@ def load_receipt(path: Path, revision: str, roles) -> dict:
             or [r.get("role") for r in saved["reviews"] if isinstance(r, dict)] != list(roles)):
         raise ValueError(f"invalid review receipt: {path}")
     for report in saved["reviews"]:
-        validate({key: report[key] for key in ("decision", "summary", "findings")})
+        check_report(report)
     return saved
 
 
+def respond(run: Path, stage: str, finding: str, disposition: str, note: str) -> int:
+    ledger = Ledger.load(run, stage)
+    ledger.respond(finding, disposition, note)
+    ledger.save()
+    log(f"Recorded the response {disposition} to {finding} in the {stage} review ledger")
+    return 0
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "approve-auto", "approve-human", "verify",
-                                           "evidence", "verify-evidence", "presentation", "verify-presentation"))
-    parser.add_argument("run", type=Path)
-    parser.add_argument("revision", nargs="?")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    actions = parser.add_subparsers(dest="action", required=True)
+    for name in ("plan", "presentation", "evidence", "approve-auto", "verify", "verify-evidence", "verify-presentation"):
+        action = actions.add_parser(name)
+        action.add_argument("run", type=Path)
+        if name in CAPPED_STAGES:
+            action.add_argument("--new-cycle", metavar="REASON",
+                                help="start a new review cycle, giving the decision that warrants it")
+    human = actions.add_parser("approve-human")
+    human.add_argument("run", type=Path)
+    human.add_argument("revision")
+    answer = actions.add_parser("respond", help="record the hub's response to one finding of a review ledger")
+    answer.add_argument("run", type=Path)
+    answer.add_argument("stage", choices=STAGES)
+    answer.add_argument("finding")
+    answer.add_argument("disposition", choices=DISPOSITIONS)
+    answer.add_argument("note")
     args = parser.parse_args()
-    if (args.action == "approve-human") != bool(args.revision):
-        parser.error("only approve-human requires a revision argument")
+    new_cycle = getattr(args, "new_cycle", None)
+    if new_cycle is not None and not new_cycle.strip():
+        parser.error("--new-cycle needs the decision that warrants the new cycle")
     try:
         run = args.run.resolve(strict=True)
         with (run / ".methods-review.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            return run_action(args.action, run, args.revision)
+            if args.action == "respond":
+                return respond(run, args.stage, args.finding, args.disposition, args.note)
+            return run_action(args.action, run, getattr(args, "revision", None), new_cycle)
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         log(f"Review failed ({args.action}): {error}")
         return 1

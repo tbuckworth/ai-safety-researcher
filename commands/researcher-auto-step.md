@@ -383,7 +383,7 @@ If `state.md` contains `is_followup: true`:
 
 ## Step 6: Write and challenge the methods
 
-Follow WORKFLOW.md Step 6, including on an experiments-only follow-up. Use the current run’s budget and filter before materializing plans. Fold any cheap disproof experiment into the ordinary reviewed order. The hub calls `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN` on actual plans and resolves the independent critiques. Record the triage, objections and revision. Return to this step for a material revision. If a serious defect cannot be resolved within the allowed design revision, record the stopping reason in `methods-stop.md`, set `current_step: 9` and proceed to the audit of whatever ran. Use `rethink-rationale.md` only for a supported theoretical conclusion. Otherwise set `current_step: 6, status: challenge_complete`.
+Follow WORKFLOW.md Step 6, including on an experiments-only follow-up. Use the current run’s budget and filter before materializing plans. Fold any cheap disproof experiment into the ordinary reviewed order. The hub calls `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN` on actual plans and answers the critiques' open blocking findings as WORKFLOW.md's Review Ledger describes. Record the triage, objections and revision. Return to this step for a material revision, up to the round cap: when `plan` exits 5, leave the last reviewed revision unedited and continue with it. After the approver asked for a revision (`methods_revision_count: 1`), start the first review of the revised plan with `--new-cycle "automatic approver requested a revision"`. If a serious defect cannot be resolved within the allowed design revision, record the stopping reason in `methods-stop.md`, set `current_step: 9` and proceed to the audit of whatever ran. Use `rethink-rationale.md` only for a supported theoretical conclusion. Otherwise set `current_step: 6, status: challenge_complete`.
 
 ## Step 7: Prepare the decision
 
@@ -391,7 +391,7 @@ Prepare the short methods decision from WORKFLOW.md Step 7 for the independent a
 
 ## Step 8: Obtain independent approval
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" approve-auto RUN`. Use only the recorded decision. On exit 0, record the approved revision, `criteria_approved: true`, `current_step: 8` and `fail_fast_agreement: true`. On exit 3, save the objections; if `methods_revision_count` is zero or missing, set it to one and set `current_step: 5` to return to Step 6. On another request for revision or exit 4, write `methods-stop.md` giving the reason and set `current_step: 9, status: methods_declined`. The audit and report must distinguish design insufficiency from empirical evidence against the hypothesis. For an operational failure set `review_hold` to the reason and leave the step number unchanged. An approval for an earlier version or a parent run cannot admit execution.
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" approve-auto RUN`. Use only the recorded decision. On exit 0, record the approved revision, `criteria_approved: true`, `current_step: 8` and `fail_fast_agreement: true`. On exit 3, answer the approver's blocking findings with `methods_review.py respond RUN approval ...`; if `methods_revision_count` is zero or missing, set it to one and set `current_step: 5` to return to Step 6. On another request for revision or exit 4, write `methods-stop.md` giving the reason and set `current_step: 9, status: methods_declined`. The audit and report must distinguish design insufficiency from empirical evidence against the hypothesis. For an operational failure set `review_hold` to the reason and leave the step number unchanged. An approval for an earlier version or a parent run cannot admit execution.
 
 ## Step 9: Execute Experiments
 
@@ -460,7 +460,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 2. **Freeze the round-1 claim anchor**: for each experiment, if `<run-dir>/audit/claim-anchor-<exp>.md` does not exist, copy that experiment's current `results.md` to it. This preserves the original claim across remediation re-runs (a defence against narrowing-the-claim-to-pass).
 
-3. **Commission both evidence reviews.** As hub run the helper’s `evidence RUN` in parallel with the fresh active auditor. `verify RUN` must succeed before authorizing any new empirical work, including an auditor’s fresh seed. For a legacy run lacking prospective approval or a terminal stop, request a read-only audit of retained data and record that limitation. On critic exit 3/4 read the objections, reconcile against the raw records and constrain claims accordingly. Other nonzero exits leave the step incomplete. Include the separate critic's disposition and the resolution of each disagreement in `audit/results-audit.md` after both reviews return. Pass the applicable execution restrictions to the auditor:
+3. **Commission both evidence reviews.** As hub run the helper’s `evidence RUN` in parallel with the fresh active auditor. `verify RUN` must succeed before authorizing any new empirical work, including an auditor’s fresh seed. For a legacy run lacking prospective approval or a terminal stop, request a read-only audit of retained data and record that limitation. On critic exit 3/4 read the objections, reconcile against the raw records, constrain claims accordingly and answer each open blocking finding with `methods_review.py respond RUN evidence ...`. Other nonzero exits leave the step incomplete. Include the separate critic's disposition and the resolution of each disagreement in `audit/results-audit.md` after both reviews return. Pass the applicable execution restrictions to the auditor:
    ```
    Task(subagent_type="researcher:results-auditor", prompt="""
    Read your instructions from: ${CLAUDE_PLUGIN_ROOT}/agents/results-auditor.md
@@ -589,7 +589,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    If the agent fails, record `kb_ingest_step11: "failed (<reason>)"` in
    `state.md` and continue: the paper is already written.
 
-7. Have the knowledge leaf record any missed confounds or harness lessons supported by evidence using `record-harness`. Apply the final reader in WORKFLOW.md Step 11 to `review-figures.json`, actual draft paper, briefing and next steps. Address returned defects once and recheck. If it still objects or cannot run, set `review_hold` and leave the step number unchanged. Only an accepted current draft may set `current_step: 11, status: complete`.
+7. Have the knowledge leaf record any missed confounds or harness lessons supported by evidence using `record-harness`. Apply the final reader in WORKFLOW.md Step 11 to `review-figures.json`, actual draft paper, briefing and next steps. Correct its blocking findings, answer each with `methods_review.py respond RUN presentation ...` and recheck, up to the round cap. If a blocking finding is still open when `presentation` exits 5, if the reader stops, or if it cannot run, set `review_hold` and leave the step number unchanged. Only an accepted current draft may set `current_step: 11, status: complete`.
 
 ---
 

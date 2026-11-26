@@ -3,8 +3,34 @@
   "properties": {
     "decision": {"type": "string", "enum": ["approve", "revise", "stop"]},
     "summary": {"type": "string"},
-    "findings": {"type": "array", "items": {"type": "string"}}
+    "rechecks": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "status": {"type": "string", "enum": ["open", "resolved"]},
+          "blocking": {"type": "boolean"},
+          "text": {"type": "string"}
+        },
+        "required": ["status", "blocking", "text"],
+        "additionalProperties": false
+      }
+    },
+    "new_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "blocking": {"type": "boolean"},
+          "title": {"type": "string"},
+          "text": {"type": "string"},
+          "reopens": {"type": "string"}
+        },
+        "required": ["blocking", "title", "text", "reopens"],
+        "additionalProperties": false
+      }
+    }
   },
-  "required": ["decision", "summary", "findings"],
+  "required": ["decision", "summary", "rechecks", "new_findings"],
   "additionalProperties": false
 }

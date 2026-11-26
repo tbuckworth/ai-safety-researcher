@@ -107,10 +107,11 @@ and `scripts/kb-init.sh` exit 1, as on their other errors.
 | `RESEARCHER_EXPERIMENT_MINUTES` | Per-experiment time target, in minutes of compute |
 | `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (GitHub rejects files over 100 MB, failing the whole push); experiments keep files under it |
 | `RESEARCHER_MAX_AUDIT_ROUNDS` | R_MAX, the most Step 10 audit rounds; the runner forces the report one round later if a step ignores it |
+| `RESEARCHER_MAX_REVIEW_ROUNDS` | The most plan or final-reader review rounds in one review cycle ([Review Ledger](WORKFLOW.md#review-ledger)) |
 
-The runtime header of every step prompt gives the four limits and the code
-directory; the limits are numeric settings, checked at startup (exit 2 unless a
-whole number of at least 1).
+The runtime header of every step prompt gives the first four limits and the
+code directory; the review helper applies the round cap itself. The limits are
+numeric settings, checked at startup (exit 2 unless a whole number of at least 1).
 
 ## Agent Backend and Models
 
@@ -212,7 +213,7 @@ spending limit on the provider account or project.
 
 The hub clarifies scope from the topic or issue, conducts the search, checks novelty and sets decision-relevant success criteria. Before execution it writes the actual per-experiment methods. Three independent reviewers assess them and a separate automatic approver decides whether that revision can run. A disproof experiment also goes through approval. A theoretical rethink can finish with a rationale and zero experiments. The full criteria, revision rules and approval commands are in [Steps 6–8 of the workflow](WORKFLOW.md#step-6-write-and-challenge-the-methods).
 
-Each critique and approval is saved under `reviews/` in the run directory. The plan receipt preserves the text of the reviewed methods. Approval records when it was given and which experiments already had results. Model review receipts record the decision, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision.
+Each critique and approval is saved under `reviews/` in the run directory. The plan receipt preserves the text of the reviewed methods. Approval records when it was given and which experiments already had results. Model review receipts record the decision, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision. Each review stage also keeps a ledger of its findings, which every later round of that stage sees ([Review Ledger](WORKFLOW.md#review-ledger)). When the final reader reaches its round cap with a blocking finding open, the runner holds delivery and says so in `last_pause_reason`.
 
 ## Compute Profile (hardware-agnostic)
 

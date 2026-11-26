@@ -42,6 +42,7 @@ When the user asks a question, pull in the relevant artifact file(s) to answer. 
 | Decomposition | `decomposition.md` | Questions about experiment design, lambda ordering, component breakdown |
 | Design critiques and approval | `reviews/plan/`, `reviews/approval/` | Which version was approved, by whom, which rivals were raised and how the hub resolved them. Older runs keep assumption, mentor and pre-mortem reviews in `challenge/`. |
 | Evidence and presentation critiques | `reviews/evidence/`, `reviews/presentation/` | What the independent readers checked, requested or left unresolved |
+| Review ledgers | `reviews/<stage>/ledger.json` | Every finding of a review stage by id: whether it blocked, how the hub answered it and when a reviewer resolved it |
 | Method spec | `method-spec.md` | What a named method or metric means, and whether an experiment ran the method that was asked for |
 | Experiment plans | `experiments/exp-NNN/plan.md` | Questions about specific experiment setup |
 | Pre-flight checks | `experiments/exp-NNN/preflight.md` | Whether an experiment's pipeline was valid, and why a verdict is INCONCLUSIVE |

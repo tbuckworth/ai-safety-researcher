@@ -169,7 +169,7 @@ Do this yourself; no agent needed.
 
 ## Step 6: Write and challenge the methods
 
-Follow Step 6 of `${CLAUDE_PLUGIN_ROOT}/docs/WORKFLOW.md`. Write the concrete ordered plan files. As hub, call `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN`. Read the three independent reviews and answer their open blocking findings as WORKFLOW.md's Review Ledger describes. Record design-time limitation triage and the revision. Re-review an edited plan, up to the round cap; when `plan` exits 5, go to Step 7 with the last reviewed revision.
+Follow Step 6 of `${CLAUDE_PLUGIN_ROOT}/docs/WORKFLOW.md`. Write the concrete ordered plan files. As hub, call `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN`. Read the three independent reviews and answer their open blocking findings as WORKFLOW.md's Review Ledger describes. Record design-time limitation triage and the revision. Re-review an edited plan, up to the round cap; when `plan` exits 5, go to Step 7 with the revision it prints, first restoring any file edited since that round from the `methods` of `reviews/plan/<revision>.json`.
 
 ## Step 7: Present the methodology decision
 

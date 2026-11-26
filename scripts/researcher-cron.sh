@@ -635,7 +635,7 @@ if ! is_true "$PAUSED" && { [ -s "${RUN_DIR}/next-steps.md" ] || [ -s "${RUN_DIR
         set_state_field release_status "$STATUS"
         set_status release_pending
         if [ "$REVIEW_RC" -eq 5 ]; then
-            set_review_hold "The final reader reached its round cap with blocking findings open (reviews/presentation/ledger.json). Decide whether to release the draft; to revise it, run methods_review.py presentation RUN --new-cycle REASON and resume."
+            set_review_hold "The final reader reached its round cap with blocking findings open (reviews/presentation/ledger.json), so the draft gets no further review in this cycle. To have a revised draft read again, run methods_review.py presentation RUN --new-cycle REASON on it, then resume."
         else
             set_review_hold "Review of the release draft failed or requested changes. Resolve the review and resume to retry delivery."
         fi

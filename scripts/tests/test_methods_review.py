@@ -256,15 +256,35 @@ class ReviewTest(unittest.TestCase):
         rounds = self.ledger("presentation")["rounds"]
         self.assertEqual([(r["round"], r["cycle"]) for r in rounds], [(1, 1), (2, 1), (3, 2)])
         self.assertEqual(rounds[2]["cycle_reason"], "Titus asked for one more pass (mail 12)")
+        self.invoke("presentation", "--new-cycle", "again", code=1)
         self.invoke("evidence", "--new-cycle", "no cap here", code=2)
 
+    def test_plan_cap_exit_approves_the_last_reviewed_revision_once_restored(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="revise")
         reviewed = self.invoke("plan")
         self.invoke("plan")
         self.write("experiments/exp-f02/plan.md", "Repeat on a new split with a second seed.")
-        second = self.invoke("plan")
-        self.write("experiments/exp-f02/plan.md", "Repeat on two new splits.")
-        self.assertEqual(self.invoke("plan", code=5), second)
-        self.assertNotEqual(reviewed, second)
+        self.assertEqual(self.invoke("plan", code=5), reviewed)
+        self.invoke("approve-auto", code=1)
+        methods = json.loads((self.run / "reviews/plan" / f"{reviewed}.json").read_text())["methods"]
+        for name, text in methods.items():
+            self.write(name, text)
+        self.env["DECISION"] = "approve"
+        self.assertEqual(self.invoke("approve-auto"), reviewed)
+        self.assertIn("Review ledger of the plan stage", self.records()[-1]["prompt"])
+        self.assertEqual(self.invoke("verify"), reviewed)
+
+    def test_final_reader_sees_the_evidence_ledger(self):
+        self.write("experiments/exp-f01/results.md", "Measured 2 pp on one pilot.")
+        self.env["DECISION"] = "revise"
+        self.invoke("evidence", code=3)
+        self.draft("One pilot measured 2 pp.")
+        self.env["DECISION"] = "approve"
+        self.invoke("presentation")
+        prompt = self.records()[-1]["prompt"]
+        self.assertIn("Review ledger of the evidence stage", prompt)
+        self.assertIn('"evidence-1"', prompt)
+        self.assertNotIn("Review ledger of the presentation stage", prompt)
 
     def test_hub_responses_name_a_recorded_open_finding(self):
         self.draft("Draft one.")

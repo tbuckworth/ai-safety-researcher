@@ -311,6 +311,9 @@ def commission(stage: str, actor: str, run: Path, p: Packet, config: ReviewSetti
         + ", ".join(f"{r['role']} {r['decision']}" + (f" (stated {r['stated_decision']})" if "stated_decision" in r else "")
                     for r in reports)
         + f"; open blocking findings: {', '.join(blocking) or 'none'}")
+    if stage in CAPPED_STAGES and in_cycle == config.max_rounds:
+        log(f"NOTE: this was the last round of the {stage} review cycle. Take the stage's exit on this revision "
+            "without editing its inputs (docs/WORKFLOW.md, Review Ledger).")
     return reports
 
 
@@ -360,8 +363,10 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
         saved = (checked_approval(run, rev, actor) if phase == "approval"
                  else load_receipt(path, rev, ROLES if phase == "plan" else (phase,)))
         decision = saved["reviews"][0]["decision"]
+        if new_cycle:
+            raise ValueError(f"a receipt already covers revision {rev}; a new cycle starts on a revision not yet reviewed")
         if not action.startswith("verify") and action != "approve-human":
-            note_cached(run, phase, rev, new_cycle)
+            note_cached(run, phase, rev)
     else:
         ledger = None
         if action == "approve-human":
@@ -400,12 +405,10 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
     return 0 if phase == "plan" else EXIT[decision]
 
 
-def note_cached(run: Path, stage: str, revision: str, new_cycle: str | None) -> None:
+def note_cached(run: Path, stage: str, revision: str) -> None:
     """Say why a repeated review call reused its receipt instead of running a round."""
     ledger = Ledger.load(run, stage)
     reviewed = ledger.round_of(revision)
-    if new_cycle:
-        log(f"NOTE: a receipt already covers revision {revision}, so no new review cycle started.")
     if reviewed is not None and ledger.responses_after(reviewed):
         log(f"NOTE: the responses recorded after ledger round {reviewed} change no reviewed input, so its review "
             "stands. State a limit or the reason for a declined finding in the reviewed material itself.")

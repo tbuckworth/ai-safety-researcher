@@ -398,7 +398,7 @@ Step 10 loops on itself (re-run the flagged experiment, then re-audit) up to R_M
 
 ## Review Ledger
 
-Each review stage (plan, approval, evidence, presentation) runs in rounds, one per revision of its inputs. `methods_review.py` keeps the stage's findings in `reviews/<stage>/ledger.json` and gives that ledger to every later round, as the checklist review gate of claude-tooling gives each round the previous verdict, so that reviewers converge rather than review each revision afresh.
+Each review stage (plan, approval, evidence, presentation) runs in rounds, one per revision of its inputs. `methods_review.py` keeps the stage's findings in `reviews/<stage>/ledger.json` and gives that ledger to every later round, so that each reviewer re-checks what was already raised and how the hub answered it, rather than reviewing each revision afresh and reopening settled points.
 
 - **Findings.** Each finding has a stable id (`presentation-3`), a title, a blocking flag and a status, open or resolved. The reviewer that raised a finding re-checks it in every later round until it is resolved. A resolved finding is settled: a reviewer reopens it only with a new finding that names it and gives a new reason. [`templates/review/instructions.md`](../templates/review/instructions.md) defines a blocking finding for each stage and gives the reviewers these rules.
 - **Decisions.** A review asks for revision (`revise`, exit 3) only while one of its blocking findings is open; non-blocking findings never withhold anything. A stated stop stands. A receipt keeps a stated decision that differs from the recorded one as `stated_decision`.
@@ -409,7 +409,7 @@ At the round cap each stage ends this way:
 
 | Stage | Exit |
 |---|---|
-| Plan | Present the last reviewed revision, unedited, with its open blocking findings as unresolved objections (Step 7). In automatic mode the approver decides on that revision (Step 8). |
+| Plan | Present the last reviewed revision, unedited, with its open blocking findings as unresolved objections (Step 7); in automatic mode the approver decides on that revision (Step 8). Approval binds to the reviewed inputs, so first undo any edit made after that round: `reviews/plan/<revision>.json` keeps the reviewed methods text under `methods`. |
 | Evidence | The audit loop ends at R_MAX (Step 10), and the open findings go to Limitations. |
 | Presentation | Interactive: ask Titus whether to release the last reviewed draft with its open blocking findings listed, or to revise it in a new cycle. Automatic: set `review_hold`; the runner holds delivery. |
 

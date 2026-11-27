@@ -12,6 +12,9 @@
 #   scripts/config.sh --compute-profile lambda   # with RESEARCHER_COMPUTE_BUDGET_USD set
 
 CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config"
+# GitHub's web address, for repo and issue links.
+# shellcheck disable=SC2034 # read by the scripts that source this file
+GITHUB_WEB="https://github.com"
 RESEARCHER_CONFIG_FILE="${RESEARCHER_CONFIG_FILE:-${CONFIG_DIR}/researcher.env}"
 
 # load_config: sets each key of RESEARCHER_CONFIG_FILE that the environment
@@ -66,6 +69,30 @@ require_config() {
             return 2
         fi
     done
+}
+
+# add_local_bin_to_path: puts ~/.local/bin on PATH when it is not there, since
+# cron and non-login SSH shells often omit user-installed CLIs.
+add_local_bin_to_path() {
+    case ":${PATH}:" in
+        *":${HOME}/.local/bin:"*) ;;
+        *) export PATH="${HOME}/.local/bin:${PATH}" ;;
+    esac
+}
+
+# mailroom_tool NAME: the path of the agent mailroom's command NAME (agent-mail,
+# agent-usage or agent-status): RESEARCHER_<NAME>, with dashes as underscores,
+# when set (the tests point it at a mock), else the one on PATH, else
+# ~/.local/bin/NAME, where the mailroom installs it. The caller checks that it
+# exists.
+mailroom_tool() {
+    local var="RESEARCHER_${1//-/_}"
+    var="${var^^}"
+    if [ -n "${!var:-}" ]; then
+        printf '%s\n' "${!var}"
+    else
+        command -v "$1" || printf '%s\n' "${HOME}/.local/bin/$1"
+    fi
 }
 
 # joined_lines FILE: the text of FILE on one line, its lines joined with spaces.

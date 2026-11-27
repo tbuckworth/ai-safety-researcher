@@ -21,7 +21,7 @@ agent-spare (or by hand) → researcher-cron.sh
          │       (Step 10 = audit-remediation loop: re-enters while status: audit_remediating)
          ├─ No next-steps.md (stopped before Step 11, or Step 11 wrote none): <claude|codex> researcher-auto-next-steps <run-dir>
          ├─ Create GitHub repo (gh CLI)
-         ├─ Email: a Claude session writes it and sends it with agent-mail (reviewed)
+         ├─ Email: the first login that can writes it (else no model), sent with agent-mail
          └─ Update issue: status:<backend>-processed
 ```
 
@@ -31,8 +31,9 @@ On the machine running the autonomous runs (desktop):
 
 - An authenticated **Codex CLI** for independent reviews on either backend, plus the Claude Code CLI when using the Claude backend.
 - **gh CLI**: authenticated (`gh auth login`)
-- **agent-mail** (`~/.local/bin/agent-mail`, from `~/pyg/agent-mailroom`) and
-  the Claude Code CLI for the results email. See "The results email" below.
+- The **agent mailroom** (`~/pyg/agent-mailroom`): `agent-mail` sends the
+  results email, `agent-usage` gives the order of the logins that may write it,
+  and `agent-status` records its outcome. See "The results email" below.
 - **tectonic**: for LaTeX compilation (`sudo snap install tectonic` on Ubuntu)
 - **jq**: for JSON parsing (`sudo apt install jq`)
 - **Python 3**: for experiment execution
@@ -87,7 +88,7 @@ format is in `config/CLAUDE.md`); the other settings give their defaults where
 they are described. A variable set in the environment wins over its line, and
 `RESEARCHER_CONFIG_FILE` names another file to read instead. A script stops on
 a malformed line, or when a key it needs is set by neither: the runner and
-`scripts/send-results-email.sh` exit 2, and `scripts/create-followup-issue.sh`
+`scripts/send-results-email.sh` and `scripts/send-run-report.sh` exit 2, and `scripts/create-followup-issue.sh`
 and `scripts/kb-init.sh` exit 1, as on their other errors.
 `scripts/config.sh KEY...` prints the values the scripts would use.
 
@@ -95,7 +96,8 @@ and `scripts/kb-init.sh` exit 1, as on their other errors.
 |---------|---------|
 | `RESEARCHER_STORAGE_ROOT` | Volume holding `researcher-output/`, the run output directory unless `RESEARCHER_OUTPUT_DIR` is set |
 | `RESEARCHER_GITHUB_OWNER` / `RESEARCHER_TASKS_REPO` | Owner of run repos / the issue queue |
-| `RESEARCHER_EMAIL_TO` | Recipient of the results email |
+| `RESEARCHER_EMAIL_TO` | Recipient of the results email: an address, or `titus` for agent-mail's owner (Titus) |
+| `RESEARCHER_EMAIL_TIMEOUT_SECONDS` | Each writer of the results email is stopped after this long, and the next one tried (a whole number of at least 1) |
 | `RESEARCHER_DEFAULT_KB_DIR` | The knowledge base used when `RESEARCHER_KB_DIR` is unset, if it holds `KB-SCHEMA.md` |
 | `RESEARCHER_HOST_ALIASES` | Space-separated `hostname=alias` pairs: the SSH alias the email's reader uses for each machine (`RESEARCHER_HOST_ALIAS` overrides it) |
 | `RESEARCHER_CODE_SEARCH_DIR` | Local code a step may search, read-only |
@@ -130,7 +132,7 @@ numeric settings, checked at startup (exit 2 unless a whole number of at least 1
 | `RESEARCHER_CODEX_FAST_REASONING` | Codex search-worker effort |
 | `RESEARCHER_CODEX_DEEP_MODEL` | Codex workers for the non-search tasks listed below (default: the parent model) |
 | `RESEARCHER_CODEX_DEEP_REASONING` | Reasoning effort for those workers (default: the parent's) |
-| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email (a Claude run uses its own model) |
+| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email on each Claude login (a Claude run uses its own model); Codex writes it on `RESEARCHER_CODEX_FAST_MODEL` |
 | `RESEARCHER_MODEL` | Overrides the selected backend's model, `RESEARCHER_CLAUDE_MODEL` or `RESEARCHER_CODEX_MODEL` (default: unset) |
 
 The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
@@ -189,7 +191,7 @@ spending limit on the provider account or project.
 | `RESEARCHER_TIMEOUT_SECONDS` | Run timeout in seconds; overrides `RESEARCHER_TIMEOUT_HOURS` |
 | `RESEARCHER_GIT_REMOTE_BASE` | Where git pushes (default `https://github.com`; tests point it at local bare repos) |
 | `RESEARCHER_SKIP_EMAIL=true` | Compose no email and send nothing |
-| `RESEARCHER_AGENT_MAIL` | Path to `agent-mail` (default: the one on `PATH`; tests point it at a mock) |
+| `RESEARCHER_AGENT_MAIL`, `RESEARCHER_AGENT_USAGE`, `RESEARCHER_AGENT_STATUS` | Paths to the mailroom's `agent-mail`, `agent-usage` and `agent-status` (default: the one on `PATH`, else `~/.local/bin`; tests point them at mocks, and `agent-usage` at a test configuration) |
 | `RESEARCHER_LINK_OUTPUT=false` | Do not rewrite repo output/log symlinks |
 | `RESEARCHER_SKIP_GPU_CHECK=true` | Skip the start-up GPU check, which exits 0 when a process uses over 500 MiB of GPU memory and exits 1 when `nvidia-smi` fails or reports a non-numeric value |
 | `RESEARCHER_STEP_ATTEMPTS` | Attempts at a step that ends without advancing (default 3), after which the run is marked `failed` |
@@ -369,7 +371,7 @@ never fails a step.
 - `~/.local/state/agent-board/spare/run.log`: wrapper output of agent-spare runs (a hand-set crontab entry appends to `logs/cron.log` instead)
 - `logs/step-N-attempt-N-*.log`: per-step provider output
 - `logs/next-steps-*.log`: output of the session that writes a missing `next-steps.md`
-- `logs/email-*.log`: email sending output
+- `logs/email-*-<login>.log`: each email writer's output; `logs/email-send-*.log`: the helper's, for a draft the wrapper sends
 - `output/<run-id>/state.md`: workflow state (authoritative)
 
 ## Exit codes
@@ -381,7 +383,7 @@ never fails a step.
 | 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a malformed `config/researcher.env` or a key missing from it, a paid compute profile without a budget, a resume that changes a saved setting without leave, a `RESEARCHER_RUN_DIR` that is not resumable) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |
-| 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then |
+| 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then; `undelivered:` in `state.md` names the failed deliverables (or `none`) whatever the exit code |
 
 ## Troubleshooting
 
@@ -391,11 +393,15 @@ never fails a step.
 - A lockfile left by a dead process is removed by the next run; if the log says
   another run is active, its PID is in that line and in the file `RESEARCHER_LOCKFILE` names
 
-**Results email not sent**:
-- The run log says why (`Writing and sending the results email ...`, then
-  `Email sent ...` or an `ERROR:`); the composer's own output is in
-  `logs/email-*.log`, and `email-draft.html` stays in the run directory.
+**Results email not sent** (`undelivered: email` in `state.md`):
+- The run log says why: one `WARN: the results email was not delivered by ...`
+  line per writer that failed, then `ERROR: nothing was sent ...`; each writer's
+  output is in `logs/email-*.log`. The status log has the same outcome
+  (`agent-status log`).
 - `agent-mail sent` lists what went out; `agent-mail status` checks the mailroom.
+- Once the cause is fixed, `scripts/send-run-report.sh <run-dir>` sends the
+  report from what the run saved, through the same writers; it refuses a run
+  whose report already went or is held.
 - A draft the pre-send review held and nobody revised is sent unchanged by the
   mailroom after its fallback wait; nothing is lost.
 
@@ -525,28 +531,45 @@ output/<date>-followup-<slug>/
 The email leads with what the reviewed evidence changes for the original research question. A pilot, an inconclusive primary comparison and a decision to stop can coexist in the first paragraph. When asking the recipient for a decision, the writer adds one agent-mail choices object in `email-choices.json`. The helper appends it to the plain report and lets the Mail tab render buttons. Informational mail uses the HTML draft.
 
 The email goes to `RESEARCHER_EMAIL_TO` from the agents' mail account, like
-every agent's mail, never from the recipient's own Gmail. A Claude session writes it and sends it
-itself with `scripts/send-results-email.sh <run-dir>`, which calls
-`agent-mail send` (a Codex run uses `RESEARCHER_EMAIL_CLAUDE_MODEL` for this
-step). So:
+every agent's mail, never from the recipient's own Gmail. It is written by the
+first writer that can, in the agent mailroom's own login order (`agent-usage`;
+the mailroom's README, "The login and model order"), which on the desktop is
+the personal Claude login, then the Arrow login, then Codex. The mailroom's
+paid API key is never used.
 
-- **The pre-send review applies.** agent-mail has the mail read by a reviewer
-  before it leaves. If it prints `agent-mail: NOT SENT` (exit 3), the session
-  fixes what it lists and runs the helper once more; that send goes out
-  whatever the review says.
-- **The recipient's reply comes back to that session.** The wrapper gives it a known
-  session id (`claude --session-id`), and the mailroom resumes it on a
-  reply, in the plugin directory, with the run's context.
+- **On a Claude login**, a session (`RESEARCHER_EMAIL_CLAUDE_MODEL` for a Codex
+  run) writes it and sends it itself with `scripts/send-results-email.sh
+  <run-dir>`, which calls `agent-mail send`. The pre-send review applies: if it
+  prints `agent-mail: NOT SENT` (exit 3), the session fixes what it lists and
+  runs the helper once more, and that send goes out whatever the review says.
+  The recipient's reply comes back to that session: the wrapper gives it a
+  known id (`claude --session-id`), and the mailroom resumes it on a reply, on
+  whichever login holds it, in the plugin directory, with the run's context. A
+  session that stops without sending has its draft sent by the wrapper as that
+  session.
+- **On Codex**, Codex (`RESEARCHER_CODEX_FAST_MODEL`) only writes it, and the
+  wrapper sends it `--unrouted`: not reviewed, and replies go to the
+  orchestrator.
+- **A writer that fails** passes the email to the next: a usage limit, a
+  crash, a draft the helper refuses, or a writer still running after
+  `RESEARCHER_EMAIL_TIMEOUT_SECONDS`. Its draft is discarded, and the run log
+  says why.
+- **With no writer left**, the report is assembled from the run's saved files
+  with no model (`scripts/results_report.py template`): the outcome the runner
+  recorded, the experiments' verdicts and pre-flight failures, the caveats, the
+  ranked next steps, the headline figures `review-figures.json` lists, the
+  links and the continuation commands, in the same layout, with a box saying
+  why no model wrote it. It goes `--unrouted`. If even that cannot be built, a
+  plain-text notice goes instead, saying where the results are and why there
+  is no report.
+- **The outcome is recorded** in the status log (`agent-status note`): who
+  wrote the email, the writers that failed before it, or that nothing was sent
+  and how to send it later (`scripts/send-run-report.sh`). An email or notice
+  that cannot be sent at all is a failed deliverable.
 - **Inline plots**: the composer lists them in `<run>/email-images.txt`
   (`NAME=relative/path.png` per line) and places each as
   `<img src="cid:NAME">`; the helper checks each one (an image inside the run
   directory, placed in the HTML) and sends nothing (exit 2) until all pass, as
   it does when `run-outcome.json` exists but cannot be read.
-- **Fallbacks.** A session that stops without sending has its draft sent by the
-  wrapper as that session; a session that fails (a usage limit too) sends
-  nothing, and the run exits 5. Only if the Claude CLI is not installed does a
-  Codex run write the email with Codex, and the wrapper sends it
-  `--unrouted`: not reviewed, and replies go to the orchestrator. If that Codex
-  writer fails, nothing is sent either, and the run exits 5.
 - The subject starts `[Auto-Research]`, with the outcome in front when the run
   is not `complete` (e.g. `[UNPUBLISHED]`).

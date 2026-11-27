@@ -160,6 +160,7 @@ chmod +x "${MOCK_BIN}/gh"
 # shellcheck source=tests/mocks.sh
 source "${SCRIPT_DIR}/tests/mocks.sh"
 install_mock_agent_mail "$MOCK_BIN"
+install_mock_mailroom "$MOCK_BIN"
 install_mock_email_composer "$MOCK_BIN"
 install_mock_next_steps_writer "$MOCK_BIN"
 install_mock_reviews "$MOCK_BIN"
@@ -1192,19 +1193,23 @@ run_researcher MOCK_EMAIL_NO_SEND=true
 SESSION=$(sed -n 's/.*(session \([0-9a-f-]\{36\}\)).*/\1/p' "${CASE_DIR}/stdout.log" | head -1)
 assert_grep "The email session stopped without sending" "${CASE_DIR}/stdout.log"
 assert_grep "from=${SESSION} " "${CASE_DIR}/email.log"
-# When the wrapper sends the draft and the helper refuses it (exit 2: here a
-# listed image that does not exist), nothing is sent, the run log says why, the
-# draft stays, and the run exits 5.
+# When the wrapper sends a writer's draft and the helper refuses it (exit 2: here
+# a listed image that does not exist), that writer has failed and the next one
+# writes it; with every model writer failing so, the report with no model goes.
 new_case email-refused
 set_issues <(issue_json 905 "Helper refuses the draft" "list:research-ideas")
 run_researcher MOCK_EMAIL_NO_SEND=true MOCK_EMAIL_BAD_IMAGE=true
-assert_eq "$RC" "5" "exit code"
+[ "$RC" = 0 ] || { cat "${CASE_DIR}/stdout.log"; fail "exit $RC"; }
 RUN=$(run_dir_for_issue 905)
-[ ! -s "${CASE_DIR}/email.log" ] || fail "an email was sent"; ok
 assert_grep "error: email-images.txt: missing: figures/none.png is not a file in the run directory" "${CASE_DIR}/stdout.log"
-assert_grep "ERROR: send-results-email.sh refused to send \(exit 2\): an input named above is missing or invalid; nothing was sent, and the draft stays in ${RUN}" \
+assert_grep "WARN: the results email was not delivered by personal: send-results-email.sh refused to send it \(exit 2\)" \
     "${CASE_DIR}/stdout.log"
-[ -s "${RUN}/email-draft.html" ] || fail "the draft was not kept"; ok
+assert_grep "WARN: the results email was not delivered by arrow: send-results-email.sh refused to send it \(exit 2\)" \
+    "${CASE_DIR}/stdout.log"
+assert_eq "$(wc -l < "${CASE_DIR}/email.log" | tr -d ' ')" "1" "sent once"
+assert_grep "from=unrouted" "${CASE_DIR}/email.log"
+assert_grep "Written without a model" "${CASE_DIR}/email.log.last.html"
+assert_grep "^undelivered: none$" "${RUN}/state.md"
 
 # =============================================================================
 # 22. Settings are checked before anything runs: a numeric setting that is not
@@ -1516,12 +1521,14 @@ assert_eq "$RC" "5" "exit code"
 RUN=$(run_dir_for_issue 1101)
 assert_eq "$(field final_outcome "$RUN")" "complete" "final_outcome"
 assert_grep "WARN: secret scan skipped: could not create a temporary file for its report" "${CASE_DIR}/stdout.log"
-assert_grep "ERROR: the email writer \(session\) failed \(exit 1" "${CASE_DIR}/stdout.log"
+assert_grep "WARN: the results email was not delivered by personal: the writer failed \(exit 1" "${CASE_DIR}/stdout.log"
+assert_grep "ERROR: nothing was sent to self@example.test about this run" "${CASE_DIR}/stdout.log"
 assert_grep "ERROR: could not create a temporary file for the issue comment" "${CASE_DIR}/stdout.log"
 [ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a comment was posted"; ok
 assert_grep "issue edit 1101 --repo tbuckworth/tasks --add-label status:claude-processed" "${CASE_DIR}/gh.log"
 assert_grep "Updated issue #1101" "${CASE_DIR}/stdout.log"
 assert_grep "ERROR: not delivered in full: email, issue comment\.$" "${CASE_DIR}/stdout.log"
+assert_grep "^undelivered: email, issue comment$" "${RUN}/state.md"
 
 new_case labels-fail
 set_issues <(issue_json 1102 "Labels fail" "list:research-ideas")

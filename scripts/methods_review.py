@@ -438,7 +438,9 @@ def respond(run: Path, stage: str, finding: str, disposition: str, note: str) ->
 
 
 def check_brief(run: Path) -> int:
-    """Check the human-facing Markdown before sending it. No reviewer is called."""
+    """Read run/methods-brief.md and packet(run, "plan") inputs to check the
+    human-facing Markdown before sending it. No reviewer is called.
+    """
     plan = packet(run, "plan")
     brief = (run / "methods-brief.md").read_text()
     if len(brief.split()) > BRIEF_WORDS:

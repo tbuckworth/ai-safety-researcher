@@ -42,6 +42,7 @@ output/<run-id>/
 ├── success-criteria.md
 ├── decomposition.md            # Steinhardt lambda table + component details
 ├── methods-order.json          # Experiment IDs in their reviewed execution order
+├── methods-brief.md            # Human methods decision (Step 7)
 ├── reviews/                    # Plan critiques, approval, evidence and final reader receipts,
 │                               # and each stage's ledger.json (see Review Ledger)
 ├── review-figures.json         # Headline figure files for the final reader

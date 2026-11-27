@@ -173,7 +173,7 @@ Follow Step 6 of `${CLAUDE_PLUGIN_ROOT}/docs/WORKFLOW.md`. Write the concrete or
 
 ## Step 7: Present the methodology decision
 
-Prepare the brief in WORKFLOW.md Step 7. Run `methods_review.py check-brief RUN` and correct any errors before sending it. Cite the reviewed revision and link its full methods. Offer approval, revision or stop, using buttons in email. Wait for Titus. Incorporate requested changes and return to Step 6 for a fresh review, in a new cycle (`plan RUN --new-cycle REASON`, citing his reply), before showing a revised decision.
+Show the decision and exact revision as specified in WORKFLOW.md Step 7. Offer approval, revision or stop, using buttons in email. Wait for Titus. Incorporate requested changes and return to Step 6 for a fresh review, in a new cycle (`plan RUN --new-cycle REASON`, citing his reply), before showing a revised decision.
 
 ## Step 8: Record approval
 

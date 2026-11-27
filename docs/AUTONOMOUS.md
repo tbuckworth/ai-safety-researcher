@@ -443,7 +443,9 @@ never fails a step.
 - `agent-mail sent` lists what went out; `agent-mail status` checks the mailroom.
 - Once the cause is fixed, `scripts/send-run-report.sh <run-dir>` sends the
   report from what the run saved, through the same writers; it refuses a run
-  whose report already went or is held.
+  whose report already went or is held. If the run's original Claude login is
+  unavailable, it keeps the original attribution and tries the remaining
+  writers, then assembles the report without a model if needed.
 - A draft the pre-send review held and nobody revised is sent unchanged by the
   mailroom after its fallback wait; nothing is lost.
 

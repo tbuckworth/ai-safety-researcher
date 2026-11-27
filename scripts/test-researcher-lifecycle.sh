@@ -196,6 +196,11 @@ if [ "${MOCK_LIMIT_AT_STEP:-}" = "$step" ]; then
     exit 0
 fi
 
+if [ "${MOCK_WEEKLY_LIMIT_AT_STEP:-}" = "$step" ]; then
+    echo "You've hit your weekly limit · resets Nov 26, 5am (Europe/London) · out of usage credits"
+    exit 1
+fi
+
 if [ "${MOCK_STALL_AT_STEP:-}" = "$step" ]; then
     # The step stops early on purpose (e.g. it asked for more budget) and
     # leaves current_step where it was.
@@ -252,6 +257,17 @@ case "$step" in
             git -C "${exp}/vendored-lib" add -A
             git -C "${exp}/vendored-lib" commit -q -m lib
             echo "dirty" > "${exp}/vendored-lib/output.txt"
+        fi
+        ;;
+    10)
+        if [ "${MOCK_EXPECT_RETROSPECTIVE_AUDIT:-false}" = true ]; then
+            if [[ "$prompt" != *"Audit mode: retained data only (prospective methods approval could not be verified)."* ]]; then
+                echo "Missing the retained-data-only audit handoff." >&2
+                exit 65
+            fi
+            mkdir -p "${run_dir}/audit"
+            printf '# Results audit\n\nRetrospective analysis of retained data only.\n' \
+                > "${run_dir}/audit/results-audit.md"
         fi
         ;;
     11)
@@ -440,6 +456,30 @@ assert_eq "$RC" 3 "stale methods are held"
 assert_no_grep '^9$' "${CASE_DIR}/steps.log"
 assert_no_grep '^repo create' "${CASE_DIR}/gh.log"
 [ ! -s "${CASE_DIR}/email.log" ] || fail "withheld work was mailed"; ok
+
+# Results retained from an earlier revision (or without any receipt) still get
+# a read-only Step 10 audit alongside the independent evidence critique.
+for approval in missing stale; do
+    new_case "retrospective-audit-${approval}"
+    write_run "2026-01-28-audit-${approval}" 9 experiments_complete
+    RUN="${OUT}/2026-01-28-audit-${approval}"
+    EXP="${RUN}/experiments/exp-001"
+    printf '# Retained results\n\n## Verdict: PASS\n' > "${EXP}/results.md"
+    printf '| Check | Status | Evidence |\n|---|---|---|\n| method-fidelity | PASS | retained log |\n' \
+        > "${EXP}/preflight.md"
+    if [ "$approval" = missing ]; then
+        rm "${RUN}"/reviews/approval/*.json
+    else
+        echo 'Amended after this result was observed.' >> "${RUN}/success-criteria.md"
+    fi
+    run_researcher RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_EXPECT_RETROSPECTIVE_AUDIT=true \
+        -- "Ignored topic"
+    assert_eq "$RC" 0 "retrospective audit and report completed"
+    assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 11 " "audit and report calls"
+    assert_grep 'Retrospective analysis of retained data only' "${RUN}/audit/results-audit.md"
+    assert_grep '^## Verdict: PASS$' "${EXP}/results.md"
+    find "${RUN}/reviews/evidence" -name '*.json' ! -name ledger.json | grep -q . || fail "no evidence receipt"; ok
+done
 
 # A returned draft is retained locally. On resume its revised bytes receive a
 # new review and the original scientific status is delivered without re-training.
@@ -831,6 +871,14 @@ assert_eq "$(field status "${OUT}/2026-01-03-limit")" "audit_complete" "status l
 [ -z "$(ls -A "${CASE_DIR}/comments")" ] || fail "a paused run commented on an issue"; ok
 # Step 11 writes next-steps.md when the run resumes.
 assert_no_grep "No next-steps.md after the workflow" "${CASE_DIR}/stdout.log"
+
+new_case weekly-limit-at-report
+write_run 2026-01-03-weekly-limit 10 audit_complete
+run_researcher RESEARCHER_STEP_ATTEMPTS=2 MOCK_WEEKLY_LIMIT_AT_STEP=11 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (paused on weekly limit)"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "11 " "provider calls"
+assert_eq "$(field status "${OUT}/2026-01-03-weekly-limit")" "audit_complete" "status left resumable"
+assert_eq "$(field last_pause_reason "${OUT}/2026-01-03-weekly-limit")" "provider usage/session limit reached" "pause reason"
 
 # 15b. ...and the same during a Step 10 remediation round: the notice must not
 #      count as a finished audit round (that would skip remediation silently).

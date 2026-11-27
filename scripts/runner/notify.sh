@@ -33,7 +33,7 @@ email_settings() {
     AGENT_STATUS=$(mailroom_tool agent-status)
     EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
     # Another login cannot run the model of a login that runs only its own.
-    if [ "$BACKEND" = "claude" ] && [ -z "$CLAUDE_LOGIN_MODEL" ]; then
+    if [ "$BACKEND" = "claude" ] && [ -z "$CLAUDE_LOGIN_MODEL" ] && [ -z "$CLAUDE_LOGIN_FAILURE" ]; then
         EMAIL_CLAUDE_MODEL="$MODEL"
     else
         EMAIL_CLAUDE_MODEL="$RESEARCHER_EMAIL_CLAUDE_MODEL"
@@ -68,11 +68,13 @@ send_email() {
     if [ -n "$CLAUDE_LOGIN" ]; then
         writers+=("login"$'\t'"${CLAUDE_LOGIN}"$'\t'"${CLAUDE_LOGIN_DIR}")
         log "The run's own login, ${CLAUDE_LOGIN}, writes the results email first."
+    elif [ -n "$CLAUDE_LOGIN_FAILURE" ]; then
+        email_failed "$RESEARCHER_CLAUDE_LOGIN" "$CLAUDE_LOGIN_FAILURE"
     fi
     if read_report_logins; then
         for entry in ${REPORT_LOGINS[@]+"${REPORT_LOGINS[@]}"}; do
             IFS=$'\t' read -r kind name config_dir <<< "$entry"
-            [ "$name" = "$CLAUDE_LOGIN" ] || writers+=("$entry")
+            [ "$name" = "${RESEARCHER_CLAUDE_LOGIN:-}" ] || writers+=("$entry")
         done
     fi
     for entry in ${writers[@]+"${writers[@]}"}; do

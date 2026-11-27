@@ -165,7 +165,7 @@ run_step() {
     # while this run's external jobs were running and they have since finished
     # (at most JOB_WAIT_MAX_REFUNDS times): then the attempt is made again.
     local spent=0 refunds=0 attempt
-    local exit_code new_step new_status run_log incomplete evidence_pid
+    local exit_code new_step new_status run_log incomplete evidence_pid retained_data_only
     STEP_JOB_WAITED=0
     while [ "$spent" -lt "$STEP_MAX_ATTEMPTS" ]; do
         attempt=$((spent + 1))
@@ -208,12 +208,10 @@ run_step() {
             set_review_hold "No approval for the current methods. Review the changed design before further execution."
             return 2
         fi
+        retained_data_only=false
         if [ "$step" = "$AUDIT_STEP" ] && has_experiment_results && ! review_run verify; then
-            log "Prospective approval could not be verified. Skipping active audit and remediation; reviewing retained evidence only."
-            set_state_field audit_exit_reason unverified-prospective-methods
-            set_state_field current_step "$AUDIT_STEP"
-            set_status audit_complete
-            return 0
+            log "Prospective methods approval could not be verified. Running a retrospective audit of retained data only."
+            retained_data_only=true
         fi
         if [ "$step" = "$REPORT_STEP" ] && ! review_evidence; then
             set_review_hold "The independent evidence review could not run. Resume the report once the reviewer is available."
@@ -228,7 +226,7 @@ run_step() {
         fi
         cd "$REPO_DIR"
         set +e
-        run_step_provider "$step" 2>&1 | tee "$run_log"
+        run_step_provider "$step" "$retained_data_only" 2>&1 | tee "$run_log"
         exit_code=${PIPESTATUS[0]}
         set -e
         if [ -n "$evidence_pid" ] && ! wait "$evidence_pid"; then
@@ -251,17 +249,17 @@ run_step() {
         # own final line. Scanning the whole transcript would misread a run that
         # merely *writes about* rate limits (e.g. authoring retry logic) as a
         # pause, and such a step would then loop forever, never failing.
-        # Both known CLI forms count: the human one ("You've hit your session
-        # limit · resets 8pm") and the headless one ("Claude AI usage limit
-        # reached|1754060400"). Neither the exit code nor a reset clause is
-        # required: the CLI can print the notice and still exit 0.
+        # The CLI reports session and weekly caps as "You've hit your ...
+        # limit", and may also print "Claude AI usage limit reached|1754060400".
+        # Neither the exit code nor a reset clause is required: the CLI can
+        # print the notice and still exit 0.
         # Transient "rate limit exceeded" errors are deliberately excluded:
         # those are retryable, and the retry loop is the right response.
         # Detected BEFORE the success gate: a notice with exit 0 must never
         # pass for a completed audit round (the audit keeps current_step at AUDIT_STEP).
         local last_line limit_hit=false
         last_line=$({ grep -v '^[[:space:]]*$' "$run_log" || true; } | tail -1)
-        if printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage) limit\b|(Claude )?(AI )?[Uu]sage limit reached\b)"; then
+        if printf '%s\n' "$last_line" | grep -qE "^[[:space:]]*(You've hit your (session|usage|weekly) limit\b|(Claude )?(AI )?[Uu]sage limit reached\b)"; then
             limit_hit=true
         fi
 

@@ -75,7 +75,7 @@ RUN_OWNER=""
 ALLOW_CONFIG_CHANGE="${RESEARCHER_ALLOW_CONFIG_CHANGE:-false}"
 ALLOW_BACKEND_SWITCH="${RESEARCHER_ALLOW_BACKEND_SWITCH:-false}"
 restore_run_settings "$RUN_DIR"
-select_backend
+select_backend report
 runtime_limits
 email_settings
 HOST_ALIAS=$(resolve_host_alias) || exit 2

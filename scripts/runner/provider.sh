@@ -16,6 +16,8 @@ select_backend() {
     # backend, since Codex may write the results email of a Claude run. Exits 2
     # for an unknown backend, a Codex run on a Claude login
     # (codex_without_claude_login), and a login use_claude_login refuses.
+    # In report mode, a saved login that cannot write is recorded as a failed
+    # writer. The report still describes the model and login that ran.
     BACKEND="$RESEARCHER_BACKEND"
     CODEX_BIN="$RESEARCHER_CODEX_BIN"
     CODEX_FAST_MODEL="$RESEARCHER_CODEX_FAST_MODEL"
@@ -27,8 +29,8 @@ select_backend() {
         claude)
             PROVIDER_BIN="$RESEARCHER_CLAUDE_BIN"
             MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CLAUDE_MODEL}"
-            use_claude_login
-            AGENT_LABEL="Claude ${MODEL}${CLAUDE_LOGIN:+ (login ${CLAUDE_LOGIN})}"
+            use_claude_login "${1:-launch}" || exit 2
+            AGENT_LABEL="Claude ${MODEL}${RESEARCHER_CLAUDE_LOGIN:+ (login ${RESEARCHER_CLAUDE_LOGIN})}"
             CONTINUE_COMMAND="/researcher-continue"
             COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
             ;;
@@ -97,11 +99,12 @@ use_claude_login() {
     # with a model of its own, MODEL becomes that model: researcher_lib.py
     # claude-login refuses a RESEARCHER_MODEL or RESEARCHER_CLAUDE_MODEL that
     # this launch sets to another model (given_by_launch), and replaces one the
-    # configuration file or the run's saved settings gave, saying so. Exits 2,
-    # saying why, when the name is not a plain word, the lookup fails or the
-    # login is refused.
-    local name="${RESEARCHER_CLAUDE_LOGIN:-}" usage found out setting given=()
+    # configuration file or the run's saved settings gave, saying so. Returns
+    # 2 on rejection at launch. In report mode a rejected writer is skipped,
+    # with CLAUDE_LOGIN_FAILURE describing why.
+    local mode="${1:-launch}" name="${RESEARCHER_CLAUDE_LOGIN:-}" usage found out setting saved_model writer_model given=()
     CLAUDE_LOGIN=""
+    CLAUDE_LOGIN_FAILURE=""
     CLAUDE_LOGIN_DIR=""
     CLAUDE_LOGIN_MODEL=""
     CLAUDE_LOGIN_ARGS=()
@@ -109,23 +112,38 @@ use_claude_login() {
     [ -n "$name" ] || return 0
     if ! [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
         echo "ERROR: RESEARCHER_CLAUDE_LOGIN must be the name of a Claude login (letters, digits, '_', '.' and '-'), got '${name}'." >&2
-        exit 2
+        return 2
     fi
-    usage=$(mailroom_tool agent-usage)
-    if [ ! -x "$usage" ]; then
-        echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: the login is looked up with the mailroom's agent-usage, and ${usage} is not installed." >&2
-        exit 2
-    fi
-    if ! found=$("$usage" login "$name" --json); then
-        echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: '${usage} login ${name} --json' failed (its error is above), so the run cannot run on that login." >&2
-        exit 2
+    saved_model=""
+    if [ "$mode" = report ] && [ -f "${RUN_DIR}/run-config.json" ]; then
+        saved_model=$(jq -r --arg name "$name" 'select(.resolved.claude_login == $name) | .resolved.model // empty' \
+            "${RUN_DIR}/run-config.json") || return 2
+        MODEL="${saved_model:-$MODEL}"
     fi
     for setting in RESEARCHER_MODEL RESEARCHER_CLAUDE_MODEL; do
         if given_by_launch "$setting"; then
             given+=(--given "${setting}=${!setting}")
         fi
     done
-    out=$(python3 "$LIB" claude-login --name "$name" --model "$MODEL" ${given[@]+"${given[@]}"} <<< "$found") || exit 2
+    usage=$(mailroom_tool agent-usage)
+    if [ ! -x "$usage" ]; then
+        echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: the login is looked up with the mailroom's agent-usage, and ${usage} is not installed." >&2
+        CLAUDE_LOGIN_FAILURE="agent-usage is not installed"
+    elif ! found=$("$usage" login "$name" --json); then
+        echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: '${usage} login ${name} --json' failed (its error is above), so the run cannot run on that login." >&2
+        CLAUDE_LOGIN_FAILURE="the saved login could not be looked up"
+    elif ! out=$(python3 "$LIB" claude-login --name "$name" --model "$MODEL" ${given[@]+"${given[@]}"} <<< "$found"); then
+        CLAUDE_LOGIN_FAILURE="the login configuration was rejected"
+    else
+        writer_model=$(jq -r '.model' <<< "$out") || return 2
+        if [ -n "$saved_model" ] && [ "$writer_model" != "$saved_model" ]; then
+            CLAUDE_LOGIN_FAILURE="the login now runs ${writer_model}; the run used ${saved_model}"
+        fi
+    fi
+    if [ -n "$CLAUDE_LOGIN_FAILURE" ]; then
+        [ "$mode" = report ] && return 0
+        return 2
+    fi
     CLAUDE_LOGIN="$name"
     CLAUDE_LOGIN_DIR=$(jq -r '.config_dir' <<< "$out")
     CLAUDE_LOGIN_MODEL=$(jq -r '.fixed_model' <<< "$out")
@@ -134,7 +152,7 @@ use_claude_login() {
     if [ -n "$(jq -r '.replaced' <<< "$out")" ]; then
         log "The Claude login ${name} runs only ${CLAUDE_LOGIN_MODEL}: the run uses it in place of $(jq -r '.replaced' <<< "$out"), the model its configured or saved settings name."
     fi
-    MODEL=$(jq -r '.model' <<< "$out")
+    MODEL="$writer_model"
 }
 
 login_environment() {
@@ -179,7 +197,7 @@ build_runtime_header() {
 # Injected Runtime Configuration
 
 - Agent backend: ${BACKEND}
-- Parent model: ${MODEL}${CLAUDE_LOGIN:+ (on the Claude login ${CLAUDE_LOGIN})}
+- Parent model: ${MODEL}${RESEARCHER_CLAUDE_LOGIN:+ (on the Claude login ${RESEARCHER_CLAUDE_LOGIN})}
 - Plugin root: ${REPO_DIR}
 - Run output root: ${OUTPUT_DIR}
 - Global knowledge base: ${KB_DIR:-none (this run is not using one)}
@@ -212,8 +230,11 @@ render_command() {
 }
 
 build_step_prompt() {
-    local step="$1"
+    local step="$1" retained_data_only="$2"
     build_runtime_header
+    if [ "$retained_data_only" = true ]; then
+        printf '\n%s\n' '- Audit mode: retained data only (prospective methods approval could not be verified).'
+    fi
     if [ "$BACKEND" = "codex" ]; then
         build_codex_preamble
     fi
@@ -345,8 +366,7 @@ invoke_provider() {
 }
 
 run_step_provider() {
-    local step="$1"
-    build_step_prompt "$step" | invoke_provider
+    build_step_prompt "$@" | invoke_provider
 }
 
 build_next_steps_prompt() {

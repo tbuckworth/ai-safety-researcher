@@ -61,6 +61,12 @@ Read the approved plan and the execution section of `docs/SCIENTIFIC-REPORTING.m
 
    Run the approved split overlap, comparator readiness and rival-explanation checks from `templates/preflight.md` at the stages prescribed by the plan. Run the known-answer fixture before the expensive workload. Establish convergence from the prespecified per-arm validation criterion and curves when the claim requires it. The loss sanity command checks for pathologies and cannot establish convergence.
 
+   For a measurement repair, use only the measurement inputs the hub authorizes,
+   leave original measurements intact, and write the new result in the repair
+   directory. Treat malformed grader responses as invalid or missing.
+   Count them and apply the approved missingness rule. Never score a label
+   guessed from a partial, malformed or coerced response.
+
    A check that fails and cannot be fixed within the budget makes the verdict `INCONCLUSIVE`: the experiment cannot answer its question, and that is what you report.
 
 5. **Run the experiment**:

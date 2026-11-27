@@ -76,10 +76,11 @@ class Packet:
         path = run / name
         if not path.resolve().is_relative_to(run) or not path.is_file():
             raise ValueError(f"missing or external review input: {name}")
+        is_log = path.name in {"run.log", "original-run.log"}
         with path.open("rb") as source:
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg"} or path.name == "run.log":
+            if path.suffix.lower() in {".png", ".jpg", ".jpeg"} or is_log:
                 self.hashes[name] = file_digest(source)
-                if path.name != "run.log":
+                if not is_log:
                     self.figures.append(path)
                     return
                 source.seek(0)
@@ -93,9 +94,9 @@ class Packet:
             else:
                 data = source.read()
                 self.hashes[name] = digest(data)
-        text = data.decode("utf-8", errors="replace" if path.name == "run.log" else "strict")
+        text = data.decode("utf-8", errors="replace" if is_log else "strict")
         if not text.strip():
-            if path.name in {"preflight.md", "run.log", "results.md"}:
+            if path.name.removeprefix("original-") in {"preflight.md", "run.log", "results.md"}:
                 text = "[This file is empty. It supplies no evidence.]"
             else:
                 raise ValueError(f"empty review input: {name}")
@@ -154,6 +155,10 @@ def packet(run: Path, phase: str) -> Packet:
                     required.append(relative)
                 else:
                     p.documents[relative] = "[Missing from this run; the corresponding checks cannot be verified.]"
+        repair = "audit/measurement-repair"
+        optional.extend(f"{repair}/{name}" for name in ("experiment", "methods-revision", "original-results.md",
+                        "original-preflight.md", "original-run.log", "original-audit.md",
+                        "results.md", "preflight.md", "run.log"))
         optional.extend(str(f.relative_to(run)) for f in sorted(run.glob("prior/experiments/exp-*/results.md")))
     if phase == "presentation":
         if completed:

@@ -568,6 +568,20 @@ output/<date>-followup-<slug>/
 └── ...                         # Other artifacts as normal
 ```
 
+## Measurement repairs after fail-fast
+
+An inconclusive prerequisite can receive one repair per run when the auditor
+identifies a defect and the current approved experiment plan explicitly
+permits the remedy. The hub checks the remaining time, experiment slots
+and approved budget. Fresh measurements require a procedure already covered
+by the approved plan. A genuine negative goes directly to the report.
+
+Step 10 saves the original result and pre-flight, and stages the repair
+under `audit/measurement-repair/`. A retry can recover an existing attempt.
+The re-audited result replaces the experiment's standard result.
+A verified PASS makes Step 9 resume the remaining approved experiments.
+A verified FAIL stops the sequence and is reported alongside the original.
+
 ## The results email
 
 The email leads with what the reviewed evidence changes for the original research question. A pilot, an inconclusive primary comparison and a decision to stop can coexist in the first paragraph. When asking the recipient for a decision, the writer adds one agent-mail choices object in `email-choices.json`. The helper appends it to the plain report and lets the Mail tab render buttons. Informational mail uses the HTML draft.

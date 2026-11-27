@@ -407,7 +407,12 @@ If `state.md` contains `is_followup: true`:
 
 1. Read `methods-order.json` and the approved plan files. This guard also applies when invoked directly outside the cron wrapper.
 
-2. For each experiment in lambda order:
+2. For each experiment in lambda order, skip any with a completed result. On
+   resumption, inspect any `started` experiment lacking a result. Recover a
+   matching live job or its output and do not launch a duplicate. After an
+   accepted measurement repair, use its re-audited verdict for the prerequisite
+   and continue with the remaining approved experiment IDs in the original order.
+   Each new launch still requires the current approval and remaining budget.
    a. Before each launch run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" verify RUN` and mark `experiments/<id>/started`. Stop before dispatch if verification fails. A material change returns to Steps 6–8; never rebuild the approved plan from state.md.
    b. **Spawn experiment agent**:
       ```
@@ -433,7 +438,7 @@ If `state.md` contains `is_followup: true`:
    - Stop further experiments. (An INCONCLUSIVE load-bearing experiment means later ones would rest on an unvalidated pipeline.)
    - Record the result details in state.md (for INCONCLUSIVE, the failed pre-flight check and what fixing it would take).
    - Set `status: experiments_done_with_failure`.
-   - The wrapper advances to Step 10 (audit); the auditor triages whether the FAIL is a genuine null or a botched run, then Step 11 compiles whatever results exist.
+   - The wrapper advances to Step 10 for triage and any authorized measurement repair.
 
 4. **On PASS**:
    - Continue to next experiment in lambda order.
@@ -454,9 +459,50 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
 2. **Prospective methods approval cannot be verified.** If the runtime header specifies retained data only, or `verify RUN` fails when invoking this step directly, commission both reviews below on retained artifacts. Ask the results-auditor to read existing records only. Do not run or rerun experiments, submit jobs, generate new empirical evidence, or edit the retained experiment artifacts. Label the audit retrospective in `audit/results-audit.md`, identify the missing or stale prospective approval, and qualify or withhold claims the retained records cannot establish. After reconciling the two reviews, record `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: unverified-prospective-methods` atomically and proceed to the report.
 
-3. **`status: experiments_done_with_failure` with verified methods** (a fail-fast stop): run a single audit pass, including the independent evidence check below, to triage the result as a genuine `TRUE-NULL` or a botched run. Proceed directly to the report. Write `current_step: 10, status: audit_complete, audit_exit_reason: <true-null | botched-run-noted>`.
+3. **`status: experiments_done_with_failure` with verified methods** (a fail-fast stop): complete the
+   read-only active audit and independent evidence review before any repair.
+   A genuine `TRUE-NULL` or valid FAIL goes to Step 11. For an inconclusive
+   measurement, follow the bounded repair procedure below only if the auditor
+   identifies a specific defect and the verified plan explicitly authorizes
+   the remedy. Otherwise record `current_step: 10, status: audit_complete,
+   audit_exit_reason: <true-null | botched-run-noted>`.
+
+### One measurement repair after a fail-fast stop
+
+- Require a specific measurement defect in the auditor's report and an
+  inconclusive experiment. Run `methods_review.py verify RUN` and record the
+  approved plan passage authorizing the remedy, remaining slots, time and
+  budget, and estimated repair cost. Use the approved measurement procedure.
+  A new scientific question, unapproved fresh data or a material increase in
+  spend requires approval. Never tune a repair against an exposed test set.
+- Before dispatch run
+  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/measurement_repair.py" RUN --reserve EXP`.
+  Only success authorizes a new attempt. The helper preserves the initial
+  summary, pre-flight, run log and audit. Leave the original raw observations,
+  setup and claim anchor intact. On resume, recover a matching job or its
+  output. An existing reservation never authorizes a second launch.
+- Give one experiment worker the approved remedy, defect class, remaining
+  resources and a separate output directory, `audit/measurement-repair/`.
+  Use the ordinary result and pre-flight format and save the raw measurement
+  records and run log there. Treat malformed grader responses as invalid or
+  missing. Count them and apply the approved missingness rule. Never score a
+  partial, guessed or coerced label.
+- Re-audit the corrected measurement against the original criterion before
+  resuming anything. Run the active auditor in read-only mode and the existing
+  `methods_review.py evidence RUN` on the corrected artifacts. Record the
+  updated audit. If both reviews verify the measurement, run
+  `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/measurement_repair.py" RUN` to install
+  the re-audited result and print its verdict. Only PASS returns to Step 9
+  (write `current_step: 8, status: measurement_repair_accepted` atomically).
+  An audited FAIL, rejected or inconclusive repair, or no recoverable output
+  goes to the report. Explain the original defect and what the repair found.
 
 ### Audit round (≥1 experiment)
+
+If an earlier measurement repair was accepted, give the auditors both attempts.
+The experiment's standard result carries the re-audited verdict, and the
+original result remains under `audit/measurement-repair/`. Check later work's
+dependency on the repaired prerequisite.
 
 1. `mkdir -p <run-dir>/audit/`. Read `audit_round` from state.md (default 0); this round is `n = audit_round + 1`.
 
@@ -487,7 +533,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
    - **NEEDS-REMEDIATION**:
      - If `n >= R_MAX` **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
-     - Otherwise: only rerun if the approved plan covers this correction and `verify RUN` succeeds immediately before dispatch. A material change requires a prospective amendment through Steps 6–8; preserve prior outcomes, outstanding experiment IDs and the exposure of the earlier data. Stop if the budget or revision limit is reached. Re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
+     - Otherwise: the normal audit loop must not launch a measurement repair. For other approved repeats, only rerun if the approved plan covers this correction and `verify RUN` succeeds immediately before dispatch. A material change requires a prospective amendment through Steps 6–8; preserve prior outcomes, outstanding experiment IDs and the exposure of the earlier data. Stop if the budget or revision limit is reached. Re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
 
 ### Atomicity
 
@@ -496,6 +542,11 @@ An independent **results-auditor** red-teams the experiment outputs before write
 ---
 
 ## Step 11: Compile Research Report
+
+If Step 10 attempted a measurement repair, read the original and corrected
+records in `audit/measurement-repair/` and the audit disposition. Report any
+re-audited verdict in the experiment's standard result and explain why the
+original measurement was inconclusive.
 
 1. **Spawn report agent**:
    ```

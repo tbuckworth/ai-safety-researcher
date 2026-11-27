@@ -36,7 +36,9 @@ def report_logins(agent_usage: Path, environ: dict[str, str]) -> dict:
 
     `agent_usage` is the installed mailroom's agent-usage, whose checkout holds the agentmail package
     (as all-hands-weekly finds it). `unset` names the variables of `environ` a child CLI must not
-    inherit (agentmail.accounts.CLAUDE_ENV_DROP: another session's id, login or API key);
+    inherit: those the mailroom drops (agentmail.accounts.CLAUDE_ENV_DROP: another session's id,
+    login or API key), and those of researcher_lib.CLAUDE_LOGIN_ENV (another login's endpoint and
+    models, which a mailroom that predates logins with a settings file of their own keeps);
     `config_dir` is the Claude login's CLAUDE_CONFIG_DIR, empty for the default login and for Codex.
     The API key the mailroom tries last is left out (its secret name is cleared for this call, so its
     token is never read): it bills per token, and a report with no model costs nothing. Raises
@@ -47,7 +49,7 @@ def report_logins(agent_usage: Path, environ: dict[str, str]) -> dict:
         sys.path.insert(0, root)
     from agentmail import config, headless  # the mailroom's package, at `root`
 
-    logins, drop = [], set()
+    logins, drop = [], set(lib.login_env(environ))
     cfg = dict(config.load(), orchestrator_fallback_secret="")
     for name, _command, env in headless.logins(cfg, ["claude"], environ, ["codex"]):
         if name == headless.API_KEY:

@@ -124,6 +124,7 @@ numeric settings, checked at startup (exit 2 unless a whole number of at least 1
 |---------|---------|
 | `RESEARCHER_BACKEND` | Parent CLI and issue-label namespace |
 | `RESEARCHER_CLAUDE_MODEL` | Claude parent model |
+| `RESEARCHER_CLAUDE_LOGIN` | The agent mailroom's Claude login every Claude session of a Claude run runs on (default: unset, the login the runner's environment gives); see [A run on a Claude login](#a-run-on-a-claude-login) |
 | `RESEARCHER_REVIEW_MODEL` | Independent Codex reviewers and the automatic methods approver on either backend |
 | `RESEARCHER_REVIEW_REASONING` | Reasoning effort for those reviewers |
 | `RESEARCHER_CODEX_MODEL` | Codex parent/deep-worker model |
@@ -132,7 +133,7 @@ numeric settings, checked at startup (exit 2 unless a whole number of at least 1
 | `RESEARCHER_CODEX_FAST_REASONING` | Codex search-worker effort |
 | `RESEARCHER_CODEX_DEEP_MODEL` | Codex workers for the non-search tasks listed below (default: the parent model) |
 | `RESEARCHER_CODEX_DEEP_REASONING` | Reasoning effort for those workers (default: the parent's) |
-| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes a Codex run's results email on each Claude login (a Claude run uses its own model); Codex writes it on `RESEARCHER_CODEX_FAST_MODEL` |
+| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes the results email on each Claude login of the mailroom's order, for a Codex run or a run whose login runs only its own model (any other Claude run uses its own model); Codex writes it on `RESEARCHER_CODEX_FAST_MODEL` |
 | `RESEARCHER_MODEL` | Overrides the selected backend's model, `RESEARCHER_CLAUDE_MODEL` or `RESEARCHER_CODEX_MODEL` (default: unset) |
 
 The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
@@ -148,6 +149,44 @@ corresponding gate incomplete.
 
 A resumed run keeps the backend and models it started with; see
 [Resuming a run](#resuming-a-run).
+
+### A run on a Claude login
+
+`RESEARCHER_CLAUDE_LOGIN` names one of the agent mailroom's Claude logins for a
+Claude run, for example one that runs a model billed per token through a
+settings file of its own:
+
+```bash
+RESEARCHER_CLAUDE_LOGIN=gemini ./scripts/researcher-cron.sh "Does gradient masking affect sleeper agent detection?"
+```
+
+- The runner looks the login up once, at startup, with the mailroom's
+  `agent-usage login <name> --json`, which holds its config dir, settings file,
+  model and options; if that fails, the runner exits 2.
+- Every Claude session of the run (each step, the next-steps session, and the
+  results email, which it writes first) runs with `CLAUDE_CONFIG_DIR` at the
+  login's config dir (unset for the default login) and the login's options
+  after the runner's own (`--settings <file>`, and `--model <model>` when it has
+  one). A session drops the variables of another login the runner inherited
+  (`CLAUDE_LOGIN_ENV` in `scripts/researcher_lib.py`: a config dir, a token, an
+  endpoint, models), as every writer of the email does.
+- A login with a model of its own runs only that model (a Claude model fails
+  every request there), and it becomes the run's model. A `RESEARCHER_MODEL` or
+  `RESEARCHER_CLAUDE_MODEL` that the launch's environment sets to another model
+  exits 2. One that the launch does not set, taken from `config/researcher.env`
+  or, on a resume, from the run's saved settings, is replaced, and the log says
+  so. This is how a resume tells a setting the launch gives from one it takes
+  ([Resuming a run](#resuming-a-run)).
+- A Codex run runs on no Claude login. A launch that sets the login for one
+  exits 2. A login the run's saved settings give is dropped when a resume
+  switches the run to Codex: the leave that accepts the switch accepts the
+  drop, which the log and `changes` in `run-config.json` record (and
+  `state.md` then has `agent_login: none`). One from
+  `config/researcher.env` is for Claude runs only. The independent Codex
+  reviewers are the same on every run (`RESEARCHER_REVIEW_MODEL`).
+- The login appears next to the model: `agent_login:` in `state.md`, and
+  `Claude <model> (login <name>)` in the startup line, the email, the issue
+  comment and the run repository's README.
 
 ### Codex execution controls
 
@@ -256,21 +295,24 @@ the profile states.
 
 A run saves its settings in `run-config.json` in its directory, which is
 published with it. `settings` holds the value (or null) of each run setting, the
-variables `researcher_lib.py run-settings` lists (the backend, models and Codex
-settings, the email model, the compute profile and budget, the job-wait
-command, the knowledge base, and the limits); `resolved` holds what they came
-to (the model, the profile's text and preset name, the job-wait command, the
-knowledge base); `launches` lists every launch with its start, timeout, owner
-and the plugin's commit; `changes` lists the settings resumes changed.
+variables `researcher_lib.py run-settings` lists (the backend, models, Claude
+login and Codex settings, the email model, the compute profile and budget, the
+job-wait command, the knowledge base, and the limits); `resolved` holds what
+they came to (the model, the Claude login, the profile's text and preset name,
+the job-wait command, the knowledge base); `launches` lists every launch with
+its start, timeout, owner and the plugin's commit; `changes` lists the settings
+resumes changed.
 
 A resumed run takes each setting its launch does not set from `run-config.json`,
 not from the configuration or the resuming shell. A setting the launch gives
 with another value is a change, which only the run's owner (a launch whose
 `RESEARCHER_OWNER` is the run's `owner:`; agent-board's agent-spare raises a
 run's budget this way) or `RESEARCHER_ALLOW_CONFIG_CHANGE=true` may make, and
-`RESEARCHER_ALLOW_BACKEND_SWITCH=true` for the backend alone. The runner logs
-an accepted change and adds it to `changes`; it refuses any other one, naming
-the setting, and exits 2. A run that predates `run-config.json` keeps the
+`RESEARCHER_ALLOW_BACKEND_SWITCH=true` for the backend alone (a switch to
+Codex also drops the run's Claude login; see
+[A run on a Claude login](#a-run-on-a-claude-login)). The runner logs an
+accepted change and adds it to `changes`; it refuses any other one, naming the
+setting, and exits 2. A run that predates `run-config.json` keeps the
 backend in its `state.md` and takes its other settings from the launch that
 first resumes it, which then records them.
 
@@ -380,7 +422,7 @@ never fails a step.
 |------|---------|
 | 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
 | 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written, the picked issue could not be re-read before claiming it, `nvidia-smi` failed) |
-| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a malformed `config/researcher.env` or a key missing from it, a paid compute profile without a budget, a resume that changes a saved setting without leave, a `RESEARCHER_RUN_DIR` that is not resumable) |
+| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a malformed `config/researcher.env` or a key missing from it, a paid compute profile without a budget, a resume that changes a saved setting without leave, a `RESEARCHER_RUN_DIR` that is not resumable, a `RESEARCHER_CLAUDE_LOGIN` that cannot be looked up, does not run the model the launch sets, or is set by the launch of a Codex run) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |
 | 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then; `undelivered:` in `state.md` names the failed deliverables (or `none`) whatever the exit code |
@@ -532,21 +574,26 @@ The email leads with what the reviewed evidence changes for the original researc
 
 The email goes to `RESEARCHER_EMAIL_TO` from the agents' mail account, like
 every agent's mail, never from the recipient's own Gmail. It is written by the
-first writer that can, in the agent mailroom's own login order (`agent-usage`;
+first writer that can: the run's own Claude login, when it has one
+(`RESEARCHER_CLAUDE_LOGIN`, on the run's model and with the login's options),
+then the agent mailroom's own login order without that login (`agent-usage`;
 the mailroom's README, "The login and model order"), which on the desktop is
 the personal Claude login, then the Arrow login, then Codex. The mailroom's
-paid API key is never used.
+paid API key is never used. No writer takes the variables of another login
+from the runner's environment (`CLAUDE_LOGIN_ENV` in
+`scripts/researcher_lib.py`, and what the mailroom drops).
 
-- **On a Claude login**, a session (`RESEARCHER_EMAIL_CLAUDE_MODEL` for a Codex
-  run) writes it and sends it itself with `scripts/send-results-email.sh
-  <run-dir>`, which calls `agent-mail send`. The pre-send review applies: if it
-  prints `agent-mail: NOT SENT` (exit 3), the session fixes what it lists and
-  runs the helper once more, and that send goes out whatever the review says.
-  The recipient's reply comes back to that session: the wrapper gives it a
-  known id (`claude --session-id`), and the mailroom resumes it on a reply, on
-  whichever login holds it, in the plugin directory, with the run's context. A
-  session that stops without sending has its draft sent by the wrapper as that
-  session.
+- **On a Claude login**, a session (on a login of the mailroom's order,
+  `RESEARCHER_EMAIL_CLAUDE_MODEL` for a Codex run or a run whose login runs
+  only its own model) writes it and sends it itself with
+  `scripts/send-results-email.sh <run-dir>`, which calls `agent-mail send`.
+  The pre-send review applies: if it prints `agent-mail: NOT SENT` (exit 3),
+  the session fixes what it lists and runs the helper once more, and that send
+  goes out whatever the review says. The recipient's reply comes back to that
+  session: the wrapper gives it a known id (`claude --session-id`), and the
+  mailroom resumes it on a reply, on whichever login holds it, in the plugin
+  directory, with the run's context. A session that stops without sending has
+  its draft sent by the wrapper as that session.
 - **On Codex**, Codex (`RESEARCHER_CODEX_FAST_MODEL`) only writes it, and the
   wrapper sends it `--unrouted`: not reviewed, and replies go to the
   orchestrator.

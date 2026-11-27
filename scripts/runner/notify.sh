@@ -13,8 +13,9 @@ email_settings() {
     # Sets the globals of the results email: EMAIL_TO (RESEARCHER_EMAIL_TO, an
     # address or agent-mail's `titus`), SEND_EMAIL (the helper that sends a
     # draft), REPORT_LIB, the mailroom's commands (AGENT_MAIL, AGENT_USAGE,
-    # AGENT_STATUS; mailroom_tool), the Claude writer's CLI and model (a Claude
-    # run's own model, else RESEARCHER_EMAIL_CLAUDE_MODEL) and each writer's
+    # AGENT_STATUS; mailroom_tool), the Claude writers' CLI and the model of
+    # those of the mailroom's order (a Claude run's own model, unless its login
+    # runs only its own, else RESEARCHER_EMAIL_CLAUDE_MODEL) and each writer's
     # time limit, EMAIL_TIMEOUT_SECONDS. Needs select_backend first; exits 2,
     # saying why, when a setting is missing or the time limit is not a whole
     # number of at least 1.
@@ -31,7 +32,8 @@ email_settings() {
     AGENT_USAGE=$(mailroom_tool agent-usage)
     AGENT_STATUS=$(mailroom_tool agent-status)
     EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
-    if [ "$BACKEND" = "claude" ]; then
+    # Another login cannot run the model of a login that runs only its own.
+    if [ "$BACKEND" = "claude" ] && [ -z "$CLAUDE_LOGIN_MODEL" ]; then
         EMAIL_CLAUDE_MODEL="$MODEL"
     else
         EMAIL_CLAUDE_MODEL="$RESEARCHER_EMAIL_CLAUDE_MODEL"
@@ -41,8 +43,10 @@ email_settings() {
 # shellcheck disable=SC2034 # EMAIL_WRITER is read by researcher-cron.sh.
 send_email() {
     # The results email, from the agents' mail account (agent-mail), never from
-    # the recipient's own Gmail. It is written by the first writer that can, in
-    # the mailroom's login order (read_report_logins): on a Claude login, a
+    # the recipient's own Gmail. It is written by the first writer that can:
+    # the run's own Claude login (CLAUDE_LOGIN), if it has one, on the run's
+    # model and with the login's options, then the mailroom's login order
+    # (read_report_logins) without that login: on a Claude login, a
     # session writes it and sends it itself (reviewed; Titus's reply comes back
     # to it); on Codex, Codex writes it and it is sent unrouted (no review,
     # replies go to the orchestrator). A writer that fails, a usage limit or a
@@ -54,23 +58,31 @@ send_email() {
     # run, so that a reply resumes the session there. Sets EMAIL_WRITER (who
     # wrote what went out); returns non-zero, after logging why, only when
     # nothing was sent.
-    local entry kind name config_dir RUN_LABEL="run ${RUN_ID}"
+    local entry kind name config_dir writers=() RUN_LABEL="run ${RUN_ID}"
     EMAIL_FAILURES=()
     EMAIL_WRITER=""
     if [ -n "$(issue_url)" ]; then
         RUN_LABEL="run ${RUN_ID} for #${ISSUE_NUMBER}"
     fi
     cd "$CONTINUE_DIR"
+    if [ -n "$CLAUDE_LOGIN" ]; then
+        writers+=("login"$'\t'"${CLAUDE_LOGIN}"$'\t'"${CLAUDE_LOGIN_DIR}")
+        log "The run's own login, ${CLAUDE_LOGIN}, writes the results email first."
+    fi
     if read_report_logins; then
         for entry in ${REPORT_LOGINS[@]+"${REPORT_LOGINS[@]}"}; do
             IFS=$'\t' read -r kind name config_dir <<< "$entry"
-            if write_email_with "$kind" "$name" "$config_dir"; then
-                EMAIL_WRITER="$name"
-                note_status "Results email for ${RUN_LABEL} sent (outcome ${FINAL_OUTCOME}), written on the ${name} login$(failures_note)."
-                return 0
-            fi
+            [ "$name" = "$CLAUDE_LOGIN" ] || writers+=("$entry")
         done
     fi
+    for entry in ${writers[@]+"${writers[@]}"}; do
+        IFS=$'\t' read -r kind name config_dir <<< "$entry"
+        if write_email_with "$kind" "$name" "$config_dir"; then
+            EMAIL_WRITER="$name"
+            note_status "Results email for ${RUN_LABEL} sent (outcome ${FINAL_OUTCOME}), written on the ${name} login$(failures_note)."
+            return 0
+        fi
+    done
     if [ "${#EMAIL_FAILURES[@]}" -eq 0 ]; then
         EMAIL_FAILURES+=("the mailroom's login order names no login")
     fi
@@ -136,8 +148,9 @@ failures_note() {
 }
 
 write_email_with() {
-    # write_email_with KIND NAME CONFIG_DIR: the email written by one writer of
-    # the login order (KIND claude or codex; NAME the login; CONFIG_DIR a Claude
+    # write_email_with KIND NAME CONFIG_DIR: the email written by one writer
+    # (KIND login for the run's own Claude login, claude for a Claude login of
+    # the mailroom's order, or codex; NAME the login; CONFIG_DIR a Claude
     # login's config dir) and sent. A Claude session that stops without sending
     # has its draft sent as that session; a Codex draft goes unrouted. Returns 0
     # when it went (or the review holds it: the mailroom then sends it after its
@@ -149,9 +162,14 @@ write_email_with() {
     EMAIL_SESSION=$(python3 -c 'import uuid; print(uuid.uuid4())')
     set +e
     case "$kind" in
+        login)
+            log "Writing and sending the results email with Claude ${MODEL} on the ${name} login (session ${EMAIL_SESSION})..."
+            run_email_claude "$config_dir" "$MODEL" ${CLAUDE_LOGIN_ARGS[@]+"${CLAUDE_LOGIN_ARGS[@]}"} 2>&1 | tee "$email_log"
+            rc=${PIPESTATUS[0]}
+            ;;
         claude)
             log "Writing and sending the results email with Claude ${EMAIL_CLAUDE_MODEL} on the ${name} login (session ${EMAIL_SESSION})..."
-            run_email_claude "$config_dir" 2>&1 | tee "$email_log"
+            run_email_claude "$config_dir" "$EMAIL_CLAUDE_MODEL" 2>&1 | tee "$email_log"
             rc=${PIPESTATUS[0]}
             ;;
         codex)
@@ -179,7 +197,7 @@ write_email_with() {
         clear_email_draft
         return 1
     fi
-    if [ "$kind" = claude ]; then
+    if [ "$kind" != codex ]; then
         log "The email session stopped without sending; sending its draft as that session."
         send_draft "$name" session
     else

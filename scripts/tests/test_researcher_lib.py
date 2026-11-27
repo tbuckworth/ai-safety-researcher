@@ -687,6 +687,83 @@ class RunConfigTest(unittest.TestCase):
             self.assertEqual(out["restore"]["RESEARCHER_BACKEND"], "claude")
             self.assertEqual(out["changes"][0]["to"], "local")
 
+    def test_the_claude_login_is_a_run_setting(self):
+        saved = dict(self.SAVED, RESEARCHER_CLAUDE_LOGIN="gemini")
+        restore, _ = lib.resume_settings(saved, {}, change_allowed_by=None, backend_switch_allowed=False)
+        self.assertEqual(restore["RESEARCHER_CLAUDE_LOGIN"], "gemini")
+        with self.assertRaises(lib.SettingChangeRefused) as refused:
+            lib.resume_settings(saved, {"RESEARCHER_CLAUDE_LOGIN": "arrow"}, change_allowed_by=None,
+                                backend_switch_allowed=False)
+        self.assertEqual(refused.exception.setting, "RESEARCHER_CLAUDE_LOGIN")
+        self.assertIn("RESEARCHER_CLAUDE_LOGIN", run_lib("run-settings").stdout.split())
+
+
+class ClaudeLoginTest(unittest.TestCase):
+    # What the mailroom's `agent-usage login gemini --json` prints for a login with a settings file and a model.
+    FOUND = {"name": "gemini", "label": "Gemini", "config_dir": "/home/u/.claude-gemini", "settings": "/s/gemini.json",
+             "model": "vendor/neon", "manual": True, "args": ["--settings", "/s/gemini.json", "--model", "vendor/neon"]}
+
+    def login(self, found=None, model="fable", **given):
+        return lib.claude_login(self.FOUND if found is None else found, name="gemini", model=model, given=given)
+
+    def test_a_login_with_a_model_of_its_own_replaces_the_configured_one(self):
+        self.assertEqual(self.login(), {
+            "name": "gemini", "config_dir": "/home/u/.claude-gemini", "fixed_model": "vendor/neon",
+            "args": ["--settings", "/s/gemini.json", "--model", "vendor/neon"], "model": "vendor/neon",
+            "replaced": "fable"})
+
+    def test_a_launch_that_sets_another_model_is_refused(self):
+        for setting in ("RESEARCHER_MODEL", "RESEARCHER_CLAUDE_MODEL"):   # the settings use_claude_login passes
+            with self.subTest(setting=setting), self.assertRaises(lib.LoginRefused) as refused:
+                self.login(**{setting: "opus"})
+            self.assertIn(f"runs only the model vendor/neon, but this launch sets {setting} to 'opus'",
+                          str(refused.exception))
+        # The login's own model, given by the launch, is allowed, and replaces nothing.
+        login = self.login(model="vendor/neon", RESEARCHER_CLAUDE_MODEL="vendor/neon")
+        self.assertEqual((login["model"], login["replaced"]), ("vendor/neon", ""))
+
+    def test_a_login_that_runs_any_model_keeps_the_run_s(self):
+        found = dict(self.FOUND, model=None, settings=None, args=[])
+        login = self.login(found, model="opus", RESEARCHER_CLAUDE_MODEL="opus")
+        self.assertEqual((login["model"], login["fixed_model"], login["replaced"], login["args"]), ("opus", "", "", []))
+
+    def test_the_default_login_has_no_config_dir(self):
+        self.assertEqual(self.login(dict(self.FOUND, config_dir=None))["config_dir"], "")
+
+    def test_what_does_not_describe_the_login_is_refused(self):
+        for found, why in ((["gemini"], "not a JSON object"), (dict(self.FOUND, name="arrow"), "describes the login 'arrow'"),
+                           (dict(self.FOUND, config_dir="relative/dir"), "neither null nor an absolute path"),
+                           (dict(self.FOUND, model=""), "neither null nor a model name"),
+                           (dict(self.FOUND, args="--settings x"), "not a list of strings")):
+            with self.subTest(why=why), self.assertRaises(lib.LoginRefused) as refused:
+                self.login(found)
+            self.assertIn(why, str(refused.exception))
+
+    def test_another_login_s_variables_are_named_to_drop(self):
+        environ = {name: "x" for name in (
+            "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES", "ANTHROPIC_SMALL_FAST_MODEL",
+            "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+            "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_SESSION_ID", "HOME", "PATH")}
+        self.assertEqual(lib.login_env(environ), sorted(set(environ) - {"CLAUDE_CODE_SESSION_ID", "HOME", "PATH"}))
+
+    def test_cli(self):
+        def cli(*args, stdin=json.dumps(self.FOUND)):
+            return subprocess.run([sys.executable, str(SCRIPTS / "researcher_lib.py"), "claude-login", "--name", "gemini",
+                                   "--model", "fable", *args], input=stdin, capture_output=True, text=True,
+                                  env={"PATH": os.environ.get("PATH", ""), "ANTHROPIC_MODEL": "elsewhere"})
+        ok = cli("--given", "RESEARCHER_MODEL=vendor/neon")
+        self.assertEqual(ok.returncode, 0, ok.stderr)
+        out = json.loads(ok.stdout)
+        self.assertEqual((out["model"], out["unset"]), ("vendor/neon", ["ANTHROPIC_MODEL"]))
+        refused = cli("--given", "RESEARCHER_CLAUDE_MODEL=opus")
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("ERROR: the Claude login gemini (RESEARCHER_CLAUDE_LOGIN) runs only the model vendor/neon",
+                      refused.stderr)
+        garbled = cli(stdin="agent-usage: no such command")
+        self.assertEqual(garbled.returncode, 2)
+        self.assertIn("did not print JSON", garbled.stderr)
+
 
 class ResultsEmailTest(unittest.TestCase):
     def test_decision_mail_sends_clickable_options_and_keeps_the_report_link(self):

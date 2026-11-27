@@ -25,6 +25,7 @@ decisions, one subcommand each:
   run-settings       the RESEARCHER_* variables that define a run
   resume-settings    which saved settings a resumed run takes, and which changes it may make
   run-config         a run's run-config.json after a launch
+  claude-login       how a run's Claude sessions run on the login RESEARCHER_CLAUDE_LOGIN names
 
 Standard library only: it runs under whatever python3 cron finds.
 """
@@ -32,11 +33,14 @@ Standard library only: it runs under whatever python3 cron finds.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import html
 import json
+import os
 import re
 import sys
+from collections.abc import Mapping
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -82,6 +86,7 @@ RUN_SETTINGS = (
     "RESEARCHER_BACKEND",
     "RESEARCHER_MODEL",
     "RESEARCHER_CLAUDE_MODEL",
+    "RESEARCHER_CLAUDE_LOGIN",
     "RESEARCHER_CODEX_MODEL",
     "RESEARCHER_CODEX_REASONING",
     "RESEARCHER_CODEX_FAST_MODEL",
@@ -897,6 +902,78 @@ def _brief(value: str | None) -> str:
 
 
 # --------------------------------------------------------------------------
+# The run's own Claude login (RESEARCHER_CLAUDE_LOGIN)
+# --------------------------------------------------------------------------
+
+# The variables that make Claude Code use some login's credential, endpoint or
+# models (fnmatch patterns): a login's config dir and token, and what a login's
+# settings file may set (a per-token login's endpoint, models, sub-agent model
+# and key helper). Claude Code gives its settings' variables to every command
+# its session runs, so a runner started from such a session inherits them. The
+# sessions the runner starts on the run's login, and every writer of the results
+# email (results_report.py logins), run without the ones they inherit.
+CLAUDE_LOGIN_ENV = ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_*", "CLAUDE_CODE_USE_*",
+                    "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+                    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
+
+
+class LoginRefused(Exception):
+    """The run cannot run on the Claude login it names; the message says why."""
+
+
+def login_env(environ: Mapping[str, str]) -> list[str]:
+    """The names of `environ` that CLAUDE_LOGIN_ENV matches, sorted."""
+    return sorted(k for k in environ if any(fnmatch.fnmatchcase(k, p) for p in CLAUDE_LOGIN_ENV))
+
+
+def _login_problem(found: object, name: str) -> str:
+    """Why `found` is not what `agent-usage login NAME --json` prints for login `name`, or ""."""
+    if not isinstance(found, dict):
+        return "it is not a JSON object"
+    if found.get("name") != name:
+        return f"it describes the login {found.get('name')!r}"
+    config_dir, model, args = found.get("config_dir"), found.get("model"), found.get("args")
+    if config_dir is not None and not (isinstance(config_dir, str) and os.path.isabs(config_dir)):
+        return f"its config_dir {config_dir!r} is neither null nor an absolute path"
+    if model is not None and not (isinstance(model, str) and model):
+        return f"its model {model!r} is neither null nor a model name"
+    if not (isinstance(args, list) and all(isinstance(a, str) for a in args)):
+        return f"its args {args!r} are not a list of strings"
+    return ""
+
+
+def claude_login(found: object, *, name: str, model: str, given: Mapping[str, str]) -> dict:
+    """How the run's Claude sessions run on the login `name`, from `found`, what
+    the mailroom's `agent-usage login NAME --json` printed: {"name",
+    "config_dir" ("" for the default login), "args" (the options claude takes
+    there, passed after the run's own), "fixed_model" (the one model the login
+    runs, or ""), "model" (the run's model), "replaced" (the model the login's
+    own replaces, or "")}.
+
+    `model` is the model the run's settings name, and `given` holds the model
+    settings this launch's environment sets, by name (the runner's
+    use_claude_login chooses which settings name a model); a value
+    the configuration file or the run's saved settings gave is not given. On a
+    login with a model of its own, that model is the run's: a given setting
+    that names another raises LoginRefused (a Claude model on such a login
+    fails every request), and any other is replaced. Raises LoginRefused too
+    when `found` does not describe the login `name`.
+    """
+    problem = _login_problem(found, name)
+    if problem:
+        raise LoginRefused(f"`agent-usage login {name} --json` did not describe the Claude login {name}: {problem}.")
+    fixed = found["model"] or ""
+    if fixed:
+        for setting, value in given.items():
+            if value != fixed:
+                raise LoginRefused(
+                    f"the Claude login {name} (RESEARCHER_CLAUDE_LOGIN) runs only the model {fixed}, but this "
+                    f"launch sets {setting} to {_brief(value)}. Unset {setting}, or set it to {fixed}.")
+    return {"name": name, "config_dir": found["config_dir"] or "", "args": found["args"], "fixed_model": fixed,
+            "model": fixed or model, "replaced": model if fixed and model != fixed else ""}
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -960,6 +1037,14 @@ def main(argv: list[str] | None = None) -> int:
     p_config = sub.add_parser("run-config", help="read {settings, resolved, launch, changes} as JSON on stdin; print "
                               "the run directory's run-config.json after this launch")
     p_config.add_argument("--run-dir", required=True, type=Path)
+
+    p_login = sub.add_parser("claude-login", help="read what `agent-usage login NAME --json` printed on stdin; print "
+                             "how the run's Claude sessions run on that login as JSON (claude_login, plus `unset`: "
+                             "the inherited variables they drop), or exit 2 saying why they cannot")
+    p_login.add_argument("--name", required=True, help="the login, RESEARCHER_CLAUDE_LOGIN")
+    p_login.add_argument("--model", required=True, help="the model the run's settings name")
+    p_login.add_argument("--given", action="append", default=[], metavar="SETTING=VALUE",
+                         help="a model setting this launch's environment sets (repeatable)")
 
     for name in ("outcome", "issue-comment"):
         p = sub.add_parser(name)
@@ -1084,6 +1169,19 @@ def main(argv: list[str] | None = None) -> int:
         launch = json.load(sys.stdin)
         print(json.dumps(run_config(previous, settings=launch["settings"], resolved=launch["resolved"],
                                     launch=launch["launch"], changes=launch["changes"]), indent=2))
+        return 0
+
+    if args.command == "claude-login":
+        given = dict(item.split("=", 1) for item in args.given)
+        try:
+            login = claude_login(json.loads(sys.stdin.read()), name=args.name, model=args.model, given=given)
+        except ValueError as err:   # not JSON
+            log(f"ERROR: `agent-usage login {args.name} --json` did not print JSON ({err}).")
+            return 2
+        except LoginRefused as refused:
+            log(f"ERROR: {refused}")
+            return 2
+        print(json.dumps(dict(login, unset=login_env(os.environ))))
         return 0
 
     facts = compute_outcome(args.run_dir, status=args.status,

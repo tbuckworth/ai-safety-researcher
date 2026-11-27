@@ -13,6 +13,7 @@ MOCK_BIN="${TEST_ROOT}/bin"
 MOCK_CALL_LOG="${TEST_ROOT}/provider-calls.log"
 MOCK_PROMPT_LOG="${TEST_ROOT}/provider-prompts.log"
 MOCK_EMAIL_LOG="${TEST_ROOT}/email-calls.log"
+MOCK_ENV_LOG="${TEST_ROOT}/provider-env.log"
 mkdir -p "$MOCK_BIN"
 
 # shellcheck source=tests/mocks.sh
@@ -33,6 +34,11 @@ if [[ " $* " == *" --output-last-message "* ]]; then
 fi
 prompt=$(cat)
 printf '%s %s\n' "$(basename "$0")" "$*" >> "$MOCK_CALL_LOG"
+# The login it runs on, and the variables of a login (researcher_lib.py
+# CLAUDE_LOGIN_ENV, but the config dir) it was given.
+printf '%s config=%s inherited=%s\n' "$(basename "$0")" "${CLAUDE_CONFIG_DIR:--}" \
+    "$(env | grep -oE '^(ANTHROPIC_[A-Z_]*|CLAUDE_CODE_[A-Z_]*MODEL|CLAUDE_CODE_API_KEY_HELPER_TTL_MS|CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)=' \
+        | tr -d = | sort | paste -sd, - || true)" >> "$MOCK_ENV_LOG"
 {
     printf '\n===== %s %s =====\n' "$(basename "$0")" "$*"
     printf '%s\n' "$prompt"
@@ -105,7 +111,7 @@ chmod +x "${MOCK_BIN}/mock-provider"
 ln -s mock-provider "${MOCK_BIN}/claude"
 ln -s mock-provider "${MOCK_BIN}/codex"
 
-export MOCK_CALL_LOG MOCK_PROMPT_LOG MOCK_EMAIL_LOG
+export MOCK_CALL_LOG MOCK_PROMPT_LOG MOCK_EMAIL_LOG MOCK_ENV_LOG
 
 run_case() {
     local backend="$1"
@@ -565,5 +571,149 @@ if bash -c 'source "$1/runner/common.sh"; source "$1/runner/provider.sh"; build_
     exit 1
 fi
 grep -q "build_email_prompt: the mode must be send or compose, got 'sned'" "${TEST_ROOT}/prompt-mode.out"
+
+# --- A run on a Claude login of its own (RESEARCHER_CLAUDE_LOGIN) --------------
+# The mock mailroom's gemini login has a settings file and a model of its own
+# (MOCK_LOGIN_MODEL; install_mock_mailroom). Every Claude session of a run on it
+# (each step, the next-steps session, the results email) runs with its config
+# dir and options, and none takes the variables of another login that the
+# runner inherited.
+GEMINI_DIR="${TEST_ROOT}/logins/gemini"
+GEMINI_SETTINGS="${TEST_ROOT}/logins/gemini-settings.json"
+CONFIGURED_MODEL=$("${REPO_DIR}/scripts/config.sh" RESEARCHER_CLAUDE_MODEL)
+EMAIL_MODEL=$("${REPO_DIR}/scripts/config.sh" RESEARCHER_EMAIL_CLAUDE_MODEL)
+# What a runner started from a session on another login inherits.
+INHERITED=(ANTHROPIC_BASE_URL=https://elsewhere.example.test ANTHROPIC_MODEL=elsewhere-model
+    ANTHROPIC_DEFAULT_OPUS_MODEL=elsewhere-model ANTHROPIC_SMALL_FAST_MODEL=elsewhere-model
+    CLAUDE_CODE_SUBAGENT_MODEL=elsewhere-model CLAUDE_CODE_API_KEY_HELPER_TTL_MS=60000
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 "CLAUDE_CONFIG_DIR=${TEST_ROOT}/logins/elsewhere")
+
+# login_case LABEL [VAR=value ...]: a Claude run of its own on the gemini login
+# (publishing skipped), its model from the configuration, launched with the
+# variables of another login and the given ones; sets CASE_RUN (empty when no
+# run was made) and CASE_RC, and empties the logs first.
+login_case() {
+    local label="$1"
+    shift
+    : > "$MOCK_CALL_LOG"
+    : > "$MOCK_ENV_LOG"
+    : > "$MOCK_PROMPT_LOG"
+    : > "$MOCK_EMAIL_LOG"
+    : > "$MOCK_STATUS_LOG"
+    set +e
+    env "${INHERITED[@]}" \
+        RESEARCHER_BACKEND=claude \
+        RESEARCHER_CLAUDE_LOGIN=gemini \
+        RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
+        RESEARCHER_CODEX_BIN="${MOCK_BIN}/codex" \
+        RESEARCHER_OUTPUT_DIR="${TEST_ROOT}/${label}-output" \
+        RESEARCHER_LOCKFILE="${TEST_ROOT}/${label}.lock" \
+        RESEARCHER_LINK_OUTPUT=false \
+        RESEARCHER_SKIP_PUBLISH=true \
+        RESEARCHER_SKIP_GPU_CHECK=true \
+        RESEARCHER_RETRY_DELAY_SECONDS=0 \
+        PATH="${MOCK_BIN}:${PATH}" \
+        RESEARCHER_AGENT_MAIL="${MOCK_BIN}/agent-mail" \
+        RESEARCHER_EMAIL_TO="self@example.test" \
+        RESEARCHER_HOST_ALIAS="mock-host" \
+        RESEARCHER_KB_DIR=none \
+        "$@" \
+        "$REPO_DIR/scripts/researcher-cron.sh" "Login case ${label}" > "${TEST_ROOT}/${label}.stdout" 2>&1
+    CASE_RC=$?
+    set -e
+    CASE_RUN=$(find "${TEST_ROOT}/${label}-output" -mindepth 2 -maxdepth 2 -name state.md -printf '%h\n' 2>/dev/null \
+        | head -1 || true)
+}
+login_fail() { echo "FAIL [$1]: $2" >&2; cat "${TEST_ROOT}/$1.stdout" >&2; exit 1; }
+
+# The configured model is replaced by the login's, which every session runs.
+login_case login
+test "$CASE_RC" = "0" || login_fail login "exit ${CASE_RC}"
+grep -qF "Agent backend: claude; model: ${MOCK_LOGIN_MODEL} (login gemini); compute profile: local;" "${TEST_ROOT}/login.stdout"
+grep -qF "The Claude login gemini runs only ${MOCK_LOGIN_MODEL}: the run uses it in place of ${CONFIGURED_MODEL}," \
+    "${TEST_ROOT}/login.stdout"
+grep -qxF "agent_model: \"${MOCK_LOGIN_MODEL}\"" "${CASE_RUN}/state.md"
+grep -qx 'agent_login: gemini' "${CASE_RUN}/state.md"
+jq -e --arg model "$MOCK_LOGIN_MODEL" '.settings.RESEARCHER_CLAUDE_LOGIN == "gemini"
+    and .resolved.claude_login == "gemini" and .resolved.model == $model' "${CASE_RUN}/run-config.json" > /dev/null \
+    || login_fail login "run-config.json does not record the login and its model"
+# The 11 steps, the next-steps session and the email: each on the login, with its options last.
+test "$(grep -c '^claude ' "$MOCK_CALL_LOG")" = "13" || login_fail login "not 13 Claude sessions"
+test "$(grep -cF -- "--settings ${GEMINI_SETTINGS} --model ${MOCK_LOGIN_MODEL} --allowedTools " "$MOCK_CALL_LOG")" = "13" \
+    || login_fail login "a Claude session ran without the login's options"
+grep -q '^claude --print .* --session-id [0-9a-f-]\{36\} .*--settings ' "$MOCK_CALL_LOG"
+grep -qx '# Autonomous Next-Steps Writer' "$MOCK_PROMPT_LOG"
+if grep -qF -e "--model ${CONFIGURED_MODEL} " -e "--model ${EMAIL_MODEL} " "$MOCK_CALL_LOG"; then
+    login_fail login "a session on the login was given a Claude model"
+fi
+test "$(grep -cxF "claude config=${GEMINI_DIR} inherited=" "$MOCK_ENV_LOG")" = "13" \
+    || login_fail login "a session ran off the login's config dir, or with another login's variables: $(sort -u "$MOCK_ENV_LOG")"
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "gemini"
+grep -qxF -- "- Footer agent label: Claude ${MOCK_LOGIN_MODEL} (login gemini)" "$MOCK_PROMPT_LOG"
+grep -qxF -- "- Parent model: ${MOCK_LOGIN_MODEL} (on the Claude login gemini)" "$MOCK_PROMPT_LOG"
+grep -q 'sent (outcome complete-local), written on the gemini login\.$' "$MOCK_STATUS_LOG"
+
+# The login's own model given by the launch is allowed. When the login cannot
+# write the email, the mailroom's order does, its Claude logins on
+# RESEARCHER_EMAIL_CLAUDE_MODEL (they cannot run the login's model), without the
+# login's options and without another login's variables.
+login_case loginfallback MOCK_EMAIL_FAIL_LOGINS=gemini RESEARCHER_CLAUDE_MODEL="$MOCK_LOGIN_MODEL"
+test "$CASE_RC" = "0" || login_fail loginfallback "exit ${CASE_RC}"
+if grep -q 'in place of' "${TEST_ROOT}/loginfallback.stdout"; then login_fail loginfallback "the login's own model was replaced"; fi
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "gemini personal"
+test "$(grep -c -- '--session-id' "$MOCK_CALL_LOG")" = "2"
+grep -q "^claude --print --dangerously-skip-permissions --model ${EMAIL_MODEL} --session-id [0-9a-f-]\{36\} --name researcher --allowedTools " \
+    "$MOCK_CALL_LOG"
+test "$(tail -1 "$MOCK_ENV_LOG")" = "claude config=- inherited=" || login_fail loginfallback "$(tail -1 "$MOCK_ENV_LOG")"
+grep -q 'written on the personal login; before it: gemini: the writer failed' "$MOCK_STATUS_LOG"
+# send-run-report.sh writes a later report on the login the run saved.
+rm "${CASE_RUN}/.email-sent"
+: > "$MOCK_ENV_LOG"
+send_run_report "${INHERITED[@]}"
+test "$CASE_RC" = "0" || { cat "${TEST_ROOT}/resend.stdout" >&2; exit 1; }
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "gemini personal gemini"
+grep -qF -- "--settings ${GEMINI_SETTINGS} --model ${MOCK_LOGIN_MODEL} --allowedTools " "$MOCK_CALL_LOG"
+test "$(cat "$MOCK_ENV_LOG")" = "claude config=${GEMINI_DIR} inherited="
+
+# A login that runs any model (arrow) runs the run's own, with its config dir and
+# no options; the email's fallbacks skip it in the mailroom's order and run the
+# run's model too.
+login_case loginarrow RESEARCHER_CLAUDE_LOGIN=arrow RESEARCHER_CLAUDE_MODEL=mock-claude MOCK_EMAIL_FAIL_LOGINS=arrow
+test "$CASE_RC" = "0" || login_fail loginarrow "exit ${CASE_RC}"
+grep -qF "Agent backend: claude; model: mock-claude (login arrow);" "${TEST_ROOT}/loginarrow.stdout"
+test "$(paste -sd' ' "${CASE_RUN}/.email-writers")" = "arrow personal"
+if grep -q -- '--settings' "$MOCK_CALL_LOG"; then login_fail loginarrow "a session was given a settings file"; fi
+test "$(grep -c '^claude --print --dangerously-skip-permissions --model mock-claude ' "$MOCK_CALL_LOG")" = "14"
+test "$(grep -cxF "claude config=${TEST_ROOT}/logins/arrow inherited=" "$MOCK_ENV_LOG")" = "13"
+test "$(tail -1 "$MOCK_ENV_LOG")" = "claude config=- inherited="
+
+# refused_case LABEL WHY [VAR=value ...]: a launch the runner refuses before
+# making a run (exit 2), saying WHY.
+refused_case() {
+    local label="$1" why="$2"
+    shift 2
+    login_case "$label" "$@"
+    test "$CASE_RC" = "2" || login_fail "$label" "exit ${CASE_RC}, not 2"
+    test -z "$CASE_RUN" || login_fail "$label" "a run was made"
+    grep -qF -- "$why" "${TEST_ROOT}/${label}.stdout" || login_fail "$label" "it did not say: ${why}"
+    test ! -s "$MOCK_CALL_LOG" || login_fail "$label" "a session ran"
+}
+refused_case loginmodel "ERROR: the Claude login gemini (RESEARCHER_CLAUDE_LOGIN) runs only the model ${MOCK_LOGIN_MODEL}, but this launch sets RESEARCHER_CLAUDE_MODEL to 'mock-claude'. Unset RESEARCHER_CLAUDE_MODEL, or set it to ${MOCK_LOGIN_MODEL}." \
+    RESEARCHER_CLAUDE_MODEL=mock-claude
+refused_case loginoverride "but this launch sets RESEARCHER_MODEL to 'mock-other'." RESEARCHER_MODEL=mock-other
+refused_case logincodex "ERROR: this launch sets RESEARCHER_CLAUDE_LOGIN=gemini, the Claude login a Claude run runs on, but the backend is codex. Unset RESEARCHER_CLAUDE_LOGIN, or set RESEARCHER_BACKEND=claude." \
+    RESEARCHER_BACKEND=codex
+# A login from the configuration file is for Claude runs only: a Codex run drops
+# it, and goes on (here to stop, exit 2, at a bad repo visibility, before a run
+# is made).
+sed '$a RESEARCHER_CLAUDE_LOGIN=gemini' "${REPO_DIR}/config/researcher.env" > "${TEST_ROOT}/login-researcher.env"
+refused_case loginconfig "RESEARCHER_REPO_VISIBILITY must be one of" RESEARCHER_BACKEND=codex \
+    RESEARCHER_CONFIG_FILE="${TEST_ROOT}/login-researcher.env" RESEARCHER_CLAUDE_LOGIN= RESEARCHER_REPO_VISIBILITY=nowhere
+grep -qF "The configured RESEARCHER_CLAUDE_LOGIN (gemini) is for Claude runs; this Codex run runs on no Claude login." \
+    "${TEST_ROOT}/loginconfig.stdout"
+refused_case loginunknown "agent-usage: 'nosuch' is not a Claude login" RESEARCHER_CLAUDE_LOGIN=nosuch
+grep -qF "RESEARCHER_CLAUDE_LOGIN=nosuch: '${TEST_ROOT}/mailroom/bin/agent-usage login nosuch --json' failed" \
+    "${TEST_ROOT}/loginunknown.stdout"
+refused_case loginflag "ERROR: RESEARCHER_CLAUDE_LOGIN must be the name of a Claude login" RESEARCHER_CLAUDE_LOGIN=--json
 
 echo "Claude and Codex backend integration tests passed."

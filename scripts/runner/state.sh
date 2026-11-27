@@ -76,9 +76,9 @@ upsert_frontmatter_field() {
 # booleans and the owner (RESEARCHER_OWNER is checked to be one plain word) are
 # written bare. On a resume, researcher-cron.sh reads the run's own values (issue,
 # follow-up fields, owner) back into the globals used here, and the backend,
-# model, compute profile and knowledge base come from the run's saved settings
-# (restore_run_settings), not from the resuming environment; change the two
-# together.
+# model, Claude login, compute profile and knowledge base come from the run's
+# saved settings (restore_run_settings), not from the resuming environment;
+# change the two together.
 runtime_fields() {
     printf '%s\t%s\n' \
         run_id "$(basename "$RUN_DIR")" \
@@ -88,6 +88,14 @@ runtime_fields() {
         issue_number "${ISSUE_NUMBER:-none}" \
         compute_profile "$(yaml_quote "$COMPUTE_PROFILE")" \
         knowledge_base "$(yaml_quote "${KB_DIR:-none}")"
+    # The login's name is checked to be one plain word (use_claude_login); a
+    # run without one has no agent_login, or none once a switch to Codex
+    # dropped it (codex_without_claude_login).
+    if [ -n "${CLAUDE_LOGIN:-}" ]; then
+        printf 'agent_login\t%s\n' "$CLAUDE_LOGIN"
+    elif [ -n "$(state_field "${RUN_DIR}/state.md" agent_login)" ]; then
+        printf 'agent_login\tnone\n'
+    fi
     if [ -n "${RUN_DIR_OWNER:-}" ]; then
         printf 'owner\t%s\n' "$RUN_DIR_OWNER"
     fi

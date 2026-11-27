@@ -24,18 +24,37 @@ settings_json() {
     json_object ${pairs[@]+"${pairs[@]}"}
 }
 
+setting_restored() {
+    # setting_restored NAME: true when restore_run_settings took the setting
+    # NAME from the run's saved settings (it is in RESTORED_SETTINGS).
+    local restored
+    for restored in ${RESTORED_SETTINGS[@]+"${RESTORED_SETTINGS[@]}"}; do
+        [ "$restored" != "$1" ] || return 0
+    done
+    return 1
+}
+
+given_by_launch() {
+    # given_by_launch NAME: true when this launch's environment set the setting
+    # NAME: it is set, and neither the configuration file (config_from_file) nor
+    # the run's saved settings (setting_restored) gave it.
+    [ -n "${!1:-}" ] && ! config_from_file "$1" && ! setting_restored "$1"
+}
+
 restore_run_settings() {
     # restore_run_settings DIR: for a resume of the run in DIR, sets each run
     # setting (RUN_SETTINGS) this launch's environment does not set to the value
-    # the run saved, and lists in RUN_CONFIG_CHANGES the settings it sets to
-    # another value. Only the run's owner (RESEARCHER_OWNER equal to its owner),
+    # the run saved, lists them in RESTORED_SETTINGS, and lists in
+    # RUN_CONFIG_CHANGES the settings it sets to another value. Only the run's
+    # owner (RESEARCHER_OWNER equal to its owner),
     # RESEARCHER_ALLOW_CONFIG_CHANGE=true or, for the backend alone,
     # RESEARCHER_ALLOW_BACKEND_SWITCH=true may change one; any other change
     # exits 2, naming the setting. Exits 1 when the saved settings cannot be
     # read. Logs each accepted change, and a run that predates run-config.json.
     local dir="$1" name value line owner out rc=0 given=() leave=()
+    RESTORED_SETTINGS=()
     for name in "${RUN_SETTINGS[@]}"; do
-        if [ -n "${!name:-}" ] && ! config_from_file "$name"; then
+        if given_by_launch "$name"; then
             given+=("$name")
         fi
     done
@@ -60,6 +79,7 @@ restore_run_settings() {
     esac
     while IFS= read -r -d '' name && IFS= read -r -d '' value; do
         printf -v "$name" '%s' "$value"
+        RESTORED_SETTINGS+=("$name")
     done < <(jq -j '.restore | to_entries[] | .key, "\u0000", (.value // ""), "\u0000"' <<< "$out")
     RUN_CONFIG_CHANGES=$(jq -c '.changes' <<< "$out")
     if [ "$(jq -r '.older_run' <<< "$out")" = true ]; then
@@ -72,7 +92,7 @@ restore_run_settings() {
 
 resolved_settings_json() {
     # What the run's settings resolved to at this launch, as a JSON object (json_object).
-    json_object model "$MODEL" codex_deep_model "${CODEX_DEEP_MODEL:-}" \
+    json_object model "$MODEL" claude_login "${CLAUDE_LOGIN:-}" codex_deep_model "${CODEX_DEEP_MODEL:-}" \
         codex_deep_reasoning "${CODEX_DEEP_REASONING:-}" email_claude_model "$EMAIL_CLAUDE_MODEL" \
         compute_profile_preset "$COMPUTE_PROFILE_NAME" compute_profile "$COMPUTE_PROFILE" \
         job_wait_cmd "$JOB_WAIT_CMD" knowledge_base "${KB_DIR:-none}"

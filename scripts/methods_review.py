@@ -5,6 +5,7 @@ Usage:
   methods_review.py plan|presentation RUN [--new-cycle REASON]
   methods_review.py evidence|approve-auto|verify|verify-evidence|verify-presentation RUN
   methods_review.py approve-human RUN REVISION
+  methods_review.py check-brief RUN
   methods_review.py respond RUN STAGE FINDING fixed|limit|declined NOTE
 
 The hub calls the review actions; verify actions are offline. Decisions use exit 0
@@ -53,6 +54,8 @@ CONTEXT_STAGES = {"plan": ("plan",), "approval": ("plan", "approval"),
 # A reviewer gets both ends of a long log, with the omission explicitly marked.
 # The receipt fingerprints all its bytes. Active re-execution belongs to the auditor.
 LOG_EXCERPT_BYTES = 32768
+# Text budget for the human decision, including examples for all experiments.
+BRIEF_WORDS = 750
 
 
 def json_bytes(value) -> bytes:
@@ -434,6 +437,30 @@ def respond(run: Path, stage: str, finding: str, disposition: str, note: str) ->
     return 0
 
 
+def check_brief(run: Path) -> int:
+    """Read run/methods-brief.md and packet(run, "plan") inputs to check the
+    human-facing Markdown before sending it. No reviewer is called.
+    """
+    plan = packet(run, "plan")
+    brief = (run / "methods-brief.md").read_text()
+    if len(brief.split()) > BRIEF_WORDS:
+        raise ValueError(f"methods-brief.md exceeds {BRIEF_WORDS} words; link the full plan")
+    order = json.loads(plan.documents["methods-order.json"])
+    sections = re.split(r"(?m)^##[ \t]+(exp-[\w-]+)[ \t]*$", brief)
+    if sections[1::2] != order:
+        raise ValueError(f"methods-brief.md needs one heading per experiment, in order: {', '.join(order)}")
+    for experiment, section in zip(order, sections[2::2]):
+        for label in ("Subject sees", "Counted"):
+            if not re.search(rf"^{label}:[ \t]+\S", section, re.MULTILINE):
+                raise ValueError(f"methods-brief.md: {experiment} needs a nonempty '{label}:' line")
+    normalized = " ".join(brief.split())
+    for name in ("method-spec.md", *(f"experiments/{experiment}/plan.md" for experiment in order)):
+        if " ".join(plan.documents[name].split()) in normalized:
+            raise ValueError(f"methods-brief.md includes all of {name}; link it instead")
+    log(f"Checked the methods brief for {len(order)} experiments")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     actions = parser.add_subparsers(dest="action", required=True)
@@ -446,6 +473,8 @@ def main() -> int:
     human = actions.add_parser("approve-human")
     human.add_argument("run", type=Path)
     human.add_argument("revision")
+    brief = actions.add_parser("check-brief", help="check the saved human methods brief before sending it")
+    brief.add_argument("run", type=Path)
     answer = actions.add_parser("respond", help="record the hub's response to one finding of a review ledger")
     answer.add_argument("run", type=Path)
     answer.add_argument("stage", choices=STAGES)
@@ -458,6 +487,8 @@ def main() -> int:
         parser.error("--new-cycle needs the decision that warrants the new cycle")
     try:
         run = args.run.resolve(strict=True)
+        if args.action == "check-brief":
+            return check_brief(run)
         with (run / ".methods-review.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if args.action == "respond":

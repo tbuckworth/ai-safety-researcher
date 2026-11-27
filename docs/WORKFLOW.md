@@ -42,6 +42,7 @@ output/<run-id>/
 ├── success-criteria.md
 ├── decomposition.md            # Steinhardt lambda table + component details
 ├── methods-order.json          # Experiment IDs in their reviewed execution order
+├── methods-brief.md            # Human methods decision (Step 7)
 ├── reviews/                    # Plan critiques, approval, evidence and final reader receipts,
 │                               # and each stage's ledger.json (see Review Ledger)
 ├── review-figures.json         # Headline figure files for the final reader
@@ -265,9 +266,11 @@ The hub writes the actual methods before commissioning a review or starting any 
 
 ## Step 7: Present the methodology decision
 
-Present one short decision covering the motivating question, proposed contrast, strongest competing explanation and distinguishing control, scope of any inference, cost, stopping rule and the specific revision. Link the reviewed plan and individual objections for detail. Include a concrete example of what the measurement means. State which decision the pilot could change and which conclusion needs confirmation. The underlying plan files carry technical detail.
+Present one short decision covering the question, comparison, strongest competing explanation and distinguishing control. Say what the pilot can settle and what needs confirmation. Cite the revision and link its methods and objections.
 
-Present the revision of the latest plan round, listing its open blocking findings, if any, as unresolved objections, and offer the hub's proposed repairs for them as the revision option. In interactive mode offer **approve these methods**, **revise** and **stop**. For a decision already being handled by email, use the mailroom’s native plain-text Markdown `choices` block with no `--html`. Set the default to wait. Wait for an explicit answer before execution. Record the approved revision, the source of the response and any conditions in state.md. Treat a conditional answer that changes the methods as a revision. A revision Titus asks for starts a new plan review cycle (`plan RUN --new-cycle REASON`, citing his reply). In automatic mode the separate approver sees the same dossier. Routine progress, reviewer coordination and execution belong to the hub.
+Before asking a human, save the decision in `methods-brief.md`. Keep it within three pages or one visual page accompanied by the same text. For each experiment, in plan order, use a `## exp-ID` heading. Start a `Subject sees:` line with a verbatim fixture example, or one real input row for an experiment without a subject. Start a `Counted:` line with what is measured. State the decision it informs, cost and stop conditions. Run `methods_review.py check-brief RUN` on that text before sending it. The offline check enforces a text budget, checks the experiment blocks and flags copied plans. The hub checks that each example matches the fixture and that the rendered brief fits.
+
+Present the revision of the latest plan round, listing its open blocking findings, if any, as unresolved objections, and offer the hub's proposed repairs for them as the revision option. In interactive mode offer **approve these methods**, **revise** and **stop**. For a decision already being handled by email, use the mailroom’s native plain-text Markdown `choices` block with no `--html`. Set the default to wait. Wait for an explicit answer before execution. Record the approved revision, the source of the response and any conditions in state.md. Treat a conditional answer that changes the methods as a revision. A revision Titus asks for starts a new plan review cycle (`plan RUN --new-cycle REASON`, citing his reply). In automatic mode the separate approver reads the full reviewed dossier. Routine progress, reviewer coordination and execution belong to the hub.
 
 ## Step 8: Record approval
 

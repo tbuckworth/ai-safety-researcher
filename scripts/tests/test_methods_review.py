@@ -82,6 +82,30 @@ class ReviewTest(unittest.TestCase):
         self.write("briefing.md", text)
         self.write("review-figures.json", '{"figures":[],"reason":"Text-only briefing."}')
 
+    def test_check_methods_brief_before_asking_for_approval(self):
+        brief = ("Should the new wording change the score? See [the methods](method-spec.md).\n"
+                 "## exp-f01\nSubject sees: Choose the larger number, 17 or 71.\n"
+                 "Counted: Fraction choosing 71.\n"
+                 "## exp-f02\nSubject sees: Choose the larger number, 19 or 91.\n"
+                 "Counted: Fraction choosing 91 on the held-out split.\n")
+        invalid = [
+            (brief.replace("Subject sees: Choose the larger number, 19 or 91.", "Subject sees:"), "exp-f02"),
+            (brief.split("## exp-f02")[0], "exp-f02"),
+            (brief + "\n" + (self.run / "experiments/exp-f01/plan.md").read_text(), "exp-f01/plan.md"),
+            (brief + "\n" + (self.run / "method-spec.md").read_text(), "method-spec.md"),
+            (brief + "Full text of the protocol. " * 1000, "words"),
+        ]
+        self.write("methods-brief.md", brief)
+        self.invoke("check-brief")
+        for draft, message in invalid:
+            with self.subTest(message=message):
+                self.write("methods-brief.md", draft)
+                proc = subprocess.run([sys.executable, SCRIPT, "check-brief", self.run],
+                                      env=self.env, capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 1, proc.stderr)
+                self.assertIn(message, proc.stderr)
+        self.assertFalse(self.records())
+
     def test_independent_plan_reviews_and_bound_auto_approval(self):
         self.invoke("verify", code=1)
         self.invoke("approve-auto", code=1)

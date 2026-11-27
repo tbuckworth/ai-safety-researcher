@@ -52,7 +52,7 @@ Parse it as: `<step-number> <run-directory-path>`
 
 - **Normal flow**: Set `current_step: N` → wrapper runs step N+1.
 - **Loop back**: Set `current_step` to the step BEFORE the target (e.g., to re-run Step 2, set `current_step: 1`).
-- **Skip experiments**: the rethink path sets `current_step: 9`; the wrapper runs Step 10 (audit), which short-circuits when there is nothing to audit and advances to Step 11 (report).
+- **Skip experiments**: the rethink path and a stated stop set `current_step: 9`; the wrapper runs Step 10 (audit), which short-circuits when there is nothing to audit and advances to Step 11 (report). A review round cap never skips them.
 - **Audit remediation**: the Step 10 executor keeps `current_step: 10` and sets `status: audit_remediating` to request another audit round (the wrapper re-enters Step 10), or `status: audit_complete` to advance to Step 11.
 - **Terminal**: Set `status: complete` or `status: failed` → wrapper stops.
 
@@ -383,7 +383,7 @@ If `state.md` contains `is_followup: true`:
 
 ## Step 6: Write and challenge the methods
 
-Follow WORKFLOW.md Step 6, including on an experiments-only follow-up. Use the current run’s budget and filter before materializing plans. Fold any cheap disproof experiment into the ordinary reviewed order. The hub calls `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN` on actual plans and answers the critiques' open blocking findings as WORKFLOW.md's Review Ledger describes. Record the triage, objections and revision. Return to this step for a material revision, up to the round cap: when `plan` exits 5, continue with the revision it prints, first restoring any file edited since that round from the `methods` of `reviews/plan/<revision>.json`. After the approver asked for a revision (`methods_revision_count: 1`), start the first review of the revised plan with `--new-cycle "automatic approver requested a revision"`. If a serious defect cannot be resolved within the allowed design revision, record the stopping reason in `methods-stop.md`, set `current_step: 9` and proceed to the audit of whatever ran. Use `rethink-rationale.md` only for a supported theoretical conclusion. Otherwise set `current_step: 6, status: challenge_complete`.
+Follow WORKFLOW.md Step 6, including on an experiments-only follow-up. Use the current run’s budget and filter before materializing plans. Fold any cheap disproof experiment into the ordinary reviewed order. The hub calls `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" plan RUN` on actual plans and answers the critiques' open blocking findings as WORKFLOW.md's Review Ledger describes. Record the triage, objections and revision. Return to this step for a material revision, up to the round cap: when `plan` exits 5, continue with the revision it prints, first restoring any file edited since that round from the `methods` of `reviews/plan/<revision>.json`. A defect still open at the cap goes to the approver as an unresolved objection; the cap is never a reason to stop. With `status: methods_revision_requested` the approver asked for a revision: revise the plan to answer its findings (the approval ledger, `reviews/approval/ledger.json`) and call `plan RUN`, which starts the new review cycle the approver's request armed. Use `rethink-rationale.md` only for a supported theoretical conclusion, and stop before execution (`methods-stop.md`, `current_step: 9`) only when no feasible comparison can answer the question (WORKFLOW.md Step 6, item 5). Otherwise set `current_step: 6, status: challenge_complete`.
 
 ## Step 7: Prepare the decision
 
@@ -391,7 +391,14 @@ Prepare the short methods decision from WORKFLOW.md Step 7 for the independent a
 
 ## Step 8: Obtain independent approval
 
-Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" approve-auto RUN`. Use only the recorded decision. On exit 0, record the approved revision, `criteria_approved: true`, `current_step: 8` and `fail_fast_agreement: true`. On exit 3 while `methods_revision_count` is zero or missing, answer the approver's blocking findings with `methods_review.py respond RUN approval ...`, set the count to one and set `current_step: 5` to return to Step 6. On exit 3 once the count is one, or on exit 4, write `methods-stop.md` giving the reason and set `current_step: 9, status: methods_declined`. The audit and report must distinguish design insufficiency from empirical evidence against the hypothesis. For an operational failure set `review_hold` to the reason and leave the step number unchanged. An approval for an earlier version or a parent run cannot admit execution.
+Run `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" approve-auto RUN`. Use only the recorded decision. The approver has up to the round cap of rounds (WORKFLOW.md Step 8); the helper counts them. With `status: methods_reopened` the runner has superseded a stop that a former one-revision rule wrote (`methods_reopened` says where it moved it): decide again under this rule as below.
+
+- **Exit 0**: record the approved revision, `criteria_approved: true`, `current_step: 8` and `fail_fast_agreement: true`.
+- **Exit 3** (a revision below the cap): answer each of the approver's open blocking findings with `methods_review.py respond RUN approval ...` and set `current_step: 5, status: methods_revision_requested` to revise the plan in Step 6.
+- **Exit 5** (the approver's last round still asks for revision): the experiments run on the revision it reviewed, as reviewed. If `approve-auto` ran no review because the plan changed after that round, first restore the plan files from the `methods` of `reviews/plan/<printed revision>.json` and run it again. Then record the revision, `criteria_approved: true`, `methods_admitted_at_cap: true`, `current_step: 8` and `fail_fast_agreement: true`; Step 11 reports the approver's open findings as limitations (`methods_review.py cap-findings RUN` lists them).
+- **Exit 4** (a stated stop): write `methods-stop.md` giving the reason and set `current_step: 9, status: methods_declined`. The audit and report must distinguish design insufficiency from empirical evidence against the hypothesis.
+
+For an operational failure set `review_hold` to the reason and leave the step number unchanged. An approval for an earlier version or a parent run cannot admit execution.
 
 ## Step 9: Execute Experiments
 
@@ -487,7 +494,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    - **UNSALVAGEABLE**: write `<run-dir>/rethink-rationale.md` summarising why the framing doesn't hold (so Step 11 frames a negative-result paper), then `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: framing-broken`.
    - **NEEDS-REMEDIATION**:
      - If `n >= R_MAX` **or** the auditor reports stuck: `current_step: 10, status: audit_complete, audit_round: <n>, audit_exit_reason: <round-cap-reached | narrowed-claim-residual>`. The unresolved findings stay in `audit/results-audit.md` for Step 11's Limitations.
-     - Otherwise: only rerun if the approved plan covers this correction and `verify RUN` succeeds immediately before dispatch. A material change requires a prospective amendment through Steps 6–8; preserve prior outcomes, outstanding experiment IDs and the exposure of the earlier data. Stop if the budget or revision limit is reached. Re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
+     - Otherwise: only rerun if the approved plan covers this correction and `verify RUN` succeeds immediately before dispatch. A material change requires a prospective amendment through Steps 6–8; preserve prior outcomes, outstanding experiment IDs and the exposure of the earlier data. When the budget is spent or the approver has had its rounds (`approve-auto` exits 5 without a review), make no rerun: end the round as `round-cap-reached` with the finding in Limitations. Re-run ONLY the flagged experiment. Re-spawn the experiment agent for that `exp-NNN`, handing it the defect **class** from the audit (never the auditor's exact pass-condition) and requiring it to fix and report its random seed before seeing results. Then write `current_step: 10, status: audit_remediating, audit_round: <n>` in a single atomic state.md rewrite. (The wrapper re-enters Step 10 for round n+1.)
 
 ### Atomicity
 
@@ -496,6 +503,11 @@ An independent **results-auditor** red-teams the experiment outputs before write
 ---
 
 ## Step 11: Compile Research Report
+
+0. If `state.md` has `methods_admitted_at_cap: true`, write the `markdown` that
+   `python3 "${CLAUDE_PLUGIN_ROOT}/scripts/methods_review.py" cap-findings RUN`
+   prints to `<run-dir>/open-review-findings.md` (the runner adds the final
+   reader's findings to it if its cap is reached too).
 
 1. **Spawn report agent**:
    ```
@@ -508,6 +520,8 @@ An independent **results-auditor** red-teams the experiment outputs before write
 
    Read this revision’s three critiques under reviews/plan/, the evidence critique,
    challenge/limitation-triage.md (if present),
+   open-review-findings.md (if present, the review findings the experiments went
+   ahead with at the approver's round cap: list each in Limitations as unresolved),
    audit/results-audit.md (including its Limitation triage table), and the
    compute_profile in state.md. Use the pre-mortem risk analysis plus any unresolved
    audit findings (and the audit_exit_reason) for Limitations. Present positive and
@@ -591,7 +605,7 @@ An independent **results-auditor** red-teams the experiment outputs before write
    If the agent fails, record `kb_ingest_step11: "failed (<reason>)"` in
    `state.md` and continue: the paper is already written.
 
-7. Have the knowledge leaf record any missed confounds or harness lessons supported by evidence using `record-harness`. Apply the final reader in WORKFLOW.md Step 11 to `review-figures.json`, actual draft paper, briefing and next steps. Correct its blocking findings, answer each with `methods_review.py respond RUN presentation ...` and recheck, up to the round cap. If a blocking finding is still open when `presentation` exits 5, if the reader stops, or if it cannot run, set `review_hold` and leave the step number unchanged. Only an accepted current draft may set `current_step: 11, status: complete`.
+7. Have the knowledge leaf record any missed confounds or harness lessons supported by evidence using `record-harness`. Apply the final reader in WORKFLOW.md Step 11 to `review-figures.json`, actual draft paper, briefing and next steps. Correct its blocking findings, answer each with `methods_review.py respond RUN presentation ...` and recheck, up to the round cap. When `presentation` exits 5 with blocking findings open, take the presentation exit at the cap: leave the draft its last round read unedited (the runner releases it with those findings listed) and set `current_step: 11, status: complete`. If the reader stops, or cannot run, set `review_hold` and leave the step number unchanged. Otherwise only an accepted current draft may set `current_step: 11, status: complete`.
 
 ---
 

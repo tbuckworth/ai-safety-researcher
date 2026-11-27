@@ -413,6 +413,20 @@ else
 fi
 write_run_config
 
+# A resumed run that an older rule stopped at a review cap goes on under the
+# current one: a methods-stop.md that only the approver's former one-revision
+# limit wrote is superseded (the run re-enters Step 8), and a draft Step 11 held
+# at the final reader's round cap is released (docs/AUTONOMOUS.md, Resuming a run).
+if [ -n "$IN_PROGRESS" ]; then
+    REOPEN_RC=0
+    reopen_declined_methods || REOPEN_RC=$?
+    case "$REOPEN_RC" in
+        0) ;;
+        1) release_held_report ;;
+        *) exit 1 ;;
+    esac
+fi
+
 # --- Step loop ---
 START_TIME=$(date +%s)
 # The provider output of the last step attempt (run_step sets it), for the
@@ -560,11 +574,16 @@ if ! is_true "$PAUSED" && { [ -s "${RUN_DIR}/next-steps.md" ] || [ -s "${RUN_DIR
     if [ "$REVIEW_RC" -eq 0 ]; then
         review_run presentation || REVIEW_RC=$?
     fi
+    # At the final reader's round cap the last draft it read goes out, with its
+    # open blocking findings listed (docs/WORKFLOW.md, Review Ledger).
+    if [ "$REVIEW_RC" -eq 5 ] && release_at_review_cap; then
+        REVIEW_RC=0
+    fi
     if [ "$REVIEW_RC" -ne 0 ]; then
         set_state_field release_status "$STATUS"
         set_status release_pending
         if [ "$REVIEW_RC" -eq 5 ]; then
-            set_review_hold "The final reader reached its round cap with blocking findings open (reviews/presentation/ledger.json), so the draft gets no further review in this cycle. To have a revised draft read again, run methods_review.py presentation RUN --new-cycle REASON on it, then resume."
+            set_review_hold "The draft changed after the final reader's last round (its round cap; reviews/presentation/ledger.json), so no reviewed draft is left to release. Restore the draft that round read, or run methods_review.py presentation RUN --new-cycle REASON on the new one, then resume."
         else
             set_review_hold "Review of the release draft failed or requested changes. Resolve the review and resume to retry delivery."
         fi
@@ -574,6 +593,12 @@ fi
 
 if is_true "$RETRYING_RELEASE" && ! is_true "$PAUSED"; then
     set_status "$STATUS"
+fi
+
+# The blocking findings the run went past at a round cap go with what it publishes.
+CAP_NOTES=()
+if ! is_true "$PAUSED"; then
+    record_cap_findings
 fi
 
 # Publication result, consumed by the outcome, the email and the issue comment.
@@ -606,7 +631,7 @@ fi
 # are there valid results, and is it on GitHub. Recorded in state.md and
 # run-outcome.json, and used verbatim by the email and the issue comment.
 NOTE_ARGS=()
-for note in ${PUBLISH_NOTES[@]+"${PUBLISH_NOTES[@]}"}; do
+for note in ${CAP_NOTES[@]+"${CAP_NOTES[@]}"} ${PUBLISH_NOTES[@]+"${PUBLISH_NOTES[@]}"}; do
     NOTE_ARGS+=(--note "$note")
 done
 OUTCOME_JSON=$(python3 "$LIB" outcome \

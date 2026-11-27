@@ -51,6 +51,7 @@ Entry points:
 - `scripts/researcher_lib.py`: the runner's decisions, as the subcommands its docstring lists.
 - `scripts/results_report.py`: the results email's model-free parts: the mailroom's login order for its writers, and the report assembled with no model.
 - `scripts/methods_review.py`: review and approve versioned methods, evidence and presentation (see `docs/WORKFLOW.md`).
+- `scripts/measurement_repair.py`: reserve one measurement repair and install its reviewed result (see `docs/AUTONOMOUS.md`).
 - `scripts/harness_lessons.py`: record and review cross-run improvements (see `docs/KNOWLEDGE-BASE.md`).
 - `scripts/preflight_checks.py`: an experiment's pre-flight checks.
 - `scripts/config.sh KEY...`: prints configured values; the runner and the helpers source it.

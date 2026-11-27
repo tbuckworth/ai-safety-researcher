@@ -582,6 +582,12 @@ The re-audited result replaces the experiment's standard result.
 A verified PASS makes Step 9 resume the remaining approved experiments.
 A verified FAIL stops the sequence and is reported alongside the original.
 
+`python3 scripts/measurement_repair.py RUN --reserve EXP` reserves the attempt
+for experiment ID `EXP`. Omitting `--reserve` installs the reviewed result
+and prints `PASS` or `FAIL`. Exit 0 means the requested action succeeded.
+Exit 1 means the action was refused or an input could not be read, with
+the reason on stderr. Exit 2 means the command-line arguments are invalid.
+
 ## The results email
 
 The email leads with what the reviewed evidence changes for the original research question. A pilot, an inconclusive primary comparison and a decision to stop can coexist in the first paragraph. When asking the recipient for a decision, the writer adds one agent-mail choices object in `email-choices.json`. The helper appends it to the plain report and lets the Mail tab render buttons. Informational mail uses the HTML draft.

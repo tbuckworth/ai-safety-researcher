@@ -32,7 +32,7 @@ import tempfile
 import time
 
 from researcher_files import digest, file_digest, write_json
-from researcher_lib import RUN_CONFIG_FILE, log, read_frontmatter
+from researcher_lib import MEASUREMENT_REPAIR_DIR, RUN_CONFIG_FILE, log, read_frontmatter
 from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,10 +155,10 @@ def packet(run: Path, phase: str) -> Packet:
                     required.append(relative)
                 else:
                     p.documents[relative] = "[Missing from this run; the corresponding checks cannot be verified.]"
-        repair = "audit/measurement-repair"
-        optional.extend(f"{repair}/{name}" for name in ("experiment", "methods-revision", "original-results.md",
-                        "original-preflight.md", "original-run.log", "original-audit.md",
-                        "results.md", "preflight.md", "run.log"))
+        optional.extend(f"{MEASUREMENT_REPAIR_DIR}/{name}" for name in (
+            "experiment", "methods-revision", "original-results.md", "original-preflight.md",
+            "original-run.log", "original-audit.md", "results.md", "preflight.md", "run.log",
+        ))
         optional.extend(str(f.relative_to(run)) for f in sorted(run.glob("prior/experiments/exp-*/results.md")))
     if phase == "presentation":
         if completed:

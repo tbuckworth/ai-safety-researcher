@@ -9,8 +9,7 @@ from pathlib import Path
 
 from methods_review import approval_target, checked_approval, load_receipt, packet, receipt_path
 from researcher_files import atomic_write
-from researcher_lib import parse_preflight, parse_verdict, scan_experiments
-REPAIR = Path("audit/measurement-repair")
+from researcher_lib import MEASUREMENT_REPAIR_DIR, parse_preflight, parse_verdict, scan_experiments
 
 
 def experiment_dir(run: Path, experiment: str) -> Path:
@@ -35,7 +34,7 @@ def reserve(run: Path, experiment: str) -> None:
     source = experiment_dir(run, experiment)
     if not any(item["id"] == experiment and item["verdict"] == "INCONCLUSIVE" for item in scan_experiments(run)):
         raise ValueError("only an inconclusive result can receive a measurement repair")
-    repair = run / REPAIR
+    repair = run / MEASUREMENT_REPAIR_DIR
     if repair.parent.resolve() != repair.parent:
         raise ValueError("expected the audit directory inside this run")
     revision = approved_revision(run, experiment)
@@ -55,7 +54,7 @@ def reserve(run: Path, experiment: str) -> None:
 
 
 def publish(run: Path) -> str:
-    repair = run / REPAIR
+    repair = run / MEASUREMENT_REPAIR_DIR
     if repair.resolve() != repair:
         raise ValueError("expected a repair directory inside this run")
     target = experiment_dir(run, (repair / "experiment").read_text().strip())

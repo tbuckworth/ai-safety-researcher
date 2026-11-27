@@ -112,6 +112,7 @@ RUN_SETTINGS = (
     "RESEARCHER_MAX_REVIEW_ROUNDS",
 )
 RUN_CONFIG_FILE = "run-config.json"
+MEASUREMENT_REPAIR_DIR = "audit/measurement-repair"
 
 # The verdicts an experiment can have (scan_experiments): those parse_verdict reads
 # from a results.md, PLANNED before dispatch, and MISSING after an unfinished launch.

@@ -295,11 +295,9 @@ def input_changes(run: Path, stage: str, ledger: Ledger, hashes: dict[str, str])
     not yet reviewed at this stage (None on the stage's first round)."""
     seen: dict[str, str] = {}
     last: dict[str, str] = {}
-    for entry in ledger.rounds:
-        path = receipt_path(run, stage, entry["revision"])
-        if path.is_file():
-            last = json.loads(path.read_text())["inputs"]
-            seen.update(last)
+    for entry in ledger.rounds:   # run_action writes each round's receipt before the ledger records it
+        last = json.loads(receipt_path(run, stage, entry["revision"]).read_text())["inputs"]
+        seen.update(last)
     if not seen:
         return None, None
     changes = {"changed": sorted(name for name in hashes if name in seen and seen[name] != hashes[name]),
@@ -543,7 +541,8 @@ def cap_findings(run: Path) -> int:
     for stage, revision in stages:
         ledger = Ledger.load(run, stage)
         receipt = receipt_path(run, stage, revision)
-        if not receipt.is_file() or not at_round_cap(run, stage, revision):
+        # the current draft may not have been reviewed yet; every approval round has its receipt
+        if (stage == "presentation" and not receipt.is_file()) or not at_round_cap(run, stage, revision):
             continue
         if json.loads(receipt.read_text())["reviews"][0]["decision"] != "revise":
             continue

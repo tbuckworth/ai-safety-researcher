@@ -29,14 +29,14 @@ select_backend() {
         claude)
             PROVIDER_BIN="$RESEARCHER_CLAUDE_BIN"
             MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CLAUDE_MODEL}"
-            use_claude_login "${1:-launch}" || exit 2
+            use_claude_login "$1" || exit 2
             AGENT_LABEL="Claude ${MODEL}${RESEARCHER_CLAUDE_LOGIN:+ (login ${RESEARCHER_CLAUDE_LOGIN})}"
             CONTINUE_COMMAND="/researcher-continue"
             COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
             ;;
         codex)
             codex_without_claude_login
-            use_claude_login   # none: it sets the globals of no login
+            use_claude_login "$1"   # none: it sets the globals of no login
             PROVIDER_BIN="$CODEX_BIN"
             MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CODEX_MODEL}"
             CODEX_REASONING="$RESEARCHER_CODEX_REASONING"
@@ -102,7 +102,7 @@ use_claude_login() {
     # configuration file or the run's saved settings gave, saying so. Returns
     # 2 on rejection at launch. In report mode a rejected writer is skipped,
     # with CLAUDE_LOGIN_FAILURE describing why.
-    local mode="${1:-launch}" name="${RESEARCHER_CLAUDE_LOGIN:-}" usage found out setting saved_model writer_model given=()
+    local mode="$1" name="${RESEARCHER_CLAUDE_LOGIN:-}" usage found out setting saved_model writer_model given=()
     CLAUDE_LOGIN=""
     CLAUDE_LOGIN_FAILURE=""
     CLAUDE_LOGIN_DIR=""

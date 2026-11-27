@@ -15,7 +15,7 @@ email_settings() {
     # draft), REPORT_LIB, the mailroom's commands (AGENT_MAIL, AGENT_USAGE,
     # AGENT_STATUS; mailroom_tool), the Claude writers' CLI and the model of
     # those of the mailroom's order (a Claude run's own model, unless its login
-    # runs only its own, else RESEARCHER_EMAIL_CLAUDE_MODEL) and each writer's
+    # is unavailable or runs only its own, else RESEARCHER_EMAIL_CLAUDE_MODEL), and each writer's
     # time limit, EMAIL_TIMEOUT_SECONDS. Needs select_backend first; exits 2,
     # saying why, when a setting is missing or the time limit is not a whole
     # number of at least 1.
@@ -32,7 +32,7 @@ email_settings() {
     AGENT_USAGE=$(mailroom_tool agent-usage)
     AGENT_STATUS=$(mailroom_tool agent-status)
     EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
-    # Another login cannot run the model of a login that runs only its own.
+    # An unavailable login's model may also be specific to that login.
     if [ "$BACKEND" = "claude" ] && [ -z "$CLAUDE_LOGIN_MODEL" ] && [ -z "$CLAUDE_LOGIN_FAILURE" ]; then
         EMAIL_CLAUDE_MODEL="$MODEL"
     else

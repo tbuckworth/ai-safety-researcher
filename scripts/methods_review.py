@@ -139,7 +139,8 @@ def packet(run: Path, phase: str) -> Packet:
         try:
             actor = "human" if mode == "interactive" else "auto"
             plan, approval_path = approval_target(run, packet(run, "plan"))
-            approval = checked_approval(run, plan.revision(), actor, approval_path)
+            plan_revision = plan.revision()
+            approval = checked_approval(run, plan_revision, actor, approval_path)
             provenance = f"Recorded methods decision: {approval['reviews'][0]['decision']}."
             p.add(run, str(approval_path.relative_to(run)))
         except (FileNotFoundError, ValueError) as error:

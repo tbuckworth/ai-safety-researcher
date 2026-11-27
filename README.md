@@ -16,9 +16,9 @@ Given a research topic, the agent:
 3. **Assesses novelty**: determines whether the idea has already been done, is partially novel, or is new
 4. **Defines success criteria**: identifies SOTA baselines, benchmarks, and the minimum publishable contribution
 5. **Decomposes into components**: Steinhardt decomposition with lambda ordering (highest-risk-per-hour components first)
-6. Writes each experiment's methods, then obtains three independent Codex critiques of rival explanations, controls and stopping criteria. Later rounds of every review re-check the earlier findings recorded in a ledger instead of starting over, and only blocking findings ask for revision.
+6. Writes each experiment's methods, then obtains three independent Codex critiques of rival explanations, controls and stopping criteria. Later rounds of every review re-check the earlier findings recorded in a ledger instead of starting over, only blocking findings ask for revision, and a later round blocks only on what changed since an earlier round reviewed it.
 7. Prepares a short decision showing what the study can distinguish, the remaining uncertainty and its cost.
-8. Records approval of that version. In interactive mode you decide. In automatic mode a separate reviewer approves, asks for a revision or stops the study.
+8. Records approval of that version. In interactive mode you decide. In automatic mode a separate reviewer approves, asks for a revision or stops the study; when it still asks for a revision after its last round, the reviewed version runs and its objections are reported. A review cap never stops a run.
 9. **Runs experiments**: executes experiments in lambda order, stopping on failure if agreed
 10. **Audits the results** against primary records. The auditor checks for leakage, overclaiming and grader errors, and can repeat the load-bearing experiment when the hub authorizes it under the approved methods. A separate Codex reviewer challenges the evidence.
 11. **Compiles a LaTeX paper**: produces a full paper with real BibTeX citations, including negative results

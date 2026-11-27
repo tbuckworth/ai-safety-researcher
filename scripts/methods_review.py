@@ -6,16 +6,26 @@ Usage:
   methods_review.py evidence|approve-auto|verify|verify-evidence|verify-presentation RUN
   methods_review.py approve-human RUN REVISION
   methods_review.py respond RUN STAGE FINDING fixed|limit|declined NOTE
+  methods_review.py cap-findings|reopen-declined RUN
 
 The hub calls the review actions; verify actions are offline. Decisions use exit 0
 (approved), 3 (revision requested), or 4 (stop); a review asks for revision only
-for an open blocking finding. Exit 5 means a capped stage (plan, presentation) has
-had RESEARCHER_MAX_REVIEW_ROUNDS rounds in its current cycle: no review ran, and
-the last reviewed revision is printed. Errors use exit 1. Each stage keeps a
-review ledger (review_ledger.py) that every later round of it sees; respond
-records the hub's answer to one finding. All completed design critiques are
-returned to the approver, including objections. Evidence objections are returned
-to the auditor for disposition.
+for an open blocking finding. A capped stage (plan, approval, presentation) has at
+most RESEARCHER_MAX_REVIEW_ROUNDS rounds in a cycle. Exit 5 means the cap is
+reached: a further call on a new revision runs no review and prints the last
+reviewed revision; and the approval or presentation of the revision reviewed at
+the cap, when its reviewer still asks for revision, exits 5 too, for the stage's
+exit at the cap (docs/WORKFLOW.md, Review Ledger): the experiments run on that
+revision, or the draft is released, with the open blocking findings reported
+(cap-findings lists them). `verify` admits such an approval (exit 0). Errors use
+exit 1. Each stage keeps a review ledger (review_ledger.py) that every later round
+of it sees; a later round's new blocking finding must concern an input changed
+since the round that last reviewed it (the certified range). respond records the
+hub's answer to one finding. All completed design critiques are returned to the
+approver, including objections. Evidence objections are returned to the auditor
+for disposition. reopen-declined supersedes a methods-stop.md that only the
+automatic approver's former one-revision limit wrote, so that a resumed run
+re-enters approval (docs/AUTONOMOUS.md, Resuming a run).
 """
 import argparse
 from concurrent.futures import ThreadPoolExecutor
@@ -43,9 +53,27 @@ ROUND_CAP_EXIT = 5
 MODEL_KEY = "RESEARCHER_REVIEW_MODEL"
 EFFORT_KEY = "RESEARCHER_REVIEW_REASONING"
 ROUNDS_KEY = "RESEARCHER_MAX_REVIEW_ROUNDS"
-# Plan and presentation have their own cycle caps. For audit and approval
-# limits, see docs/WORKFLOW.md's Review Ledger.
-CAPPED_STAGES = ("plan", "presentation")
+# Stages with their own review cycle caps. The automatic approver has one
+# cycle per run. For audit limits, see docs/WORKFLOW.md's Review Ledger.
+CAPPED_STAGES = ("plan", "approval", "presentation")
+# The stages a decision may start a new cycle of (--new-cycle).
+CYCLE_STAGES = ("plan", "presentation")
+# The stages whose decision on the revision reviewed at the cap is itself the
+# stage's exit (exit 5) when its reviewer still asks for revision, and what their
+# reviewer is told in its last round.
+LAST_ROUND = {
+    "approval": "This is the last approval round: if you still ask for revision, the experiments run on this "
+                "revision and your open blocking findings are reported with the results as limitations.",
+    "presentation": "This is the last round: if you still ask for revision, the draft may be released with your "
+                    "open blocking findings listed beside it.",
+}
+CAP_EXIT_STAGES = tuple(LAST_ROUND)
+# The drafts a final reader reads; any one of them makes a presentation packet.
+DRAFTS = ("briefing.md", "next-steps.md", "paper/paper.tex")
+# What a resumed run moves into superseded/<time>/ when reopen-declined supersedes
+# a methods-stop.md: the stop and the deliverables written after it.
+SUPERSEDED = ("methods-stop.md", "briefing.md", "next-steps.md", "review-figures.json", "paper",
+              "audit/results-audit.md")
 # The ledgers each stage's reviewers see: their own, and the one the stage builds on.
 CONTEXT_STAGES = {"plan": ("plan",), "approval": ("plan", "approval"),
                   "evidence": ("evidence",), "presentation": ("evidence", "presentation")}
@@ -142,6 +170,10 @@ def packet(run: Path, phase: str) -> Packet:
             plan_revision = plan.revision()
             approval = checked_approval(run, plan_revision, actor, approval_path)
             provenance = f"Recorded methods decision: {approval['reviews'][0]['decision']}."
+            if approval["reviews"][0]["decision"] == "revise" and at_round_cap(run, "approval", plan_revision):
+                provenance += (" The automatic approver still asked for revision in its last round (the round cap), "
+                               "so the experiments ran on this revision as reviewed, its open blocking approval "
+                               "findings to be reported as limitations (docs/WORKFLOW.md, Step 8).")
             p.add(run, str(approval_path.relative_to(run)))
         except (FileNotFoundError, ValueError) as error:
             provenance = f"Prospective agreement cannot be verified: {error}"
@@ -167,10 +199,9 @@ def packet(run: Path, phase: str) -> Packet:
                 p.add(run, str(critique.relative_to(run)))
             else:
                 p.documents["evidence review"] = "[No independent critique is recorded for these exact evidence inputs.]"
-        drafts = ["briefing.md", "next-steps.md", "paper/paper.tex"]
-        if not any((run / name).is_file() for name in drafts):
+        if not any((run / name).is_file() for name in DRAFTS):
             raise ValueError("no briefing, next steps or paper to review")
-        optional.extend([*drafts, "rethink-rationale.md", "methods-stop.md", "audit/results-audit.md", "success-criteria.md"])
+        optional.extend([*DRAFTS, "rethink-rationale.md", "methods-stop.md", "audit/results-audit.md", "success-criteria.md"])
         optional.extend(str(path.relative_to(run)) for path in sorted(run.glob("paper/sections/*.tex")))
         if (run / "briefing.md").is_file() or (run / "paper/paper.tex").is_file() or (run / "review-figures.json").exists():
             p.add(run, "review-figures.json")
@@ -262,15 +293,25 @@ def review(prompt_name: str, p: Packet, config: ReviewSettings, schema: dict, co
             "usage": usage, "response": response}
 
 
-def input_changes(run: Path, stage: str, ledger: Ledger, hashes: dict[str, str]) -> str | None:
-    """Which reviewed inputs changed since the stage's last round, for its next reviewer."""
-    if not ledger.rounds:
-        return None
-    last = ledger.rounds[-1]
-    before = json.loads(receipt_path(run, stage, last["revision"]).read_text())["inputs"]
-    changes = {"changed": sorted(name for name in hashes if name in before and before[name] != hashes[name]),
-               "added": sorted(set(hashes) - set(before)), "removed": sorted(set(before) - set(hashes))}
-    return f"Reviewed inputs changed since ledger round {last['round']} (JSON): {json.dumps(changes)}"
+def input_changes(run: Path, stage: str, ledger: Ledger, hashes: dict[str, str]) -> tuple[str | None, set[str] | None]:
+    """The certified range of the stage's next round: for its reviewer, which reviewed
+    inputs changed since the round of this stage (in any cycle) that last reviewed
+    them; and the set of inputs a new blocking finding may concern, those changed or
+    not yet reviewed at this stage (None on the stage's first round)."""
+    seen: dict[str, str] = {}
+    last: dict[str, str] = {}
+    for entry in ledger.rounds:   # run_action writes each round's receipt before the ledger records it
+        last = json.loads(receipt_path(run, stage, entry["revision"]).read_text())["inputs"]
+        seen.update(last)
+    if not seen:
+        return None, None
+    changes = {"changed": sorted(name for name in hashes if name in seen and seen[name] != hashes[name]),
+               "added": sorted(set(hashes) - set(seen)), "removed": sorted(set(last) - set(hashes)),
+               "unchanged": sorted(name for name in hashes if seen.get(name) == hashes[name])}
+    text = (f"Reviewed inputs compared with the round of this stage that last reviewed each (JSON): "
+            f"{json.dumps(changes)}. An earlier round reviewed the unchanged ones: a new finding blocks only when "
+            "one of its sources is changed or added, or when it reopens a settled finding.")
+    return text, set(changes["changed"]) | set(changes["added"])
 
 
 def commission(stage: str, actor: str, run: Path, p: Packet, config: ReviewSettings, ledger: Ledger,
@@ -285,52 +326,86 @@ def commission(stage: str, actor: str, run: Path, p: Packet, config: ReviewSetti
     header = f"Review stage: {stage}. Ledger round {len(ledger.rounds) + 1}."
     if stage in CAPPED_STAGES:
         header += f" Round {in_cycle} of at most {config.max_rounds} in this review cycle."
+        if stage in LAST_ROUND and in_cycle >= config.max_rounds:
+            header += " " + LAST_ROUND[stage]
     context = [header]
+    settled_elsewhere = []
     for name in CONTEXT_STAGES[stage]:
         shown = ledger if name == stage else Ledger.load(run, name)
+        if name != stage:
+            settled_elsewhere.extend(shown.settled_ids())
         if shown.findings:
             context.append(f"Review ledger of the {name} stage (JSON):\n{shown.context()}")
-    changes = input_changes(run, stage, ledger, p.hashes)
+    changes, changed = input_changes(run, stage, ledger, p.hashes)
     if changes:
         context.append(changes)
+    sources = sorted(p.hashes)
     template = json.loads((TEMPLATES / "verdict.schema.json").read_text())
 
     def one(role: str) -> dict:
-        return review(prompt_names[role], p, config, ledger.response_schema(template, role), context)
+        return review(prompt_names[role], p, config,
+                      ledger.response_schema(template, role, sources, settled_elsewhere), context)
 
     if stage == "plan":
         with ThreadPoolExecutor(max_workers=len(ROLES)) as workers:
             calls = list(workers.map(one, roles))
     else:
         calls = [one(roles[0])]
-    responses = [(role, ledger.check_response(role, call.pop("response"))) for role, call in zip(roles, calls)]
+    responses = [(role, ledger.check_response(role, call.pop("response"), sources, settled_elsewhere))
+                 for role, call in zip(roles, calls)]
     reports = []
     for (role, response), call, (findings, decided) in zip(
-            responses, calls, ledger.record_round(p.revision(), responses, new_cycle)):
+            responses, calls, ledger.record_round(p.revision(), responses, new_cycle, changed)):
         report = {"role": role, **call, "decision": decided, "summary": response["summary"], "findings": findings}
         if decided != response["decision"]:
             report["stated_decision"] = response["decision"]
         reports.append(report)
     blocking = [f["id"] for f in ledger.open_blocking()]
+    certified = [f["id"] for r in reports for f in r["findings"] if f.get("certified")]
     log(f"{stage} ledger round {len(ledger.rounds)}: "
         + ", ".join(f"{r['role']} {r['decision']}" + (f" (stated {r['stated_decision']})" if "stated_decision" in r else "")
                     for r in reports)
         + f"; open blocking findings: {', '.join(blocking) or 'none'}")
-    if stage in CAPPED_STAGES and in_cycle == config.max_rounds:
+    if certified:
+        log(f"Recorded as non-blocking, on inputs an earlier {stage} round reviewed unchanged (the certified "
+            f"range): {', '.join(certified)}")
+    if stage in CAPPED_STAGES and in_cycle >= config.max_rounds:
         log(f"NOTE: this was the last round of the {stage} review cycle. Take the stage's exit on this revision "
             "without editing its inputs (docs/WORKFLOW.md, Review Ledger).")
     return reports
 
 
+def named(findings: list[dict]) -> str:
+    """Findings as "id (title); ...", or "none"."""
+    return "; ".join(f"{f['id']} ({f['title']})" for f in findings) or "none"
+
+
 def round_cap_reached(ledger: Ledger, cap: int) -> int:
     last = ledger.rounds[-1]["revision"]
-    listing = "; ".join(f"{f['id']} ({f['title']})" for f in ledger.open_blocking()) or "none"
+    listing = named(ledger.open_blocking())
+    if ledger.stage == "approval":
+        then = (f"Restore the plan to that revision from the methods of reviews/plan/{last}.json and run "
+                "approve-auto again: it returns that round's decision (docs/WORKFLOW.md, Step 8).")
+    else:
+        then = ("Take this stage's exit (docs/WORKFLOW.md, Review ledger); start a new cycle with --new-cycle "
+                "REASON only on a decision by Titus or the automatic approver.")
     log(f"{ledger.stage} review: round cap reached ({cap} rounds in cycle {ledger.cycle()}), so no review ran. "
-        f"Open blocking findings: {listing}. Last reviewed revision: {last}. Take this stage's exit "
-        "(docs/WORKFLOW.md, Review ledger); start a new cycle with --new-cycle REASON only on a decision "
-        "by Titus or the automatic approver.")
+        f"Open blocking findings: {listing}. Last reviewed revision: {last}. {then}")
     print(last)
     return ROUND_CAP_EXIT
+
+
+def approver_cycle_reason(approval_round: int) -> str:
+    """Why the plan's next review cycle starts when the automatic approver asks for a revision."""
+    return f"the automatic approver requested a revision (approval round {approval_round})"
+
+
+def at_round_cap(run: Path, stage: str, revision: str) -> bool:
+    """Whether `revision` is the one the last round of `stage` reviewed, in a cycle
+    that has had RESEARCHER_MAX_REVIEW_ROUNDS rounds."""
+    ledger = Ledger.load(run, stage)
+    return (bool(ledger.rounds) and ledger.rounds[-1]["revision"] == revision
+            and ledger.rounds_in_cycle() >= settings(run).max_rounds)
 
 
 def receipt_path(run: Path, phase: str, revision: str) -> Path:
@@ -406,6 +481,12 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
             if phase in CAPPED_STAGES and not new_cycle and ledger.rounds_in_cycle() >= config.max_rounds:
                 return round_cap_reached(ledger, config.max_rounds)
             reviews = commission(phase, actor, run, p, config, ledger, new_cycle)
+            if (phase == "approval" and reviews[0]["decision"] == "revise"
+                    and ledger.rounds_in_cycle() < config.max_rounds):
+                # The approver's request for a revision is the decision that starts the plan's next cycle.
+                plan = Ledger.load(run, "plan")
+                plan.arm_cycle(approver_cycle_reason(len(ledger.rounds)))
+                plan.save()
         if packet(run, source_phase).revision() != source_revision:
             raise ValueError("review inputs changed during review; rerun on the current revision")
         record = {"revision": rev, "inputs": p.hashes, "reviews": reviews,
@@ -430,8 +511,19 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
     if action == "verify-evidence":
         print(f"{decision} {path}")
         return 0
+    capped = phase in CAP_EXIT_STAGES and decision == "revise" and at_round_cap(run, phase, rev)
+    if capped:
+        log(f"{phase} review: revision {rev} was reviewed in the last round of its cycle and its reviewer still "
+            f"asks for revision. Take the stage's exit at the round cap (docs/WORKFLOW.md, Review Ledger): "
+            + ("the experiments run on this revision, its open blocking findings reported as limitations."
+               if phase == "approval" else "release this draft with its open blocking findings listed.")
+            + " cap-findings lists them.")
     print(rev)
-    return 0 if phase == "plan" else EXIT[decision]
+    if phase == "plan":
+        return 0
+    if capped:
+        return 0 if action == "verify" else ROUND_CAP_EXIT
+    return EXIT[decision]
 
 
 def note_cached(run: Path, stage: str, revision: str) -> None:
@@ -455,6 +547,148 @@ def load_receipt(path: Path, revision: str, roles) -> dict:
     return saved
 
 
+def cap_findings(run: Path) -> int:
+    """Print, as JSON, the blocking findings the run went past at a round cap: the
+    automatic approver's (and the plan critics' open ones) when the experiments ran
+    on a revision the approver still asked to revise in its last round, and the
+    final reader's when its last round left the current draft with blocking
+    findings open. `markdown` lists them for the report and the run directory,
+    `notes` gives one line per stage for the run's outcome, and `ids` names them."""
+    sections, notes, ids = [], [], []
+
+    def listing(findings: list[dict]) -> list[str]:
+        return [f"- **{f['id']}** ({f['title']}): {Ledger.current(f)['text']}" for f in findings]
+
+    # The approver's capped round is its last one, whatever the plan files hold now
+    # (a report step may have edited one since); the reader's is the current draft's.
+    stages = []
+    approval = Ledger.load(run, "approval")
+    if approval.rounds:
+        stages.append(("approval", approval.rounds[-1]["revision"]))
+    if any((run / name).is_file() for name in DRAFTS):
+        stages.append(("presentation", packet(run, "presentation").revision()))
+    for stage, revision in stages:
+        ledger = Ledger.load(run, stage)
+        receipt = receipt_path(run, stage, revision)
+        # the current draft may not have been reviewed yet; every approval round has its receipt
+        if (stage == "presentation" and not receipt.is_file()) or not at_round_cap(run, stage, revision):
+            continue
+        if json.loads(receipt.read_text())["reviews"][0]["decision"] != "revise":
+            continue
+        open_findings = ledger.open_blocking()
+        rounds = ledger.rounds_in_cycle()
+        listed = named(open_findings)
+        ids.extend(f["id"] for f in open_findings)
+        if stage == "approval":
+            plan_open = Ledger.load(run, "plan").open_blocking()
+            ids.extend(f["id"] for f in plan_open)
+            sections.append("\n".join([
+                "## Methods approval at its round cap", "",
+                f"The automatic approver still asked for revision in its last round ({rounds} rounds, the cap), so "
+                f"the experiments ran on revision {revision} as reviewed. Its open blocking findings:", "",
+                *listing(open_findings),
+                *(["", "The plan critics' blocking findings open at that revision:", "", *listing(plan_open)]
+                  if plan_open else [])]))
+            notes.append(f"The experiments ran on a design the automatic approver still asked to revise at its "
+                         f"round cap ({rounds} rounds); open blocking findings: {listed} (open-review-findings.md)")
+        else:
+            sections.append("\n".join([
+                "## Final reading at its round cap", "",
+                f"The final reader still asked for revision in its last round ({rounds} rounds, the cap), so this "
+                f"draft (revision {revision}) was released as reviewed, with these blocking findings open:", "",
+                *listing(open_findings)]))
+            notes.append(f"Released at the final reader's round cap ({rounds} rounds) with blocking findings open: "
+                         f"{listed} (open-review-findings.md)")
+    markdown = ""
+    if sections:
+        markdown = "# Review findings left open at a round cap\n\n" + "\n\n".join(sections) + "\n"
+    print(json.dumps({"markdown": markdown, "notes": notes, "ids": ids}))
+    return 0
+
+
+def reopen_declined(run: Path) -> int:
+    """Supersede a methods-stop.md that only the automatic approver's former
+    one-revision limit wrote, for a resumed run: the approver's last round asked
+    for revision (it did not stop), on the revision the plan critics reviewed
+    last (no plan was revised and reviewed after it, as one is when the hub stops
+    a revised plan for want of a feasible comparison), and no experiment has
+    started. Restores the
+    plan files edited since that round from its plan receipt, moves the stop and
+    the deliverables written after it into superseded/<time>/ (kept as history,
+    never deleted), and arms a new presentation cycle for the new draft and, below
+    the round cap, the plan cycle the approver's request starts. Step 8 then
+    takes the approver's decision under the current rule. Prints, as JSON,
+    `reopened` and either `why` not or what it did; writes nothing when not."""
+    def stays(why: str) -> int:
+        print(json.dumps({"reopened": False, "why": why}))
+        return 0
+
+    if not (run / "methods-stop.md").is_file():
+        return stays("there is no methods-stop.md")
+    if read_frontmatter(run / "state.md").get("mode") != "autonomous":
+        return stays("the run is not autonomous")
+    started = sorted(d.name for d in (run / "experiments").glob("exp-*")
+                     if (d / "started").exists() or (d / "results.md").exists())
+    if started:
+        return stays(f"experiments already started ({', '.join(started)})")
+    approval = Ledger.load(run, "approval")
+    if not approval.rounds:
+        return stays("no round of the automatic approver is recorded")
+    last = approval.rounds[-1]
+    decided = sorted(set(last["decisions"].values()))
+    if decided != ["revise"]:
+        return stays(f"the approver's last round decided {', '.join(decided) or 'nothing'}, not revise")
+    revision = last["revision"]
+    plan_rounds = Ledger.load(run, "plan").rounds
+    if plan_rounds and plan_rounds[-1]["revision"] != revision:
+        return stays(f"the plan was revised and reviewed again after approval round {last['round']}, so the stop "
+                     "came after that revision, not from the approver's revision limit")
+    receipt = json.loads(receipt_path(run, "plan", revision).read_text())
+    methods, reviewed = receipt["methods"], receipt["inputs"]
+    current = packet(run, "plan").hashes
+    differ = sorted(name for name in set(current) | set(reviewed) if current.get(name) != reviewed.get(name))
+    kept = [name for name in differ if name not in methods]
+    if kept:
+        return stays(f"inputs changed since approval round {last['round']} that its plan receipt does not keep "
+                     f"({', '.join(kept)}), so the reviewed revision cannot be restored")
+    config = settings(run)
+    rounds = approval.rounds_in_cycle()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    history = run / "superseded" / stamp
+    moved = []
+    for name in SUPERSEDED:
+        if (run / name).exists():
+            (history / name).parent.mkdir(parents=True, exist_ok=True)
+            (run / name).rename(history / name)
+            moved.append(name)
+    for name in differ:
+        (run / name).parent.mkdir(parents=True, exist_ok=True)
+        (run / name).write_text(methods[name], encoding="utf-8")
+    if packet(run, "plan").revision() != revision:
+        raise ValueError(f"restoring {', '.join(differ)} did not give back revision {revision}")
+    reason = (f"methods-stop.md came only from the automatic approver's former one-revision limit: its round "
+              f"{last['round']} asked for revision, and approval now allows {config.max_rounds} rounds")
+    (history / "README.md").write_text(
+        f"# Superseded on {stamp}\n\n{reason}. These files were written after that stop and are kept as "
+        f"history: {', '.join(moved)}. The resumed run re-entered Step 8 on revision {revision}"
+        + (f"; restored from reviews/plan/{revision}.json: {', '.join(differ)}." if differ else ".") + "\n",
+        encoding="utf-8")
+    if rounds < config.max_rounds:
+        plan = Ledger.load(run, "plan")
+        plan.arm_cycle(f"{approver_cycle_reason(last['round'])}; {reason}")
+        plan.save()
+    presentation = Ledger.load(run, "presentation")
+    if presentation.rounds:
+        presentation.arm_cycle(f"{reason}: the draft it led to is superseded, and a new draft follows")
+        presentation.save()
+    log(f"Reopened the methods decision: {reason}. Moved to {history.relative_to(run)}: {', '.join(moved)}"
+        + (f"; restored {', '.join(differ)}" if differ else ""))
+    print(json.dumps({"reopened": True, "revision": revision, "approval_rounds": rounds, "cap": config.max_rounds,
+                      "at_cap": rounds >= config.max_rounds, "moved_to": str(history.relative_to(run)),
+                      "moved": moved, "restored": differ, "reason": reason}))
+    return 0
+
+
 def respond(run: Path, stage: str, finding: str, disposition: str, note: str) -> int:
     ledger = Ledger.load(run, stage)
     ledger.respond(finding, disposition, note)
@@ -469,7 +703,7 @@ def main() -> int:
     for name in ("plan", "presentation", "evidence", "approve-auto", "verify", "verify-evidence", "verify-presentation"):
         action = actions.add_parser(name)
         action.add_argument("run", type=Path)
-        if name in CAPPED_STAGES:
+        if name in CYCLE_STAGES:
             action.add_argument("--new-cycle", metavar="REASON",
                                 help="start a new review cycle, giving the decision that warrants it")
     human = actions.add_parser("approve-human")
@@ -481,6 +715,9 @@ def main() -> int:
     answer.add_argument("finding")
     answer.add_argument("disposition", choices=DISPOSITIONS)
     answer.add_argument("note")
+    for name, text in (("cap-findings", "print the blocking findings the run went past at a round cap"),
+                       ("reopen-declined", "supersede a methods-stop.md from the former one-revision limit")):
+        actions.add_parser(name, help=text).add_argument("run", type=Path)
     args = parser.parse_args()
     new_cycle = getattr(args, "new_cycle", None)
     if new_cycle is not None and not new_cycle.strip():
@@ -491,6 +728,10 @@ def main() -> int:
             fcntl.flock(lock, fcntl.LOCK_EX)
             if args.action == "respond":
                 return respond(run, args.stage, args.finding, args.disposition, args.note)
+            if args.action == "cap-findings":
+                return cap_findings(run)
+            if args.action == "reopen-declined":
+                return reopen_declined(run)
             return run_action(args.action, run, getattr(args, "revision", None), new_cycle)
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         log(f"Review failed ({args.action}): {error}")

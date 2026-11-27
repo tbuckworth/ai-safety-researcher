@@ -9,8 +9,9 @@ decision bears on the researcher's original goal and why. In each finding name
 the claim, the specific source, what else could explain it and the cheapest
 observation that would decide between the explanations. Cite any absent
 evidence explicitly. Where a concern affects the headline, show the narrower
-claim or exact change it warrants. Give each new finding a short title, and
-list new findings in order of consequence.
+claim or exact change it warrants. Give each new finding a short title and its
+sources: the keys of the study materials it concerns. List new findings in
+order of consequence.
 
 ## Blocking findings
 
@@ -59,14 +60,29 @@ check every claim against the current material yourself.
   cheapest edit or observation that would settle it. That you would have done
   it differently does not keep a finding open.
 - Do not raise again, in new words, a finding the ledger already holds. A
-  resolved finding is settled. Reopen one only for a new reason, a change in
-  the material or an error in how it was settled, with a new finding whose
-  "reopens" names its id and whose text gives that reason. Otherwise leave
-  "reopens" empty.
+  resolved finding is settled, including one the ledger of an earlier stage
+  shows resolved (the plan stage's, for the approver). Reopen one only for a
+  new reason, a change in the material or an error in how it was settled, with
+  a new finding whose "reopens" names its id and whose text gives that reason.
+  Otherwise leave "reopens" empty.
+- An earlier round of this stage has reviewed every input it lists as
+  unchanged. A new finding blocks only when one of its sources changed since
+  the round that last reviewed it (listed as changed or added), or when it
+  reopens a settled finding. The hub records any other new finding as
+  non-blocking, and keeps a non-blocking finding non-blocking unless one of its
+  sources changed. A point you notice only now on unchanged material is still
+  worth raising, as a non-blocking finding.
 - Do not reverse how an earlier finding was resolved (where a fix landed, or
   which of two acceptable forms the hub chose) unless the resolution is wrong.
 - Keep a finding's blocking flag unless the material or the evidence for it
   has changed, and say what changed when you change it.
 
-The request also lists the reviewed inputs that changed since the previous
-round. Read all of the material, beginning with what changed.
+The request also lists, for each reviewed input, whether it changed since the
+round of this stage that last reviewed it. Read all of the material, beginning
+with what changed.
+
+A stage has a round cap. When the request says this is its last round, a
+"revise" no longer withholds the material: the automatic approver's
+experiments then run on this revision, and the draft a final reader read may be
+released, each with your open blocking findings reported beside it. Use "stop"
+only as defined above.

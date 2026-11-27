@@ -155,6 +155,17 @@ MOCK_NEXT_STEPS_WRITER
 
 # The real methods helper still hashes inputs, validates the structured response
 # and persists receipts. Only the external model and the planning hub are mocked.
+# The final reader decides MOCK_READER_DECISION (default approve). The automatic
+# approver decides the next word of MOCK_APPROVER_DECISIONS (space-separated, one
+# per round, counted in the file MOCK_APPROVER_COUNTER; approve once they run out).
+# Every other reviewer approves. A new finding's sources are every reviewed input.
+# mock-methods is the planning hub of steps 6, 8, 9 and 11. At Step 8 it acts on
+# the approver's exit as commands/researcher-auto-step.md says (or, with
+# MOCK_OLD_RULE=true, as the former one-revision rule did); a step that sets a
+# step or status of its own writes them to <run>/.mock-state ("STEP STATUS"),
+# which the lifecycle test's provider applies. With MOCK_STEP11_HOLD=true Step 11
+# writes a draft, has it read until the final reader's round cap, and holds it
+# there with review_hold, as the former rule did.
 install_mock_reviews() {
     local bin="$1"
     cat > "${bin}/mock-review" <<'MOCK_REVIEW'
@@ -172,6 +183,11 @@ prompt=$(cat)
 decision=approve
 if [[ "$prompt" == *"Read the draft as a scientist"* ]]; then
     decision=${MOCK_READER_DECISION:-approve}
+elif [[ "$prompt" == *"Act as the independent methodology approver"* ]] && [ -n "${MOCK_APPROVER_COUNTER:-}" ]; then
+    echo x >> "$MOCK_APPROVER_COUNTER"
+    read -r -a decisions <<< "${MOCK_APPROVER_DECISIONS:-}"
+    calls=$(wc -l < "$MOCK_APPROVER_COUNTER")
+    decision=${decisions[$((calls - 1))]:-approve}
 fi
 # Re-check every open finding the schema names, resolving it, and give a revise
 # decision the blocking finding a real reviewer needs to withhold a draft.
@@ -180,7 +196,8 @@ if [ "$decision" = revise ]; then
     new='[{"blocking":true,"title":"Mock objection","text":"The draft overstates the result.","reopens":""}]'
 fi
 jq -n --arg decision "$decision" --argjson new "$new" --slurpfile schema "$schema" \
-    '{decision: $decision, summary: "Mock review completed.", new_findings: $new,
+    '{decision: $decision, summary: "Mock review completed.",
+      new_findings: ($new | map(.sources = $schema[0].properties.new_findings.items.properties.sources.items.enum)),
       rechecks: ($schema[0].properties.rechecks.required
                  | map({key: ., value: {status: "resolved", blocking: true, text: "Resolved."}}) | from_entries)}' \
     > "$output"
@@ -192,15 +209,39 @@ step=$1
 run=$2
 case "$step" in
     6)
+        # A revision the approver asked for (Step 8 below) is kept.
         mkdir -p "${run}/experiments/exp-001"
         echo 'Compare the two conditions.' > "${run}/method-spec.md"
         echo 'Measure the paired difference.' > "${run}/success-criteria.md"
         echo '["exp-001"]' > "${run}/methods-order.json"
-        echo 'Paired comparison with a held-out test.' > "${run}/experiments/exp-001/plan.md"
+        [ -s "${run}/experiments/exp-001/plan.md" ] \
+            || echo 'Paired comparison with a held-out test.' > "${run}/experiments/exp-001/plan.md"
         python3 "$MOCK_REVIEW_HELPER" plan "$run"
         ;;
     8)
-        python3 "$MOCK_REVIEW_HELPER" approve-auto "$run"
+        rc=0
+        python3 "$MOCK_REVIEW_HELPER" approve-auto "$run" || rc=$?
+        if [ "$rc" -eq 3 ] && [ "${MOCK_OLD_RULE:-false}" = true ] && [ -e "${run}/.mock-revisions" ]; then
+            rc=4  # the former rule: a second request for revision ended the proposal
+        fi
+        case "$rc" in
+            0|5) ;;  # approved, or the approval round cap: the experiments run on this revision
+            3)
+                # Answer the approver's open blocking findings and revise the plan in Step 6.
+                for id in $(jq -r '.findings[] | select(.events[-1].by == "reviewer" and .events[-1].status == "open"
+                                   and .events[-1].blocking) | .id' "${run}/reviews/approval/ledger.json"); do
+                    python3 "$MOCK_REVIEW_HELPER" respond "$run" approval "$id" fixed "Answered in exp-001's plan"
+                done
+                echo "Revised to answer the approver ($(date +%s%N))." >> "${run}/experiments/exp-001/plan.md"
+                echo x >> "${run}/.mock-revisions"
+                echo "5 methods_revision_requested" > "${run}/.mock-state"
+                ;;
+            4)
+                echo 'The approver ended this proposal.' > "${run}/methods-stop.md"
+                echo "9 methods_declined" > "${run}/.mock-state"
+                ;;
+            *) exit "$rc" ;;
+        esac
         if [ "${MOCK_EDIT_AFTER_APPROVAL:-false}" = true ]; then
             echo 'Changed endpoint' >> "${run}/experiments/exp-001/plan.md"
         fi
@@ -210,6 +251,19 @@ case "$step" in
         ;;
     11)
         echo '{"figures":[],"reason":"Text-only mock report."}' > "${run}/review-figures.json"
+        if [ "${MOCK_STEP11_HOLD:-false}" = true ]; then
+            printf '# Briefing\n\nA mock draft.\n' > "${run}/briefing.md"
+            rc=3
+            while [ "$rc" -eq 3 ]; do
+                rc=0
+                python3 "$MOCK_REVIEW_HELPER" presentation "$run" || rc=$?
+                [ "$rc" -ne 3 ] || echo 'Revised after a reading.' >> "${run}/briefing.md"
+            done
+            [ "$rc" -eq 5 ] || exit "$rc"
+            sed -i 's/^status:.*/&\nreview_hold: "The final reader reached its round cap with blocking findings open."/' \
+                "${run}/state.md"
+            echo "10 audit_complete" > "${run}/.mock-state"
+        fi
         ;;
 esac
 MOCK_METHODS

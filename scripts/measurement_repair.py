@@ -25,7 +25,9 @@ def approved_revision(run: Path, experiment: str) -> str:
     target, path = approval_target(run, plan)
     revision = target.revision()
     approval = checked_approval(run, revision, actor, path)
-    if approval["reviews"][0]["decision"] != "approve" or experiment in approval.get("results_already_present", []):
+    if approval["reviews"][0]["decision"] != "approve":
+        raise ValueError("measurement repair requires an explicit methods approval")
+    if experiment in approval.get("results_already_present", []):
         raise ValueError("the original experiment lacks prospective approval")
     return revision
 

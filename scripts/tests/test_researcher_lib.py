@@ -713,7 +713,7 @@ class ClaudeLoginTest(unittest.TestCase):
             "replaced": "fable"})
 
     def test_a_launch_that_sets_another_model_is_refused(self):
-        for setting in lib.MODEL_SETTINGS:
+        for setting in ("RESEARCHER_MODEL", "RESEARCHER_CLAUDE_MODEL"):   # the settings use_claude_login passes
             with self.subTest(setting=setting), self.assertRaises(lib.LoginRefused) as refused:
                 self.login(**{setting: "opus"})
             self.assertIn(f"runs only the model vendor/neon, but this launch sets {setting} to 'opus'",

@@ -915,8 +915,6 @@ def _brief(value: str | None) -> str:
 CLAUDE_LOGIN_ENV = ("CLAUDE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_*", "CLAUDE_CODE_USE_*",
                     "CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
                     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC")
-# The settings that name a Claude run's model, the first one set winning.
-MODEL_SETTINGS = ("RESEARCHER_MODEL", "RESEARCHER_CLAUDE_MODEL")
 
 
 class LoginRefused(Exception):
@@ -952,8 +950,9 @@ def claude_login(found: object, *, name: str, model: str, given: Mapping[str, st
     runs, or ""), "model" (the run's model), "replaced" (the model the login's
     own replaces, or "")}.
 
-    `model` is the model the run's settings name (MODEL_SETTINGS), and `given`
-    holds the model settings this launch's environment sets, by name; a value
+    `model` is the model the run's settings name, and `given` holds the model
+    settings this launch's environment sets, by name (the runner's
+    use_claude_login chooses which settings name a model); a value
     the configuration file or the run's saved settings gave is not given. On a
     login with a model of its own, that model is the run's: a given setting
     that names another raises LoginRefused (a Claude model on such a login
@@ -965,11 +964,11 @@ def claude_login(found: object, *, name: str, model: str, given: Mapping[str, st
         raise LoginRefused(f"`agent-usage login {name} --json` did not describe the Claude login {name}: {problem}.")
     fixed = found["model"] or ""
     if fixed:
-        for setting in MODEL_SETTINGS:
-            if setting in given and given[setting] != fixed:
+        for setting, value in given.items():
+            if value != fixed:
                 raise LoginRefused(
                     f"the Claude login {name} (RESEARCHER_CLAUDE_LOGIN) runs only the model {fixed}, but this "
-                    f"launch sets {setting} to {_brief(given[setting])}. Unset {setting}, or set it to {fixed}.")
+                    f"launch sets {setting} to {_brief(value)}. Unset {setting}, or set it to {fixed}.")
     return {"name": name, "config_dir": found["config_dir"] or "", "args": found["args"], "fixed_model": fixed,
             "model": fixed or model, "replaced": model if fixed and model != fixed else ""}
 

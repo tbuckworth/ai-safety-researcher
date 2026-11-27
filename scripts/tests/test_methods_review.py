@@ -436,6 +436,38 @@ class ReviewTest(unittest.TestCase):
         # The approver's open findings are still listed for the report after the edit.
         self.assertEqual(json.loads(self.invoke("cap-findings"))["ids"][:2], ["approval-1", "approval-2"])
 
+    def test_cap_findings_preserve_human_authority_after_an_automatic_cap(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="revise")
+        rev = self.invoke("plan")
+        self.assertEqual(self.invoke("approve-auto", code=5), rev)
+        self.mode("interactive")
+        self.invoke("verify", code=1)
+        self.assertEqual(self.invoke("approve-human", rev), rev)
+        self.assertEqual(self.invoke("verify"), rev)
+
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertIn("Titus explicitly approved", report["markdown"])
+        self.assertIn("Titus explicitly approved", report["notes"][0])
+        self.assertNotIn("experiments ran", report["markdown"])
+        self.assertIn("approval-1", report["ids"])
+        self.assertIn("plan-1", report["ids"])
+
+        handoff = self.run / "reviews/approval" / f"{rev}.human.json"
+        saved = handoff.read_text()
+        self.mode("autonomous")
+        self.assertEqual(self.invoke("verify"), rev)
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertIn("The cap permits autonomous execution", report["markdown"])
+        self.assertNotIn("Titus explicitly approved", report["markdown"])
+        self.mode("interactive")
+        handoff.write_text(saved.replace('"human"', '"auto"'))
+        self.invoke("verify", code=1)
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertIn("Human approval could not be verified", report["markdown"])
+        self.assertNotIn("Titus explicitly approved", report["markdown"])
+        self.assertNotIn("experiments ran", report["markdown"])
+        self.assertIn("approval-1", report["ids"])
+
     def test_a_stop_at_the_cap_still_stops(self):
         self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="stop")
         self.invoke("plan")

@@ -545,8 +545,8 @@ def load_receipt(path: Path, revision: str, roles) -> dict:
 
 def cap_findings(run: Path) -> int:
     """Print, as JSON, the blocking findings the run went past at a round cap: the
-    automatic approver's (and the plan critics' open ones) when the experiments ran
-    on a revision the approver still asked to revise in its last round, and the
+    automatic approver's (and the plan critics' open ones) for a revision the
+    approver still asked to revise in its last round, and the
     final reader's when its last round left the current draft with blocking
     findings open. `markdown` lists them for the report and the run directory,
     `notes` gives one line per stage for the run's outcome, and `ids` names them."""
@@ -578,15 +578,26 @@ def cap_findings(run: Path) -> int:
         if stage == "approval":
             plan_open = Ledger.load(run, "plan").open_blocking()
             ids.extend(f["id"] for f in plan_open)
+            authorization = f"The cap permits autonomous execution on revision {revision}."
+            if read_frontmatter(run / "state.md").get("mode") == "interactive":
+                authorization = f"Human approval could not be verified for revision {revision}."
+                try:
+                    plan, path = approval_target(run, packet(run, "plan"))
+                    if plan.revision() == revision:
+                        human = checked_approval(run, revision, "human", path)
+                        if human["reviews"][0]["decision"] == "approve":
+                            authorization = f"Titus explicitly approved revision {revision}."
+                except (FileNotFoundError, ValueError) as error:
+                    log(f"Could not verify human approval for capped revision {revision}: {error}")
             sections.append("\n".join([
                 "## Methods approval at its round cap", "",
-                f"The automatic approver still asked for revision in its last round ({rounds} rounds, the cap), so "
-                f"the experiments ran on revision {revision} as reviewed. Its open blocking findings:", "",
+                f"The automatic approver still asked for revision in its last round ({rounds} rounds, the cap). "
+                f"{authorization} Its open blocking findings:", "",
                 *listing(open_findings),
                 *(["", "The plan critics' blocking findings open at that revision:", "", *listing(plan_open)]
                   if plan_open else [])]))
-            notes.append(f"The experiments ran on a design the automatic approver still asked to revise at its "
-                         f"round cap ({rounds} rounds); open blocking findings: {listed} (open-review-findings.md)")
+            notes.append(f"The automatic approver still asked to revise at its round cap ({rounds} rounds); "
+                         f"open blocking findings: {listed} (open-review-findings.md). {authorization}")
         else:
             sections.append("\n".join([
                 "## Final reading at its round cap", "",

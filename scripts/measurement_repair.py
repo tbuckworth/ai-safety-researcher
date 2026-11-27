@@ -27,7 +27,12 @@ def approved_revision(run: Path, experiment: str) -> str:
     approval = checked_approval(run, revision, actor, path)
     if approval["reviews"][0]["decision"] != "approve":
         raise ValueError("measurement repair requires an explicit methods approval")
-    if experiment in approval.get("results_already_present", []):
+    earlier_results = approval.get("results_already_present")
+    order = json.loads(target.documents["methods-order.json"])
+    if (not isinstance(earlier_results, list) or any(name not in order for name in earlier_results)
+            or len(set(earlier_results)) != len(earlier_results)):
+        raise ValueError("methods approval lacks a valid prior-results record")
+    if experiment in earlier_results:
         raise ValueError("the original experiment lacks prospective approval")
     return revision
 

@@ -616,6 +616,7 @@ An inconclusive prerequisite can receive one repair per run when the auditor
 identifies a defect and the current approved experiment plan explicitly
 permits the remedy. Admission at the approval cap authorizes the original
 experiments as reviewed. A repair requires an explicit approval decision.
+The approval must record which experiments already had results.
 The hub checks the remaining time, experiment slots and approved budget.
 Fresh measurements require a procedure covered by the approved plan. A
 genuine negative goes directly to the report.

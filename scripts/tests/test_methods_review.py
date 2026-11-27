@@ -85,38 +85,6 @@ class ReviewTest(unittest.TestCase):
         self.write("briefing.md", text)
         self.write("review-figures.json", '{"figures":[],"reason":"Text-only briefing."}')
 
-    def test_measurement_repair_requires_a_valid_prior_results_record(self):
-        revision = self.invoke("plan")
-        self.write("experiments/exp-f02/results.md", "## Verdict: PASS\n")
-        self.invoke("approve-auto")
-        self.write("experiments/exp-f01/results.md", "## Verdict: INCONCLUSIVE\n")
-        self.write("audit/results-audit.md", "The retained measurements could not answer the question.\n")
-        receipt_path = self.run / "reviews" / "approval" / f"{revision}.json"
-        approved_receipt = receipt_path.read_text()
-        receipt = json.loads(approved_receipt)
-        key = "results_already_present"
-        self.assertEqual(receipt[key], ["exp-f02"])
-        del receipt[key]
-        malformed = (
-            {}, {key: None}, {key: {"exp-f01": False}}, {key: [4]},
-            {key: ["exp-unreviewed"]}, {key: ["exp-f02", "exp-f02"]},
-        )
-        helper = SCRIPT.with_name("measurement_repair.py")
-        for fields in malformed:
-            with self.subTest(fields=fields):
-                receipt_path.write_text(json.dumps(receipt | fields))
-                self.invoke("verify")
-                result = subprocess.run([sys.executable, helper, self.run, "--reserve", "exp-f01"],
-                                        env=self.env, capture_output=True, text=True)
-                self.assertEqual(result.returncode, 1, (result.stdout, result.stderr))
-                self.assertIn("methods approval lacks a valid prior-results record", result.stderr)
-                self.assertFalse((self.run / "audit" / "measurement-repair").exists())
-        self.invoke("evidence")
-        receipt_path.write_text(approved_receipt)
-        result = subprocess.run([sys.executable, helper, self.run, "--reserve", "exp-f01"],
-                                env=self.env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
-
     def test_independent_plan_reviews_and_bound_auto_approval(self):
         self.invoke("verify", code=1)
         self.invoke("approve-auto", code=1)
@@ -632,3 +600,35 @@ class ReviewTest(unittest.TestCase):
         path.write_text(json.dumps(receipt))
         self.invoke("approve-human", revision)
         self.assertEqual(self.invoke("verify"), revision)
+
+    def test_measurement_repair_requires_a_valid_prior_results_record(self):
+        revision = self.invoke("plan")
+        self.write("experiments/exp-f02/results.md", "## Verdict: PASS\n")
+        self.invoke("approve-auto")
+        self.write("experiments/exp-f01/results.md", "## Verdict: INCONCLUSIVE\n")
+        self.write("audit/results-audit.md", "The retained measurements could not answer the question.\n")
+        receipt_path = self.run / "reviews" / "approval" / f"{revision}.json"
+        approved_receipt = receipt_path.read_text()
+        receipt = json.loads(approved_receipt)
+        key = "results_already_present"
+        self.assertEqual(receipt[key], ["exp-f02"])
+        del receipt[key]
+        malformed = (
+            {}, {key: None}, {key: {"exp-f01": False}}, {key: [4]},
+            {key: ["exp-unreviewed"]}, {key: ["exp-f02", "exp-f02"]},
+        )
+        helper = SCRIPT.with_name("measurement_repair.py")
+        for fields in malformed:
+            with self.subTest(fields=fields):
+                receipt_path.write_text(json.dumps(receipt | fields))
+                self.invoke("verify")
+                result = subprocess.run([sys.executable, helper, self.run, "--reserve", "exp-f01"],
+                                        env=self.env, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1, (result.stdout, result.stderr))
+                self.assertIn("methods approval lacks a valid prior-results record", result.stderr)
+                self.assertFalse((self.run / "audit" / "measurement-repair").exists())
+        self.invoke("evidence")
+        receipt_path.write_text(approved_receipt)
+        result = subprocess.run([sys.executable, helper, self.run, "--reserve", "exp-f01"],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))

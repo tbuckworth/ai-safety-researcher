@@ -269,6 +269,8 @@ Present one short decision covering the motivating question, proposed contrast, 
 
 Present the revision of the latest plan round, listing its open blocking findings, if any, as unresolved objections, and offer the hub's proposed repairs for them as the revision option. In interactive mode offer **approve these methods**, **revise** and **stop**. For a decision already being handled by email, use the mailroom’s native plain-text Markdown `choices` block with no `--html`. Set the default to wait. Wait for an explicit answer before execution. Record the approved revision, the source of the response and any conditions in state.md. Treat a conditional answer that changes the methods as a revision. A revision Titus asks for starts a new plan review cycle (`plan RUN --new-cycle REASON`, citing his reply). In automatic mode the separate approver sees the same dossier. Routine progress, reviewer coordination and execution belong to the hub.
 
+When an autonomous run hands the decision to Titus and switches to interactive mode, use the exact reviewed revision sent to him with `approve-human RUN REVISION`. The human receipt is recorded separately from the automatic decision. Any change to the reviewed inputs requires another review and approval.
+
 ## Step 8: Record approval
 
 - **Interactive.** After Titus explicitly approves the revision presented in Step 7, run `approve-human RUN REVISION`. Recheck the receipt with `verify RUN`. A reply about a previous revision cannot approve the new one.

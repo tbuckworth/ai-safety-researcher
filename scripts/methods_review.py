@@ -372,9 +372,14 @@ def commission(stage: str, actor: str, run: Path, p: Packet, config: ReviewSetti
     return reports
 
 
+def named(findings: list[dict]) -> str:
+    """Findings as "id (title); ...", or "none"."""
+    return "; ".join(f"{f['id']} ({f['title']})" for f in findings) or "none"
+
+
 def round_cap_reached(ledger: Ledger, cap: int) -> int:
     last = ledger.rounds[-1]["revision"]
-    listing = "; ".join(f"{f['id']} ({f['title']})" for f in ledger.open_blocking()) or "none"
+    listing = named(ledger.open_blocking())
     if ledger.stage == "approval":
         then = (f"Restore the plan to that revision from the methods of reviews/plan/{last}.json and run "
                 "approve-auto again: it returns that round's decision (docs/WORKFLOW.md, Step 8).")
@@ -544,7 +549,7 @@ def cap_findings(run: Path) -> int:
             continue
         open_findings = ledger.open_blocking()
         rounds = ledger.rounds_in_cycle()
-        named = "; ".join(f"{f['id']} ({f['title']})" for f in open_findings) or "none"
+        listed = named(open_findings)
         ids.extend(f["id"] for f in open_findings)
         if stage == "approval":
             plan_open = Ledger.load(run, "plan").open_blocking()
@@ -557,7 +562,7 @@ def cap_findings(run: Path) -> int:
                 *(["", "The plan critics' blocking findings open at that revision:", "", *listing(plan_open)]
                   if plan_open else [])]))
             notes.append(f"The experiments ran on a design the automatic approver still asked to revise at its "
-                         f"round cap ({rounds} rounds); open blocking findings: {named} (open-review-findings.md)")
+                         f"round cap ({rounds} rounds); open blocking findings: {listed} (open-review-findings.md)")
         else:
             sections.append("\n".join([
                 "## Final reading at its round cap", "",
@@ -565,7 +570,7 @@ def cap_findings(run: Path) -> int:
                 f"draft (revision {revision}) was released as reviewed, with these blocking findings open:", "",
                 *listing(open_findings)]))
             notes.append(f"Released at the final reader's round cap ({rounds} rounds) with blocking findings open: "
-                         f"{named} (open-review-findings.md)")
+                         f"{listed} (open-review-findings.md)")
     markdown = ""
     if sections:
         markdown = "# Review findings left open at a round cap\n\n" + "\n\n".join(sections) + "\n"
@@ -576,7 +581,10 @@ def cap_findings(run: Path) -> int:
 def reopen_declined(run: Path) -> int:
     """Supersede a methods-stop.md that only the automatic approver's former
     one-revision limit wrote, for a resumed run: the approver's last round asked
-    for revision (it did not stop) and no experiment has started. Restores the
+    for revision (it did not stop), on the revision the plan critics reviewed
+    last (no plan was revised and reviewed after it, as one is when the hub stops
+    a revised plan for want of a feasible comparison), and no experiment has
+    started. Restores the
     plan files edited since that round from its plan receipt, moves the stop and
     the deliverables written after it into superseded/<time>/ (kept as history,
     never deleted), and arms a new presentation cycle for the new draft and, below
@@ -603,6 +611,10 @@ def reopen_declined(run: Path) -> int:
     if decided != ["revise"]:
         return stays(f"the approver's last round decided {', '.join(decided) or 'nothing'}, not revise")
     revision = last["revision"]
+    plan_rounds = Ledger.load(run, "plan").rounds
+    if plan_rounds and plan_rounds[-1]["revision"] != revision:
+        return stays(f"the plan was revised and reviewed again after approval round {last['round']}, so the stop "
+                     "came after that revision, not from the approver's revision limit")
     receipt = json.loads(receipt_path(run, "plan", revision).read_text())
     methods, reviewed = receipt["methods"], receipt["inputs"]
     current = packet(run, "plan").hashes

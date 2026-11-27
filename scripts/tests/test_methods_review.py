@@ -486,6 +486,22 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(self.invoke("approve-auto", code=5), revision)
         self.assertEqual(self.invoke("verify"), revision)
 
+    def test_reopen_leaves_a_stop_made_after_a_later_plan_review(self):
+        # The approver asks for a revision below the cap; the revised plan is reviewed
+        # in its new cycle, and the hub then stops for want of a feasible comparison.
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="3", DECISION="revise")
+        self.invoke("plan")
+        self.invoke("approve-auto", code=3)
+        self.revise_plan("Repeat on a new split with a second seed.")
+        self.write("methods-stop.md", "No feasible comparison can answer the question.")
+        result = json.loads(self.invoke("reopen-declined"))
+        self.assertFalse(result["reopened"])
+        self.assertIn("revised and reviewed again after approval round 1", result["why"])
+        self.assertTrue((self.run / "methods-stop.md").is_file())
+        self.assertEqual((self.run / "experiments/exp-f02/plan.md").read_text(),
+                         "Repeat on a new split with a second seed.")
+        self.assertFalse((self.run / "superseded").exists())
+
     def test_reopen_leaves_a_stated_stop_or_a_started_experiment(self):
         self.declined_run(1)
         self.write("literature/synthesis.md", "A review added after the approval.")

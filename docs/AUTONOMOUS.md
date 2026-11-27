@@ -332,19 +332,21 @@ rule to such a run:
 
 - **A stop from the one-revision limit.** When `methods-stop.md` exists, no
   experiment has started, and the approver's last round asked for revision
-  rather than stopping, the runner calls `methods_review.py reopen-declined`.
-  It moves `methods-stop.md` and the deliverables written after it
-  (`SUPERSEDED` in that script) into `superseded/<time>/` with a README saying
-  why, restores any reviewed plan file edited since the approver's last round
-  from that round's plan receipt, and arms a new presentation cycle for the
-  new draft and, below the cap, the plan cycle the approver's request starts.
-  The runner sets `status: methods_reopened` (with `methods_reopened` naming
-  the reason and the folder) and resumes at Step 8, which takes the approver's
-  last decision under the current rule: it answers the findings and revises
-  the plan, or, when the approver has had its rounds, runs the experiments on
-  the reviewed revision. The later steps then run as usual. A stated stop, or
-  a run with any experiment started, keeps its `methods-stop.md`. If the check
-  itself fails, the runner exits 1 and leaves the run as it was.
+  rather than stopping, on the plan revision the critics reviewed last, the
+  runner calls `methods_review.py reopen-declined`. It moves `methods-stop.md`
+  and the deliverables written after it (`SUPERSEDED` in that script) into
+  `superseded/<time>/` with a README saying why, restores any reviewed plan
+  file edited since the approver's last round from that round's plan receipt,
+  and arms a new presentation cycle for the new draft and, below the cap, the
+  plan cycle the approver's request starts. The runner sets `status:
+  methods_reopened` (with `methods_reopened` naming the reason and the folder)
+  and resumes at Step 8, which takes the approver's last decision under the
+  current rule: it answers the findings and revises the plan, or, when the
+  approver has had its rounds, runs the experiments on the reviewed revision.
+  The later steps then run as usual. A stated stop (the approver's, or the
+  hub's after a later plan review), or a run with any experiment started,
+  keeps its `methods-stop.md`. If the check itself fails, the runner exits 1
+  and leaves the run as it was.
 - **A draft held at the final reader's cap.** When the run paused after Step 10
   (`audit_complete`) and the current draft is the one the reader's last round
   read with blocking findings open, the runner marks Step 11 done and releases

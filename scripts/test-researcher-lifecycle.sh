@@ -545,9 +545,8 @@ assert_grep '^--subject ' "${CASE_DIR}/email.log"
 
 # A run the former one-revision rule stopped (methods-stop.md after the
 # approver's second request for revision, no experiment started), whose Step 11
-# then held its draft at the final reader's round cap, on a Claude login: the
-# Neon run of 27 Nov 2026. Resumed under the current rule, it re-enters Step 8,
-# answers the approver and revises the plan in a new cycle, runs the experiments
+# then held its draft at the final reader's round cap, on a Claude login.
+# Resumed under the current rule, it re-enters Step 8, answers the approver and revises the plan in a new cycle, runs the experiments
 # the approver accepts, and releases a new report; what the stop led to is kept
 # in superseded/.
 new_case resume-declined
@@ -561,7 +560,7 @@ RUN=$(dirname "${runs[0]}")
 assert_eq "$(field status "$RUN")" audit_complete "held status"
 assert_no_grep '^9$' "${CASE_DIR}/steps.log"
 assert_eq "$(jq -r .settings.RESEARCHER_CLAUDE_LOGIN "${RUN}/run-config.json")" gemini "saved login"
-# Step 11 edited a reviewed plan input after the approval, as Neon's did.
+# Step 11 edited a reviewed plan input after the approval.
 echo 'Edited by the report step.' >> "${RUN}/success-criteria.md"
 : > "${CASE_DIR}/steps.log"
 : > "${CASE_DIR}/claude-calls.log"

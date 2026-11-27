@@ -218,13 +218,21 @@ MOCK_METHODS
 
 # install_mock_mailroom DIR: the agent mailroom a test runs against. The real
 # mailroom's code chooses the results email's writers (its login order), so the
-# installed agent-usage (found on PATH before DIR is put first) is used, on a
-# test configuration: Claude logins `personal` (the default) and `arrow` (a
-# config dir under DIR/../logins with a login file), then Codex, and no API key.
-# agent-status is a stand-in, DIR/agent-status, that appends each note to
-# $MOCK_STATUS_LOG instead of the real status log. Exports what the runner reads
-# (RESEARCHER_AGENT_USAGE, RESEARCHER_AGENT_STATUS, AGENT_MAIL_CONFIG_DIR,
-# AGENT_MAIL_STATE_DIR); exits 1 when the mailroom is not installed.
+# installed agent-usage's code (found on PATH before DIR is put first) is used,
+# on a test configuration: Claude logins `personal` (the default) and `arrow` (a
+# config dir under DIR/../logins with a login file), then Codex, and no API key;
+# and `gemini`, a manual login with a settings file and a model of its own
+# (MOCK_LOGIN_MODEL; its config dir and settings file are under DIR/../logins),
+# which only a run that names it uses. RESEARCHER_AGENT_USAGE is a stand-in,
+# DIR/../mailroom/bin/agent-usage, beside a link to the installed mailroom's
+# package (results_report.py imports it from there): it answers `login NAME
+# --json` itself from the test configuration, as the mailroom's own does (until
+# the installed mailroom has that command), and hands anything else to the
+# installed agent-usage. agent-status is a stand-in, DIR/agent-status, that
+# appends each note to $MOCK_STATUS_LOG instead of the real status log. Exports
+# what the runner reads (RESEARCHER_AGENT_USAGE, RESEARCHER_AGENT_STATUS,
+# AGENT_MAIL_CONFIG_DIR, AGENT_MAIL_STATE_DIR) and MOCK_LOGIN_MODEL; exits 1
+# when the mailroom is not installed.
 install_mock_mailroom() {
     local dir="$1" root usage
     root=$(dirname "$1")
@@ -232,13 +240,43 @@ install_mock_mailroom() {
         echo "FAIL: these tests need the agent mailroom installed (agent-usage on PATH): its code orders the results email's writers." >&2
         exit 1
     fi
-    mkdir -p "${root}/logins/arrow" "${root}/mailroom-config" "${root}/mailroom-state"
+    mkdir -p "${root}/logins/arrow" "${root}/logins/gemini" "${root}/mailroom-config" "${root}/mailroom-state" \
+        "${root}/mailroom/bin"
     : > "${root}/logins/arrow/.credentials.json"
-    jq -n --arg arrow "${root}/logins/arrow" '{
+    export MOCK_LOGIN_MODEL="vendor/per-token-model"
+    jq -n --arg model "$MOCK_LOGIN_MODEL" '{env: {ANTHROPIC_BASE_URL: "https://per-token.example.test",
+        ANTHROPIC_MODEL: $model, CLAUDE_CODE_SUBAGENT_MODEL: $model}}' > "${root}/logins/gemini-settings.json"
+    jq -n --arg arrow "${root}/logins/arrow" --arg gemini "${root}/logins/gemini" \
+        --arg settings "${root}/logins/gemini-settings.json" --arg model "$MOCK_LOGIN_MODEL" '{
         usage: {claude_accounts: {personal: {config_dir: null, label: "test default login"},
-                                  arrow: {config_dir: $arrow, label: "test second login"}},
+                                  arrow: {config_dir: $arrow, label: "test second login"},
+                                  gemini: {config_dir: $gemini, settings: $settings, model: $model, manual: true,
+                                           label: "test per-token login"}},
                 order: ["claude:personal", "claude:arrow", "codex"]},
         orchestrator_fallback_secret: ""}' > "${root}/mailroom-config/config.json"
+    ln -s "$(dirname "$(dirname "$(readlink -f "$usage")")")/agentmail" "${root}/mailroom/agentmail"
+    {
+        printf '#!/usr/bin/env bash\nREAL_AGENT_USAGE=%q\n' "$usage"
+        cat <<'MOCK_AGENT_USAGE'
+set -euo pipefail
+if [ "${1:-}" = login ]; then
+    [ "$#" -eq 3 ] && [ "$3" = --json ] || { echo "mock agent-usage: only login NAME --json" >&2; exit 2; }
+    config="${AGENT_MAIL_CONFIG_DIR}/config.json"
+    if ! jq -e --arg name "$2" '.usage.claude_accounts | has($name)' "$config" > /dev/null; then
+        echo "agent-usage: '$2' is not a Claude login" >&2
+        exit 1
+    fi
+    exec jq --arg name "$2" '.usage.claude_accounts[$name] as $a
+        | {name: $name, label: ($a.label // $name), config_dir: $a.config_dir, settings: ($a.settings // null),
+           model: ($a.model // null), manual: ($a.manual // false),
+           args: ((if $a.settings then ["--settings", $a.settings] else [] end)
+                  + (if $a.model then ["--model", $a.model] else [] end))}' "$config"
+fi
+exec "$REAL_AGENT_USAGE" "$@"
+MOCK_AGENT_USAGE
+    } > "${root}/mailroom/bin/agent-usage"
+    chmod +x "${root}/mailroom/bin/agent-usage"
+    usage="${root}/mailroom/bin/agent-usage"
     cat > "${dir}/agent-status" <<'MOCK_AGENT_STATUS'
 #!/usr/bin/env bash
 set -euo pipefail

@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Send the results email of a finished run from what the run saved, through the
-# runner's own path (scripts/runner/notify.sh send_email): written by the first
-# login of the mailroom's order that can, else assembled with no model. It is
-# for a run whose report did not go (state.md's `undelivered` names the email,
-# and the runner's log says why); it runs no workflow step and no experiment.
+# runner's own path (scripts/runner/notify.sh send_email): written by the run's
+# own Claude login, if it has one, or the first login of the mailroom's order
+# that can, else assembled with no model. It is for a run whose report did not
+# go (state.md's `undelivered` names the email, and the runner's log says why);
+# it runs no workflow step and no experiment.
 #
 #   send-run-report.sh RUN_DIR
 #
-# Reads, in RUN_DIR: run-config.json, the settings the run saved (its backend
-# and models, the email model, the limits), restored as a resume restores them
-# (restore_run_settings: a setting the environment sets to another value exits
-# 2 without RESEARCHER_ALLOW_CONFIG_CHANGE); state.md (the issue and knowledge
-# base); and run-outcome.json (the outcome the runner recorded). The email's
-# continuation steps name RESEARCHER_RUNNER_DIR, the
+# Reads, in RUN_DIR: run-config.json, the settings the run saved (its backend,
+# models and Claude login, the email model, the limits), restored as a resume
+# restores them (restore_run_settings: a setting the environment sets to
+# another value exits 2 without RESEARCHER_ALLOW_CONFIG_CHANGE); state.md (the
+# issue and knowledge base); and run-outcome.json (the outcome the runner
+# recorded). The email's continuation steps name RESEARCHER_RUNNER_DIR, the
 # checkout that runs autonomous runs, and its writers run there, so that a
 # reply resumes the session there; the prompts and helpers are this checkout's.
 # A run whose report already went or is held by the pre-send review

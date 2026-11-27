@@ -214,6 +214,9 @@ JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 
 # Provider selection (select_backend). RESEARCHER_MODEL, when set, overrides
 # the selected backend's model (RESEARCHER_CLAUDE_MODEL or RESEARCHER_CODEX_MODEL).
+# RESEARCHER_CLAUDE_LOGIN puts every Claude session of the run on that login,
+# looked up once here (use_claude_login), and the model of a login that runs
+# only its own replaces the configured or saved one.
 select_backend
 
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
@@ -344,7 +347,7 @@ if ! python3 "$LIB" repo-visibilities | grep -qxF -- "$REPO_VISIBILITY"; then
     exit 2
 fi
 
-log "Agent backend: ${BACKEND}; model: ${MODEL}; compute profile: ${COMPUTE_PROFILE_NAME}; knowledge base: ${KB_DIR:-none}; owner: ${RUN_OWNER:-none}; pinned run: ${PIN_RUN_DIR:-none}"
+log "Agent backend: ${BACKEND}; model: ${MODEL}${CLAUDE_LOGIN:+ (login ${CLAUDE_LOGIN})}; compute profile: ${COMPUTE_PROFILE_NAME}; knowledge base: ${KB_DIR:-none}; owner: ${RUN_OWNER:-none}; pinned run: ${PIN_RUN_DIR:-none}"
 
 # Check if GPU is busy (>500MB VRAM used by any single process = busy). A GPU
 # whose use cannot be read is not taken to be idle: the runner stops (exit 1).

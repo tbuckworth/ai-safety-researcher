@@ -48,7 +48,7 @@ class LoginsTest(unittest.TestCase):
                     "fresh": {"config_dir": str(self.root / "logins" / "unset-up")}}
         cfg = dict({"usage": {"claude_accounts": accounts, "order": order}}, **(extra or {}))
         write(self.root / "config" / "config.json", json.dumps(cfg))
-        child = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "AGENT_MAIL"))}
+        child = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "AGENT_MAIL", "ANTHROPIC"))}
         child.update(AGENT_MAIL_CONFIG_DIR=str(self.root / "config"), AGENT_MAIL_STATE_DIR=str(self.root / "state"),
                      **env)
         result = run_report("logins", "--agent-usage", AGENT_USAGE, env=child)
@@ -80,6 +80,15 @@ class LoginsTest(unittest.TestCase):
         out = self.logins(["claude:personal"], CLAUDECODE="1", CLAUDE_CODE_SESSION_ID="abc",
                           CLAUDE_CONFIG_DIR=str(self.arrow), KEEP_ME="1")
         self.assertEqual(out["unset"], ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CONFIG_DIR"])
+
+    def test_names_another_login_s_endpoint_and_models_to_unset(self):
+        # What a login's settings file puts in the environment of a session on it, whatever the mailroom drops.
+        login_env = {"ANTHROPIC_BASE_URL": "https://per-token.example.test", "ANTHROPIC_MODEL": "m",
+                     "ANTHROPIC_DEFAULT_SONNET_MODEL": "m", "ANTHROPIC_SMALL_FAST_MODEL": "m",
+                     "CLAUDE_CODE_SUBAGENT_MODEL": "m", "CLAUDE_CODE_API_KEY_HELPER_TTL_MS": "60000",
+                     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+        out = self.logins(["claude:personal", "codex"], KEEP_ME="1", **login_env)
+        self.assertEqual(out["unset"], sorted(login_env))
 
     def test_unimportable_mailroom_fails(self):
         result = run_report("logins", "--agent-usage", str(self.root / "bin" / "agent-usage"))

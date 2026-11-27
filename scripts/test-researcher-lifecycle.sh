@@ -173,6 +173,8 @@ cat > "${MOCK_BIN}/claude" <<'MOCK_PROVIDER'
 #!/usr/bin/env bash
 set -euo pipefail
 prompt=$(cat)
+# The login it runs on (its config dir, - for the default) and its options.
+printf '%s %s\n' "${CLAUDE_CONFIG_DIR:--}" "$*" >> "${MOCK_CLAUDE_CALLS:-/dev/null}"
 
 if [[ "$prompt" == *"# Autonomous Research Email Composer"* ]]; then
     exec "$(dirname "$0")/mock-email-composer" "$@" <<< "$prompt"
@@ -349,6 +351,7 @@ run_researcher() {
         MOCK_REMOTES="$REMOTES" \
         MOCK_STEPS_LOG="${CASE_DIR}/steps.log" \
         MOCK_EMAIL_LOG="${CASE_DIR}/email.log" \
+        MOCK_CLAUDE_CALLS="${CASE_DIR}/claude-calls.log" \
         RESEARCHER_BACKEND=claude \
         RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
         RESEARCHER_CLAUDE_MODEL=mock-claude \
@@ -1446,6 +1449,32 @@ run_researcher RESEARCHER_OWNER=agent-spare "RESEARCHER_RUN_DIR=${RUN}" "RESEARC
 assert_eq "$RC" "3" "exit code (the owner's change accepted)"
 assert_grep "Resuming with a changed RESEARCHER_COMPUTE_PROFILE \(accepted: the run's owner, agent-spare\)" "${CASE_DIR}/stdout.log"
 assert_grep '^compute_profile: "Spare run, 40 dollars"$' "${RUN}/state.md"
+# The Claude login is a run setting: a resume stays on it without naming it, its
+# model still replacing the configured one (RESEARCHER_CLAUDE_MODEL= leaves that
+# to the configuration file), and a resume that names another login is refused.
+new_case run-config-login
+GEMINI_DIR="${TEST_ROOT}/logins/gemini"
+run_researcher RESEARCHER_CLAUDE_LOGIN=gemini RESEARCHER_CLAUDE_MODEL= RESEARCHER_SKIP_PUBLISH=true \
+    RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=3 -- "Login settings"
+assert_eq "$RC" "3" "exit code (paused)"
+RUN=$(ls -d "$OUT"/*-login-settings)
+assert_eq "$(jq -r '.settings.RESEARCHER_CLAUDE_LOGIN' "${RUN}/run-config.json")" "gemini" "saved login"
+assert_eq "$(field agent_login "$RUN")" "gemini" "agent_login"
+assert_eq "$(field agent_model "$RUN")" "$MOCK_LOGIN_MODEL" "agent_model"
+: > "${CASE_DIR}/claude-calls.log"
+run_researcher RESEARCHER_CLAUDE_MODEL= RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 \
+    -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (resumed, paused again)"
+assert_grep "Resuming in-progress run: ${RUN}" "${CASE_DIR}/stdout.log"
+assert_grep "model: ${MOCK_LOGIN_MODEL} \(login gemini\);" "${CASE_DIR}/stdout.log"
+assert_eq "$(wc -l < "${CASE_DIR}/claude-calls.log" | tr -d ' ')" "3" "steps 3 to 5 ran"
+assert_eq "$(grep -cF -- "--settings ${TEST_ROOT}/logins/gemini-settings.json --model ${MOCK_LOGIN_MODEL} --allowedTools " \
+    "${CASE_DIR}/claude-calls.log")" "3" "the resumed steps have the login's options"
+assert_eq "$(grep -c "^${GEMINI_DIR} " "${CASE_DIR}/claude-calls.log")" "3" "the resumed steps run on the login's config dir"
+run_researcher RESEARCHER_CLAUDE_LOGIN=arrow RESEARCHER_CLAUDE_MODEL= RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true \
+    -- "Ignored topic"
+assert_eq "$RC" "2" "exit code (another login on resume)"
+assert_grep "ERROR: the run's saved RESEARCHER_CLAUDE_LOGIN is 'gemini', but this launch sets 'arrow'" "${CASE_DIR}/stdout.log"
 
 # =============================================================================
 # 23. A check that cannot run is an error, not a pass: the re-read of an issue

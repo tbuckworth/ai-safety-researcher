@@ -701,6 +701,43 @@ test ! -s "$MOCK_CALL_LOG"
 grep -q 'gemini: agent-usage is not installed' "${MOCK_EMAIL_LOG}.last.html"
 grep -qF "Claude ${MOCK_LOGIN_MODEL} (login gemini)" "${MOCK_EMAIL_LOG}.last.html"
 
+# A lookup malfunction must stop report recovery before any alternate writer.
+rm "${CASE_RUN}/.email-sent"
+broken_usage="${TEST_ROOT}/mailroom/bin/broken-agent-usage"
+cat > "$broken_usage" <<'MOCK_BROKEN_AGENT_USAGE'
+#!/usr/bin/env bash
+if [ "${MOCK_BAD_LOOKUP:-}" = error ]; then
+    echo "agent-usage: could not read the mailroom configuration" >&2
+    exit 1
+fi
+printf '%s\n' '{not json'
+MOCK_BROKEN_AGENT_USAGE
+chmod +x "$broken_usage"
+for failure in json error; do
+    send_run_report "RESEARCHER_AGENT_USAGE=${broken_usage}" "MOCK_BAD_LOOKUP=${failure}" "${INHERITED[@]}"
+    if [ "$CASE_RC" != 2 ]; then
+        echo "FAIL: the saved login lookup ${failure} malfunction returned ${CASE_RC}, expected 2" >&2
+        cat "${TEST_ROOT}/resend.stdout" >&2
+        exit 1
+    fi
+    test ! -s "$MOCK_CALL_LOG"
+    test ! -s "$MOCK_EMAIL_LOG"
+done
+grep -q 'could not read the mailroom configuration' "${TEST_ROOT}/resend.stdout"
+
+# The same login may now run a different fixed model.
+: > "$MOCK_ENV_LOG"
+: > "$MOCK_STATUS_LOG"
+cp "$mailroom_config" "$mailroom_config.before"
+jq '.usage.claude_accounts.gemini.model = "vendor/changed-model"' "$mailroom_config.before" > "$mailroom_config"
+send_run_report "RESEARCHER_CLAUDE_MODEL=${CONFIGURED_MODEL}" "${INHERITED[@]}"
+mv "$mailroom_config.before" "$mailroom_config"
+test "$CASE_RC" = "0" || { cat "${TEST_ROOT}/resend.stdout" >&2; exit 1; }
+test "$(cat "$MOCK_ENV_LOG")" = "claude config=- inherited="
+grep -q "^claude --print --dangerously-skip-permissions --model ${EMAIL_MODEL} --session-id " "$MOCK_CALL_LOG"
+grep -qxF -- "- Footer agent label: Claude ${MOCK_LOGIN_MODEL} (login gemini)" "$MOCK_PROMPT_LOG"
+grep -Fq "gemini: the login now runs vendor/changed-model; the run used ${MOCK_LOGIN_MODEL}" "$MOCK_STATUS_LOG"
+
 # A login that runs any model (arrow) runs the run's own, with its config dir and
 # no options; the email's fallbacks skip it in the mailroom's order and run the
 # run's model too.

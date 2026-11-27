@@ -100,9 +100,9 @@ use_claude_login() {
     # claude-login refuses a RESEARCHER_MODEL or RESEARCHER_CLAUDE_MODEL that
     # this launch sets to another model (given_by_launch), and replaces one the
     # configuration file or the run's saved settings gave, saying so. Returns
-    # 2 on rejection at launch. In report mode a rejected writer is skipped,
-    # with CLAUDE_LOGIN_FAILURE describing why.
-    local mode="$1" name="${RESEARCHER_CLAUDE_LOGIN:-}" usage found out setting saved_model writer_model given=()
+    # 2 on lookup or validation errors. In report mode an unavailable saved
+    # writer is skipped, with CLAUDE_LOGIN_FAILURE describing why.
+    local mode="$1" name="${RESEARCHER_CLAUDE_LOGIN:-}" usage found lookup_rc missing out setting saved_model writer_model given=()
     CLAUDE_LOGIN=""
     CLAUDE_LOGIN_FAILURE=""
     CLAUDE_LOGIN_DIR=""
@@ -120,28 +120,37 @@ use_claude_login() {
             "${RUN_DIR}/run-config.json") || return 2
         MODEL="${saved_model:-$MODEL}"
     fi
-    for setting in RESEARCHER_MODEL RESEARCHER_CLAUDE_MODEL; do
-        if given_by_launch "$setting"; then
-            given+=(--given "${setting}=${!setting}")
-        fi
-    done
+    if [ -z "$saved_model" ]; then
+        for setting in RESEARCHER_MODEL RESEARCHER_CLAUDE_MODEL; do
+            if given_by_launch "$setting"; then
+                given+=(--given "${setting}=${!setting}")
+            fi
+        done
+    fi
     usage=$(mailroom_tool agent-usage)
-    if [ ! -x "$usage" ]; then
+    if [ ! -e "$usage" ]; then
         echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: the login is looked up with the mailroom's agent-usage, and ${usage} is not installed." >&2
         CLAUDE_LOGIN_FAILURE="agent-usage is not installed"
-    elif ! found=$("$usage" login "$name" --json); then
-        echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: '${usage} login ${name} --json' failed (its error is above), so the run cannot run on that login." >&2
-        CLAUDE_LOGIN_FAILURE="the saved login could not be looked up"
-    elif ! out=$(python3 "$LIB" claude-login --name "$name" --model "$MODEL" ${given[@]+"${given[@]}"} <<< "$found"); then
-        CLAUDE_LOGIN_FAILURE="the login configuration was rejected"
-    else
+    elif found=$("$usage" login "$name" --json 2>&1); then
+        out=$(python3 "$LIB" claude-login --name "$name" --model "$MODEL" ${given[@]+"${given[@]}"} <<< "$found") || return 2
         writer_model=$(jq -r '.model' <<< "$out") || return 2
         if [ -n "$saved_model" ] && [ "$writer_model" != "$saved_model" ]; then
             CLAUDE_LOGIN_FAILURE="the login now runs ${writer_model}; the run used ${saved_model}"
         fi
+    else
+        lookup_rc=$?
+        printf '%s\n' "$found" >&2
+        echo "ERROR: RESEARCHER_CLAUDE_LOGIN=${name}: '${usage} login ${name} --json' failed (its error is above), so the run cannot run on that login." >&2
+        # agent-usage has no distinct exit code for an unconfigured login.
+        missing="agent-usage: '${name}' is not a Claude login"
+        if [ "$lookup_rc" -ne 1 ] || [[ "$found" == *$'\n'* ]] \
+            || [[ "$found" != "$missing" && "$found" != "$missing (usage.claude_accounts has "*')' ]]; then
+            return 2
+        fi
+        CLAUDE_LOGIN_FAILURE="the saved login is no longer configured"
     fi
     if [ -n "$CLAUDE_LOGIN_FAILURE" ]; then
-        [ "$mode" = report ] && return 0
+        [ -n "$saved_model" ] && return 0
         return 2
     fi
     CLAUDE_LOGIN="$name"

@@ -1475,6 +1475,26 @@ run_researcher RESEARCHER_CLAUDE_LOGIN=arrow RESEARCHER_CLAUDE_MODEL= RESEARCHER
     -- "Ignored topic"
 assert_eq "$RC" "2" "exit code (another login on resume)"
 assert_grep "ERROR: the run's saved RESEARCHER_CLAUDE_LOGIN is 'gemini', but this launch sets 'arrow'" "${CASE_DIR}/stdout.log"
+# A resume that switches the run to Codex (RESEARCHER_ALLOW_BACKEND_SWITCH=true)
+# drops the saved login with the switch's leave and records both changes. Step
+# 5 then runs on Codex (the mock claude stands in for its CLI) and pauses.
+: > "${CASE_DIR}/claude-calls.log"
+run_researcher RESEARCHER_BACKEND=codex RESEARCHER_ALLOW_BACKEND_SWITCH=true "RESEARCHER_CODEX_BIN=${MOCK_BIN}/claude" \
+    RESEARCHER_CLAUDE_MODEL= RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true MOCK_LIMIT_AT_STEP=5 -- "Ignored topic"
+assert_eq "$RC" "3" "exit code (switched to Codex, paused)"
+assert_grep "Resuming on Codex, which runs on no Claude login: the run's RESEARCHER_CLAUDE_LOGIN \(gemini\) is dropped \(accepted with the switch of backend: RESEARCHER_ALLOW_BACKEND_SWITCH\)" \
+    "${CASE_DIR}/stdout.log"
+assert_grep "Agent backend: codex; model: [^ ]+; compute profile" "${CASE_DIR}/stdout.log"
+assert_eq "$(jq -c '.changes | map([.setting, .from, .to, .accepted_by])' "${RUN}/run-config.json")" \
+    '[["RESEARCHER_BACKEND","claude","codex","RESEARCHER_ALLOW_BACKEND_SWITCH"],["RESEARCHER_CLAUDE_LOGIN","gemini",null,"RESEARCHER_ALLOW_BACKEND_SWITCH"]]' \
+    "recorded changes"
+assert_eq "$(jq -c '[.settings.RESEARCHER_BACKEND, .settings.RESEARCHER_CLAUDE_LOGIN, .resolved.claude_login]' \
+    "${RUN}/run-config.json")" '["codex",null,null]' "saved backend and login after the switch"
+assert_eq "$(field agent_backend "$RUN")" "codex" "agent_backend"
+assert_eq "$(field agent_login "$RUN")" "none" "agent_login"
+assert_eq "$(wc -l < "${CASE_DIR}/claude-calls.log" | tr -d ' ')" "1" "one step ran"
+assert_grep "^- --search .* exec " "${CASE_DIR}/claude-calls.log"
+assert_no_grep "--settings" "${CASE_DIR}/claude-calls.log"
 
 # =============================================================================
 # 23. A check that cannot run is an error, not a pass: the re-read of an issue

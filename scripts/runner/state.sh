@@ -88,9 +88,13 @@ runtime_fields() {
         issue_number "${ISSUE_NUMBER:-none}" \
         compute_profile "$(yaml_quote "$COMPUTE_PROFILE")" \
         knowledge_base "$(yaml_quote "${KB_DIR:-none}")"
-    # The login's name is checked to be one plain word (use_claude_login).
+    # The login's name is checked to be one plain word (use_claude_login); a
+    # run without one has no agent_login, or none once a switch to Codex
+    # dropped it (codex_without_claude_login).
     if [ -n "${CLAUDE_LOGIN:-}" ]; then
         printf 'agent_login\t%s\n' "$CLAUDE_LOGIN"
+    elif [ -n "$(state_field "${RUN_DIR}/state.md" agent_login)" ]; then
+        printf 'agent_login\tnone\n'
     fi
     if [ -n "${RUN_DIR_OWNER:-}" ]; then
         printf 'owner\t%s\n' "$RUN_DIR_OWNER"

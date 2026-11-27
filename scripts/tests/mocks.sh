@@ -225,14 +225,16 @@ MOCK_METHODS
 # (MOCK_LOGIN_MODEL; its config dir and settings file are under DIR/../logins),
 # which only a run that names it uses. RESEARCHER_AGENT_USAGE is a stand-in,
 # DIR/../mailroom/bin/agent-usage, beside a link to the installed mailroom's
-# package (results_report.py imports it from there): it answers `login NAME
-# --json` itself from the test configuration, as the mailroom's own does (until
-# the installed mailroom has that command), and hands anything else to the
-# installed agent-usage. agent-status is a stand-in, DIR/agent-status, that
-# appends each note to $MOCK_STATUS_LOG instead of the real status log. Exports
-# what the runner reads (RESEARCHER_AGENT_USAGE, RESEARCHER_AGENT_STATUS,
-# AGENT_MAIL_CONFIG_DIR, AGENT_MAIL_STATE_DIR) and MOCK_LOGIN_MODEL; exits 1
-# when the mailroom is not installed.
+# package (results_report.py imports it from there): it answers `agent-usage
+# login NAME --json` itself from the test configuration, in the form of the
+# mailroom's own command (agent-mailroom branch gemini-login, ff1a0b6..125fcba,
+# bin/agent-usage cmd_login), which the installed mailroom may not have yet,
+# and hands anything else to the installed agent-usage; once the installed
+# mailroom has the command, the stand-in can go. agent-status is a stand-in,
+# DIR/agent-status, that appends each note to $MOCK_STATUS_LOG instead of the
+# real status log. Exports what the runner reads (RESEARCHER_AGENT_USAGE,
+# RESEARCHER_AGENT_STATUS, AGENT_MAIL_CONFIG_DIR, AGENT_MAIL_STATE_DIR) and
+# MOCK_LOGIN_MODEL; exits 1 when the mailroom is not installed.
 install_mock_mailroom() {
     local dir="$1" root usage
     root=$(dirname "$1")

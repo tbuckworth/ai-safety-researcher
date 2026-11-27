@@ -14,8 +14,8 @@ select_backend() {
     # workers. The Codex CLI's own settings (CODEX_BIN, the fast model and its
     # reasoning, sandbox, approval policy, user config) are set for either
     # backend, since Codex may write the results email of a Claude run. Exits 2
-    # for an unknown backend, a Codex run with RESEARCHER_CLAUDE_LOGIN, and a
-    # login use_claude_login refuses.
+    # for an unknown backend, a Codex run on a Claude login
+    # (codex_without_claude_login), and a login use_claude_login refuses.
     BACKEND="$RESEARCHER_BACKEND"
     CODEX_BIN="$RESEARCHER_CODEX_BIN"
     CODEX_FAST_MODEL="$RESEARCHER_CODEX_FAST_MODEL"
@@ -33,10 +33,7 @@ select_backend() {
             COMMIT_ATTRIBUTION="Co-Authored-By: Claude (autonomous researcher) <noreply@anthropic.com>"
             ;;
         codex)
-            if [ -n "${RESEARCHER_CLAUDE_LOGIN:-}" ]; then
-                echo "ERROR: RESEARCHER_CLAUDE_LOGIN (${RESEARCHER_CLAUDE_LOGIN}) names the Claude login a Claude run runs on, but the backend is codex. Unset it, or set RESEARCHER_BACKEND=claude." >&2
-                exit 2
-            fi
+            codex_without_claude_login
             use_claude_login   # none: it sets the globals of no login
             PROVIDER_BIN="$CODEX_BIN"
             MODEL="${RESEARCHER_MODEL:-$RESEARCHER_CODEX_MODEL}"
@@ -54,6 +51,37 @@ select_backend() {
             exit 2
             ;;
     esac
+}
+
+codex_without_claude_login() {
+    # A Codex run runs on no Claude login, so it drops RESEARCHER_CLAUDE_LOGIN,
+    # unless this launch sets it (given_by_launch): that exits 2. A login the
+    # run's saved settings gave is dropped on a resume that switches the run to
+    # Codex (an accepted change of RESEARCHER_BACKEND in RUN_CONFIG_CHANGES),
+    # and the drop is added to RUN_CONFIG_CHANGES as accepted by whoever
+    # accepted the switch; without such a switch the saved settings contradict
+    # themselves, and that exits 2. One the configuration file gave applies to
+    # Claude runs only. Each drop is logged.
+    local name="${RESEARCHER_CLAUDE_LOGIN:-}" accepted_by
+    [ -n "$name" ] || return 0
+    if given_by_launch RESEARCHER_CLAUDE_LOGIN; then
+        echo "ERROR: this launch sets RESEARCHER_CLAUDE_LOGIN=${name}, the Claude login a Claude run runs on, but the backend is codex. Unset RESEARCHER_CLAUDE_LOGIN, or set RESEARCHER_BACKEND=claude." >&2
+        exit 2
+    fi
+    if setting_restored RESEARCHER_CLAUDE_LOGIN; then
+        accepted_by=$(jq -r 'map(select(.setting == "RESEARCHER_BACKEND"))[0].accepted_by // empty' \
+            <<< "${RUN_CONFIG_CHANGES:-[]}")
+        if [ -z "$accepted_by" ]; then
+            echo "ERROR: the run's saved settings (run-config.json) put this Codex run on the Claude login ${name} (RESEARCHER_CLAUDE_LOGIN), which only a Claude run runs on." >&2
+            exit 2
+        fi
+        RUN_CONFIG_CHANGES=$(jq -c --arg from "$name" --arg by "$accepted_by" \
+            '. + [{setting: "RESEARCHER_CLAUDE_LOGIN", from: $from, to: null, accepted_by: $by}]' <<< "$RUN_CONFIG_CHANGES")
+        log "Resuming on Codex, which runs on no Claude login: the run's RESEARCHER_CLAUDE_LOGIN (${name}) is dropped (accepted with the switch of backend: ${accepted_by}); run-config.json records the saved and the new value."
+    else
+        log "The configured RESEARCHER_CLAUDE_LOGIN (${name}) is for Claude runs; this Codex run runs on no Claude login."
+    fi
+    RESEARCHER_CLAUDE_LOGIN=""
 }
 
 # shellcheck disable=SC2034 # The globals it sets are read by the other runner files.
@@ -109,18 +137,14 @@ use_claude_login() {
     MODEL=$(jq -r '.model' <<< "$out")
 }
 
-on_claude_login() {
-    # In the subshell a Claude session of the run starts in: on a run with a
-    # Claude login (use_claude_login), drops the variables CLAUDE_LOGIN_UNSET
-    # names and puts CLAUDE_CONFIG_DIR at the login's config dir (unset for the
-    # default login). Without one, changes nothing.
-    local name
-    [ -n "${CLAUDE_LOGIN:-}" ] || return 0
-    for name in ${CLAUDE_LOGIN_UNSET[@]+"${CLAUDE_LOGIN_UNSET[@]}"}; do
-        unset "$name"
-    done
-    if [ -n "$CLAUDE_LOGIN_DIR" ]; then
-        export CLAUDE_CONFIG_DIR="$CLAUDE_LOGIN_DIR"
+login_environment() {
+    # login_environment CONFIG_DIR: in the subshell a Claude session starts in,
+    # the environment of the Claude login whose config dir is CONFIG_DIR: drops
+    # what without_inherited_session names, then puts CLAUDE_CONFIG_DIR at
+    # CONFIG_DIR (unset when it is empty: the default login).
+    without_inherited_session
+    if [ -n "$1" ]; then
+        export CLAUDE_CONFIG_DIR="$1"
     else
         unset CLAUDE_CONFIG_DIR
     fi
@@ -299,12 +323,14 @@ invoke_codex() {
 
 invoke_provider() {
     # One branch per backend in researcher_lib.py BACKENDS. A Claude session
-    # runs on the run's Claude login, if it has one (on_claude_login, with the
-    # login's options).
+    # runs on the run's Claude login, if it has one (login_environment, with
+    # the login's options), and otherwise in the runner's environment.
     case "$BACKEND" in
         claude)
             (
-                on_claude_login
+                if [ -n "$CLAUDE_LOGIN" ]; then
+                    login_environment "$CLAUDE_LOGIN_DIR"
+                fi
                 invoke_claude none "$PROVIDER_BIN" "$MODEL" "Read,Write,Edit,Glob,Grep,Bash,WebSearch,WebFetch,Task" \
                     ${CLAUDE_LOGIN_ARGS[@]+"${CLAUDE_LOGIN_ARGS[@]}"}
             )
@@ -355,10 +381,10 @@ run_email_claude() {
     # run_email_claude CONFIG_DIR MODEL [ARG...]: a Claude session with a known
     # id (EMAIL_SESSION) writes and sends the email, so Titus's reply resumes
     # this session (the mailroom routes by session id, on whichever login holds
-    # it). It runs on the login whose config dir is CONFIG_DIR (empty: the
-    # default login), on MODEL, with the login's options ARG (the run's own
-    # login: CLAUDE_LOGIN_ARGS), without what without_inherited_session drops,
-    # and is stopped after EMAIL_TIMEOUT_SECONDS.
+    # it). It runs in the environment of the login whose config dir is
+    # CONFIG_DIR (login_environment; empty: the default login), on MODEL, with
+    # the login's options ARG (the run's own login: CLAUDE_LOGIN_ARGS), and is
+    # stopped after EMAIL_TIMEOUT_SECONDS.
     local config_dir="$1" model="$2" name
     shift 2
     case "${ISSUE_NUMBER:-none}" in
@@ -366,10 +392,7 @@ run_email_claude() {
         *) name="researcher #${ISSUE_NUMBER}" ;;
     esac
     build_email_prompt send | (
-        without_inherited_session
-        if [ -n "$config_dir" ]; then
-            export CLAUDE_CONFIG_DIR="$config_dir"
-        fi
+        login_environment "$config_dir"
         invoke_claude "$EMAIL_TIMEOUT_SECONDS" "$EMAIL_CLAUDE_BIN" "$model" "Read,Write,Glob,Grep,Bash" \
             --session-id "$EMAIL_SESSION" --name "$name" "$@"
     )

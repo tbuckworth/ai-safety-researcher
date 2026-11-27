@@ -177,8 +177,13 @@ RESEARCHER_CLAUDE_LOGIN=gemini ./scripts/researcher-cron.sh "Does gradient maski
   or, on a resume, from the run's saved settings, is replaced, and the log says
   so. This is how a resume tells a setting the launch gives from one it takes
   ([Resuming a run](#resuming-a-run)).
-- A Codex run with the setting exits 2. The independent Codex reviewers are
-  the same on every run (`RESEARCHER_REVIEW_MODEL`).
+- A Codex run runs on no Claude login. A launch that sets the login for one
+  exits 2. A login the run's saved settings give is dropped when a resume
+  switches the run to Codex: the leave that accepts the switch accepts the
+  drop, which the log and `changes` in `run-config.json` record (and
+  `state.md` then has `agent_login: none`). One from
+  `config/researcher.env` is for Claude runs only. The independent Codex
+  reviewers are the same on every run (`RESEARCHER_REVIEW_MODEL`).
 - The login appears next to the model: `agent_login:` in `state.md`, and
   `Claude <model> (login <name>)` in the startup line, the email, the issue
   comment and the run repository's README.
@@ -303,9 +308,11 @@ not from the configuration or the resuming shell. A setting the launch gives
 with another value is a change, which only the run's owner (a launch whose
 `RESEARCHER_OWNER` is the run's `owner:`; agent-board's agent-spare raises a
 run's budget this way) or `RESEARCHER_ALLOW_CONFIG_CHANGE=true` may make, and
-`RESEARCHER_ALLOW_BACKEND_SWITCH=true` for the backend alone. The runner logs
-an accepted change and adds it to `changes`; it refuses any other one, naming
-the setting, and exits 2. A run that predates `run-config.json` keeps the
+`RESEARCHER_ALLOW_BACKEND_SWITCH=true` for the backend alone (a switch to
+Codex also drops the run's Claude login; see
+[A run on a Claude login](#a-run-on-a-claude-login)). The runner logs an
+accepted change and adds it to `changes`; it refuses any other one, naming the
+setting, and exits 2. A run that predates `run-config.json` keeps the
 backend in its `state.md` and takes its other settings from the launch that
 first resumes it, which then records them.
 
@@ -415,7 +422,7 @@ never fails a step.
 |------|---------|
 | 0 | The run finished with outcome `complete` or `complete-local`, or there was nothing to do (no queued idea, the GPU is busy, another run holds the lock) |
 | 1 | An error stopped the runner; the log says which (e.g. `state.md` could not be written, the picked issue could not be re-read before claiming it, `nvidia-smi` failed) |
-| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a malformed `config/researcher.env` or a key missing from it, a paid compute profile without a budget, a resume that changes a saved setting without leave, a `RESEARCHER_RUN_DIR` that is not resumable, a `RESEARCHER_CLAUDE_LOGIN` that cannot be looked up or does not run the model the launch sets) |
+| 2 | A setting or request is invalid (e.g. `RESEARCHER_BACKEND`, a numeric setting that is not a whole number without leading zeros, or is 0 where it must be at least 1, a malformed `config/researcher.env` or a key missing from it, a paid compute profile without a budget, a resume that changes a saved setting without leave, a `RESEARCHER_RUN_DIR` that is not resumable, a `RESEARCHER_CLAUDE_LOGIN` that cannot be looked up, does not run the model the launch sets, or is set by the launch of a Codex run) |
 | 3 | Paused (provider limit or guard); resumable, nothing published |
 | 4 | Finished without a usable result; the outcome table above says which |
 | 5 | Finished with a usable result, but a deliverable failed: `run-outcome.json`, the email, the issue comment or the issue labels (the log names which; the others are still attempted). A paused or unusable run exits 3 or 4 even then; `undelivered:` in `state.md` names the failed deliverables (or `none`) whatever the exit code |

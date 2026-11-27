@@ -24,17 +24,21 @@ settings_json() {
     json_object ${pairs[@]+"${pairs[@]}"}
 }
 
+setting_restored() {
+    # setting_restored NAME: true when restore_run_settings took the setting
+    # NAME from the run's saved settings (it is in RESTORED_SETTINGS).
+    local restored
+    for restored in ${RESTORED_SETTINGS[@]+"${RESTORED_SETTINGS[@]}"}; do
+        [ "$restored" != "$1" ] || return 0
+    done
+    return 1
+}
+
 given_by_launch() {
     # given_by_launch NAME: true when this launch's environment set the setting
     # NAME: it is set, and neither the configuration file (config_from_file) nor
-    # the run's saved settings (restore_run_settings, RESTORED_SETTINGS) gave it.
-    local restored
-    if [ -z "${!1:-}" ] || config_from_file "$1"; then
-        return 1
-    fi
-    for restored in ${RESTORED_SETTINGS[@]+"${RESTORED_SETTINGS[@]}"}; do
-        [ "$restored" != "$1" ] || return 1
-    done
+    # the run's saved settings (setting_restored) gave it.
+    [ -n "${!1:-}" ] && ! config_from_file "$1" && ! setting_restored "$1"
 }
 
 restore_run_settings() {

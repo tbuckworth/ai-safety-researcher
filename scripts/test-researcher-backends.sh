@@ -701,8 +701,16 @@ refused_case() {
 refused_case loginmodel "ERROR: the Claude login gemini (RESEARCHER_CLAUDE_LOGIN) runs only the model ${MOCK_LOGIN_MODEL}, but this launch sets RESEARCHER_CLAUDE_MODEL to 'mock-claude'. Unset RESEARCHER_CLAUDE_MODEL, or set it to ${MOCK_LOGIN_MODEL}." \
     RESEARCHER_CLAUDE_MODEL=mock-claude
 refused_case loginoverride "but this launch sets RESEARCHER_MODEL to 'mock-other'." RESEARCHER_MODEL=mock-other
-refused_case logincodex "ERROR: RESEARCHER_CLAUDE_LOGIN (gemini) names the Claude login a Claude run runs on, but the backend is codex." \
+refused_case logincodex "ERROR: this launch sets RESEARCHER_CLAUDE_LOGIN=gemini, the Claude login a Claude run runs on, but the backend is codex. Unset RESEARCHER_CLAUDE_LOGIN, or set RESEARCHER_BACKEND=claude." \
     RESEARCHER_BACKEND=codex
+# A login from the configuration file is for Claude runs only: a Codex run drops
+# it, and goes on (here to stop, exit 2, at a bad repo visibility, before a run
+# is made).
+sed '$a RESEARCHER_CLAUDE_LOGIN=gemini' "${REPO_DIR}/config/researcher.env" > "${TEST_ROOT}/login-researcher.env"
+refused_case loginconfig "RESEARCHER_REPO_VISIBILITY must be one of" RESEARCHER_BACKEND=codex \
+    RESEARCHER_CONFIG_FILE="${TEST_ROOT}/login-researcher.env" RESEARCHER_CLAUDE_LOGIN= RESEARCHER_REPO_VISIBILITY=nowhere
+grep -qF "The configured RESEARCHER_CLAUDE_LOGIN (gemini) is for Claude runs; this Codex run runs on no Claude login." \
+    "${TEST_ROOT}/loginconfig.stdout"
 refused_case loginunknown "agent-usage: 'nosuch' is not a Claude login" RESEARCHER_CLAUDE_LOGIN=nosuch
 grep -qF "RESEARCHER_CLAUDE_LOGIN=nosuch: '${TEST_ROOT}/mailroom/bin/agent-usage login nosuch --json' failed" \
     "${TEST_ROOT}/loginunknown.stdout"

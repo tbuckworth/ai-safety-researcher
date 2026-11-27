@@ -611,8 +611,10 @@ assert_grep 'Re-entering Step 8 under the current rule' "${CASE_DIR}/stdout.log"
 assert_eq "$(paste -sd' ' "${CASE_DIR}/steps.log")" "8 6 7 8 9 10 11" "steps after the resume"
 [ ! -e "${RUN}/methods-stop.md" ] || fail "the old stop still stands"; ok
 HISTORY=$(find "${RUN}/superseded" -mindepth 1 -maxdepth 1 -type d)
-[ -s "${HISTORY}/methods-stop.md" ] && [ -s "${HISTORY}/briefing.md" ] && [ -s "${HISTORY}/README.md" ] \
-    || fail "the stop and its draft were not kept in superseded/"; ok
+if [ ! -s "${HISTORY}/methods-stop.md" ] || [ ! -s "${HISTORY}/briefing.md" ] || [ ! -s "${HISTORY}/README.md" ]; then
+    fail "the stop and its draft were not kept in superseded/"
+fi
+ok
 assert_grep '^methods_reopened: ".*one-revision limit' "${RUN}/state.md"
 assert_eq "$(field status "$RUN")" complete "status"
 assert_eq "$(jq -c '[.rounds[].decisions.auto]' "${RUN}/reviews/approval/ledger.json")" '["revise","revise","approve"]' \

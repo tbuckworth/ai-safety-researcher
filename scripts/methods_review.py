@@ -43,9 +43,8 @@ ROUND_CAP_EXIT = 5
 MODEL_KEY = "RESEARCHER_REVIEW_MODEL"
 EFFORT_KEY = "RESEARCHER_REVIEW_REASONING"
 ROUNDS_KEY = "RESEARCHER_MAX_REVIEW_ROUNDS"
-# Stages whose loop only the hub ends get a round cap per cycle. The evidence
-# critic runs once per audit round, which RESEARCHER_MAX_AUDIT_ROUNDS caps, and
-# the automatic approver allows one design revision (WORKFLOW.md Step 8).
+# Plan and presentation have their own cycle caps. For audit and approval
+# limits, see docs/WORKFLOW.md's Review Ledger.
 CAPPED_STAGES = ("plan", "presentation")
 # The ledgers each stage's reviewers see: their own, and the one the stage builds on.
 CONTEXT_STAGES = {"plan": ("plan",), "approval": ("plan", "approval"),

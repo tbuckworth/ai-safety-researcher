@@ -86,7 +86,7 @@ class ReviewTest(unittest.TestCase):
         self.invoke("verify", code=1)
         self.invoke("approve-auto", code=1)
         rev = self.invoke("plan")
-        # This identifier was generated before the human handoff was supported.
+        # Persisted autonomous plan identifiers must survive a handoff to a human.
         self.assertEqual(rev, "d52f66df9cd42df3f0c9b70a16498126e6b8a1afa71bed345fe1c49fb1c15f5d")
         self.assertEqual(rev, self.invoke("plan"))
         calls = self.records()

@@ -484,6 +484,21 @@ assert_grep "Released at the final reader's round cap \(1 rounds\) with blocking
 assert_grep '^--subject \[Auto-Research\]' "${CASE_DIR}/email.log"
 assert_no_grep 'Holding the run for review' "${CASE_DIR}/stdout.log"
 
+# A draft changed after the reader's capped round has no reviewed form to
+# release: the run is held, and says why.
+new_case reader-cap-edited
+run_researcher MOCK_STEP11_HOLD=true MOCK_READER_DECISION=revise -- "Edited after the cap"
+assert_eq "$RC" 3 "held at the reader's cap"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+echo 'Edited after the last reading.' >> "${RUN}/briefing.md"
+run_researcher RESEARCHER_RUN_DIR="$RUN"
+assert_eq "$RC" 3 "held: nothing reviewed to release"
+assert_eq "$(field status "$RUN")" release_pending "status"
+assert_grep "^last_pause_reason: \"The draft changed after the final reader's last round" "${RUN}/state.md"
+assert_eq "$(jq '.rounds | length' "${RUN}/reviews/presentation/ledger.json")" 3 "no reading beyond the cap"
+[ ! -s "${CASE_DIR}/email.log" ] || fail "an unreviewed draft was mailed"; ok
+
 # The automatic approver asks for a revision below its round cap: the hub answers
 # it, a new plan review cycle starts, and the revised plan is approved.
 new_case approver-revise

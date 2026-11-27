@@ -162,12 +162,15 @@ reopen_declined_methods() {
     # moves it and the deliverables written after it into superseded/<time>/)
     # no longer stands: the run re-enters Step 8, which takes the approver's last
     # decision under the current rule (docs/AUTONOMOUS.md, Resuming a run).
-    # Returns 0 when it reopened the run, 1 when the stop stands or there is none.
+    # Returns 0 when it reopened the run, 1 when the stop stands or there is
+    # none, and 2, after logging why, when the check failed: the run is then
+    # left as it was, since resuming it under the former stop is what this
+    # check is for.
     local out
     [ -f "${RUN_DIR}/methods-stop.md" ] || return 1
     if ! out=$(review_run reopen-declined); then
-        log "WARN: could not check whether methods-stop.md came only from the approver's former revision limit (the error is above); resuming the run as it stands."
-        return 1
+        log "ERROR: could not check whether methods-stop.md came only from the approver's former revision limit (the error is above). The run is left as it was; resume it once the check works."
+        return 2
     fi
     if [ "$(jq -r '.reopened' <<< "$out")" != true ]; then
         log "methods-stop.md stands: $(jq -r '.why' <<< "$out")."
@@ -216,11 +219,13 @@ record_cap_findings() {
     # last; the final reader's, when its last draft was released) from
     # methods_review.py cap-findings: in open-review-findings.md, in state.md
     # (open_review_findings) and in CAP_NOTES, the outcome's notes, which the
-    # email and the issue comment carry. A failure is logged, and the run goes on.
+    # email and the issue comment carry. When the listing fails, the run goes on
+    # and CAP_NOTES says so instead.
     local out ids
     CAP_NOTES=()
     if ! out=$(review_run cap-findings); then
-        log "WARN: could not list the review findings left open at a round cap (the error is above)."
+        log "ERROR: could not list the review findings left open at a round cap (the error is above)."
+        CAP_NOTES=("the review findings left open at a round cap could not be listed (methods_review.py cap-findings failed; see the run log)")
         return 0
     fi
     [ -n "$(jq -r '.markdown' <<< "$out")" ] || return 0

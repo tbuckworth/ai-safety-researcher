@@ -60,15 +60,17 @@ CAPPED_STAGES = ("plan", "approval", "presentation")
 # The stages a decision may start a new cycle of (--new-cycle).
 CYCLE_STAGES = ("plan", "presentation")
 # The stages whose decision on the revision reviewed at the cap is itself the
-# stage's exit (exit 5) when its reviewer still asks for revision.
-CAP_EXIT_STAGES = ("approval", "presentation")
-# What the reviewer of a cap exit stage is told in its last round.
+# stage's exit (exit 5) when its reviewer still asks for revision, and what their
+# reviewer is told in its last round.
 LAST_ROUND = {
     "approval": "This is the last approval round: if you still ask for revision, the experiments run on this "
                 "revision and your open blocking findings are reported with the results as limitations.",
     "presentation": "This is the last round: if you still ask for revision, the draft may be released with your "
                     "open blocking findings listed beside it.",
 }
+CAP_EXIT_STAGES = tuple(LAST_ROUND)
+# The drafts a final reader reads; any one of them makes a presentation packet.
+DRAFTS = ("briefing.md", "next-steps.md", "paper/paper.tex")
 # What a resumed run moves into superseded/<time>/ when reopen-declined supersedes
 # a methods-stop.md: the stop and the deliverables written after it.
 SUPERSEDED = ("methods-stop.md", "briefing.md", "next-steps.md", "review-figures.json", "paper",
@@ -192,10 +194,9 @@ def packet(run: Path, phase: str) -> Packet:
                 p.add(run, str(critique.relative_to(run)))
             else:
                 p.documents["evidence review"] = "[No independent critique is recorded for these exact evidence inputs.]"
-        drafts = ["briefing.md", "next-steps.md", "paper/paper.tex"]
-        if not any((run / name).is_file() for name in drafts):
+        if not any((run / name).is_file() for name in DRAFTS):
             raise ValueError("no briefing, next steps or paper to review")
-        optional.extend([*drafts, "rethink-rationale.md", "methods-stop.md", "audit/results-audit.md", "success-criteria.md"])
+        optional.extend([*DRAFTS, "rethink-rationale.md", "methods-stop.md", "audit/results-audit.md", "success-criteria.md"])
         optional.extend(str(path.relative_to(run)) for path in sorted(run.glob("paper/sections/*.tex")))
         if (run / "briefing.md").is_file() or (run / "paper/paper.tex").is_file() or (run / "review-figures.json").exists():
             p.add(run, "review-figures.json")
@@ -386,6 +387,11 @@ def round_cap_reached(ledger: Ledger, cap: int) -> int:
     return ROUND_CAP_EXIT
 
 
+def approver_cycle_reason(approval_round: int) -> str:
+    """Why the plan's next review cycle starts when the automatic approver asks for a revision."""
+    return f"the automatic approver requested a revision (approval round {approval_round})"
+
+
 def at_round_cap(run: Path, stage: str, revision: str) -> bool:
     """Whether `revision` is the one the last round of `stage` reviewed, in a cycle
     that has had RESEARCHER_MAX_REVIEW_ROUNDS rounds."""
@@ -447,7 +453,7 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
                     and ledger.rounds_in_cycle() < config.max_rounds):
                 # The approver's request for a revision is the decision that starts the plan's next cycle.
                 plan = Ledger.load(run, "plan")
-                plan.arm_cycle(f"the automatic approver requested a revision (approval round {len(ledger.rounds)})")
+                plan.arm_cycle(approver_cycle_reason(len(ledger.rounds)))
                 plan.save()
         if packet(run, source_phase).revision() != rev:
             raise ValueError("review inputs changed during review; rerun on the current revision")
@@ -521,12 +527,14 @@ def cap_findings(run: Path) -> int:
     def listing(findings: list[dict]) -> list[str]:
         return [f"- **{f['id']}** ({f['title']}): {Ledger.current(f)['text']}" for f in findings]
 
+    # The approver's capped round is its last one, whatever the plan files hold now
+    # (a report step may have edited one since); the reader's is the current draft's.
     stages = []
-    for stage, source in (("approval", "plan"), ("presentation", "presentation")):
-        try:
-            stages.append((stage, packet(run, source).revision()))
-        except (OSError, ValueError):
-            pass  # nothing of this stage to report: no plan, or no draft
+    approval = Ledger.load(run, "approval")
+    if approval.rounds:
+        stages.append(("approval", approval.rounds[-1]["revision"]))
+    if any((run / name).is_file() for name in DRAFTS):
+        stages.append(("presentation", packet(run, "presentation").revision()))
     for stage, revision in stages:
         ledger = Ledger.load(run, stage)
         receipt = receipt_path(run, stage, revision)
@@ -627,7 +635,7 @@ def reopen_declined(run: Path) -> int:
         encoding="utf-8")
     if rounds < config.max_rounds:
         plan = Ledger.load(run, "plan")
-        plan.arm_cycle(f"the automatic approver requested a revision (approval round {last['round']}); {reason}")
+        plan.arm_cycle(f"{approver_cycle_reason(last['round'])}; {reason}")
         plan.save()
     presentation = Ledger.load(run, "presentation")
     if presentation.rounds:

@@ -16,14 +16,12 @@ a capped stage, and a new cycle starts only with a recorded reason, given with t
 round that starts it or armed beforehand (``pending_cycle``) by the decision that
 warrants it.
 
-Like the checklist review gate of Titus's code repositories, which records a
-verdict for exactly the reviewed state and has a later review cover only what
-was added since a pass, a round certifies what it reviewed: a new finding in a
-later round of a stage (in any cycle) blocks only when one of its sources (the
-reviewed inputs it concerns) changed since the round that last reviewed it, or
-when it reopens a settled finding. Otherwise it is recorded as non-blocking
-(``certified``), and so is a re-check that would turn a non-blocking finding
-into a blocking one on unchanged material.
+A round certifies what it reviewed (docs/WORKFLOW.md, the certified range): a
+new finding in a later round of a stage (in any cycle) blocks only when one of
+its sources (the reviewed inputs it concerns) changed since the round that last
+reviewed it, or when it reopens a settled finding. Otherwise it is recorded as
+non-blocking (``certified``), and so is a re-check that would turn a
+non-blocking finding into a blocking one on unchanged material.
 """
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -36,8 +34,8 @@ STAGES = ("plan", "approval", "evidence", "presentation")
 STATUSES = ("open", "resolved")
 DISPOSITIONS = ("fixed", "limit", "declined")
 FIRST_CYCLE_REASON = "first review of this stage"
-# Each finding a receipt records (Ledger.record_round) has these keys and "reopens"
-# (and, since the certified range, "sources").
+# Each finding a receipt records (Ledger.record_round) has these keys and "reopens";
+# a new finding also names its "sources".
 RECEIPT_FINDING_KEYS = frozenset({"id", "status", "blocking", "title", "text"})
 NEW_FINDING_KEYS = frozenset({"blocking", "title", "text", "reopens", "sources"})
 # Why a finding a reviewer marked blocking was recorded as non-blocking.

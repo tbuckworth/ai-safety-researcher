@@ -417,8 +417,14 @@ write_run_config
 # current one: a methods-stop.md that only the approver's former one-revision
 # limit wrote is superseded (the run re-enters Step 8), and a draft Step 11 held
 # at the final reader's round cap is released (docs/AUTONOMOUS.md, Resuming a run).
-if [ -n "$IN_PROGRESS" ] && ! reopen_declined_methods; then
-    release_held_report
+if [ -n "$IN_PROGRESS" ]; then
+    REOPEN_RC=0
+    reopen_declined_methods || REOPEN_RC=$?
+    case "$REOPEN_RC" in
+        0) ;;
+        1) release_held_report ;;
+        *) exit 1 ;;
+    esac
 fi
 
 # --- Step loop ---

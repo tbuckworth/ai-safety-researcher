@@ -395,6 +395,8 @@ class ReviewTest(unittest.TestCase):
         self.write("experiments/exp-f02/plan.md", "Something else.")
         self.invoke("verify", code=1)
         self.assertEqual(len(self.records()), calls + 1)
+        # The approver's open findings are still listed for the report after the edit.
+        self.assertEqual(json.loads(self.invoke("cap-findings"))["ids"][:2], ["approval-1", "approval-2"])
 
     def test_a_stop_at_the_cap_still_stops(self):
         self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="stop")
@@ -486,6 +488,12 @@ class ReviewTest(unittest.TestCase):
 
     def test_reopen_leaves_a_stated_stop_or_a_started_experiment(self):
         self.declined_run(1)
+        self.write("literature/synthesis.md", "A review added after the approval.")
+        self.assertIn("does not keep (literature/synthesis.md)", json.loads(self.invoke("reopen-declined"))["why"])
+        (self.run / "literature/synthesis.md").unlink()
+        self.mode("interactive")
+        self.assertIn("not autonomous", json.loads(self.invoke("reopen-declined"))["why"])
+        self.mode("autonomous")
         self.write("experiments/exp-f01/started", "")
         self.assertIn("already started", json.loads(self.invoke("reopen-declined"))["why"])
         (self.run / "experiments/exp-f01/started").unlink()

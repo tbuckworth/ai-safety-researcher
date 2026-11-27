@@ -133,7 +133,7 @@ numeric settings, checked at startup (exit 2 unless a whole number of at least 1
 | `RESEARCHER_CODEX_FAST_REASONING` | Codex search-worker effort |
 | `RESEARCHER_CODEX_DEEP_MODEL` | Codex workers for the non-search tasks listed below (default: the parent model) |
 | `RESEARCHER_CODEX_DEEP_REASONING` | Reasoning effort for those workers (default: the parent's) |
-| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Claude model that writes the results email on each Claude login of the mailroom's order, for a Codex run or a run whose login runs only its own model (any other Claude run uses its own model); Codex writes it on `RESEARCHER_CODEX_FAST_MODEL` |
+| `RESEARCHER_EMAIL_CLAUDE_MODEL` | Model used by the mailroom's Claude writers for Codex runs and for Claude runs whose original login is unavailable or requires its own model. For other Claude runs, these writers use the run's model. |
 | `RESEARCHER_MODEL` | Overrides the selected backend's model, `RESEARCHER_CLAUDE_MODEL` or `RESEARCHER_CODEX_MODEL` (default: unset) |
 
 The Codex adapter (`templates/codex-adapter.md`, which the Codex skills also
@@ -441,11 +441,9 @@ never fails a step.
   output is in `logs/email-*.log`. The status log has the same outcome
   (`agent-status log`).
 - `agent-mail sent` lists what went out; `agent-mail status` checks the mailroom.
-- Once the cause is fixed, `scripts/send-run-report.sh <run-dir>` sends the
-  report from what the run saved, through the same writers; it refuses a run
-  whose report already went or is held. If the run's original Claude login is
-  unavailable, it keeps the original attribution and tries the remaining
-  writers, then assembles the report without a model if needed.
+- For an unsent report, run `scripts/send-run-report.sh <run-dir>`. It keeps the
+  original attribution and uses the remaining [results email](#the-results-email)
+  writers if a login is unavailable. It refuses reports already sent or held.
 - A draft the pre-send review held and nobody revised is sent unchanged by the
   mailroom after its fallback wait; nothing is lost.
 
@@ -585,9 +583,8 @@ paid API key is never used. No writer takes the variables of another login
 from the runner's environment (`CLAUDE_LOGIN_ENV` in
 `scripts/researcher_lib.py`, and what the mailroom drops).
 
-- **On a Claude login**, a session (on a login of the mailroom's order,
-  `RESEARCHER_EMAIL_CLAUDE_MODEL` for a Codex run or a run whose login runs
-  only its own model) writes it and sends it itself with
+- **On a Claude login**, the session uses the model selected by the
+  `RESEARCHER_EMAIL_CLAUDE_MODEL` rule above. It writes the report and sends it with
   `scripts/send-results-email.sh <run-dir>`, which calls `agent-mail send`.
   The pre-send review applies: if it prints `agent-mail: NOT SENT` (exit 3),
   the session fixes what it lists and runs the helper once more, and that send

@@ -24,9 +24,10 @@
           "blocking": {"type": "boolean"},
           "title": {"type": "string"},
           "text": {"type": "string"},
-          "reopens": {"type": "string"}
+          "reopens": {"type": "string"},
+          "sources": {"type": "array", "items": {"type": "string"}}
         },
-        "required": ["blocking", "title", "text", "reopens"],
+        "required": ["blocking", "title", "text", "reopens", "sources"],
         "additionalProperties": false
       }
     }

@@ -49,6 +49,9 @@ output/<run-id>/
 │   ├── kb-lessons.md           # The wiki's lessons/ for this design (Step 6, with a knowledge base)
 │   └── limitation-triage.md    # Design-time limitation triage (autonomous)
 ├── rethink-rationale.md        # Why the approach does not hold, after RETHINK or UNSALVAGEABLE (autonomous)
+├── methods-stop.md             # Why a stated stop ended the proposal before execution
+├── open-review-findings.md     # Blocking review findings the run went past at a round cap (autonomous)
+├── superseded/<time>/          # A former rule's stop and what followed it, kept when a resume supersedes it (autonomous)
 ├── experiments/
 │   ├── exp-001/
 │   │   ├── plan.md
@@ -272,8 +275,8 @@ Present the revision of the latest plan round, listing its open blocking finding
 ## Step 8: Record approval
 
 - **Interactive.** After Titus explicitly approves the revision presented in Step 7, run `approve-human RUN REVISION`. Recheck the receipt with `verify RUN`. A reply about a previous revision cannot approve the new one.
-- **Autonomous.** Run `approve-auto RUN`. The fresh approver may approve (exit 0), request a revision (3) or stop (4). On 3 answer the approver's blocking findings in the approval ledger and return to Step 6 for a new plan review cycle (`--new-cycle`, citing the approver). Allow one design revision in automatic mode; a second revision request or a stop ends this experiment proposal. Record why in `methods-stop.md` and go to the no-experiments audit. If experiments already ran, preserve their scope and audit their evidence without further empirical work. Other nonzero exits are operational errors, which leave the run resumable and confer no approval.
-- Record the disposition, revision, `criteria_approved` and stopping agreement in state.md. Interactive mode carries out the decision already made in Step 7. Automatic mode agrees to fail fast. A material change to criteria, inputs, controls, analysis, execution order or stopping rules needs another round of reviews and approval before the changed work runs. Record when prior outcomes were observed.
+- **Autonomous.** Run `approve-auto RUN`. The fresh approver may approve (exit 0), request a revision (3) or stop (4), in up to `RESEARCHER_MAX_REVIEW_ROUNDS` rounds, the cap of every review loop ([Review Ledger](#review-ledger)). On 3 answer the approver's blocking findings in the approval ledger and return to Step 6: the approver's request has already started the plan's next review cycle. When the approver still asks for revision in its last round, `approve-auto` exits 5: the experiments run on that revision as reviewed, and the approver's open blocking findings, with the plan critics' blocking findings open at that revision, go into the report's Limitations (`cap-findings RUN` lists them, and `verify RUN` admits the revision). A cap is never a reason to stop. A stop (4) ends this experiment proposal: record why in `methods-stop.md` and go to the no-experiments audit. If experiments already ran, preserve their scope and audit their evidence without further empirical work. Other nonzero exits are operational errors, which leave the run resumable and confer no approval.
+- Record the disposition, revision, `criteria_approved` and stopping agreement in state.md. Interactive mode carries out the decision already made in Step 7. Automatic mode adopts the reviewed stopping rules, which stop the experiments only on results (Step 9). A material change to criteria, inputs, controls, analysis, execution order or stopping rules needs another round of reviews and approval before the changed work runs; once the approver has had its rounds, the changed work does not run and the report says so. Record when prior outcomes were observed.
 
 ## Step 9: Execute Experiments
 
@@ -402,16 +405,18 @@ Each review stage (plan, approval, evidence, presentation) runs in rounds, one p
 
 - **Findings.** Each finding has a stable id (`presentation-3`), a title, a blocking flag and a status, open or resolved. The reviewer that raised a finding re-checks it in every later round until it is resolved. A resolved finding is settled: a reviewer reopens it only with a new finding that names it and gives a new reason. [`templates/review/instructions.md`](../templates/review/instructions.md) defines a blocking finding for each stage and gives the reviewers these rules.
 - **Decisions.** A review asks for revision (`revise`, exit 3) only while one of its blocking findings is open; non-blocking findings never withhold anything. A stated stop stands. A receipt keeps a stated decision that differs from the recorded one as `stated_decision`.
+- **The certified range.** A round certifies what it reviewed, as the checklist review gate of Titus's code repositories does: that gate records its verdict for exactly the reviewed state, and once a review has passed, later reviews cover only what was added since, so a pass is never re-litigated. Each new finding names its sources, the reviewed inputs it concerns. From a stage's second round on, in any cycle, a new finding blocks only when one of its sources changed since the round of that stage that last reviewed it (or was not reviewed at that stage before), or when it reopens a settled finding with a new reason, of its own stage or, for the automatic approver, of the plan stage it decides on. `methods_review.py` compares each input's fingerprint with the receipt of the round that last reviewed it, tells the reviewer which inputs changed, and records any other new blocking finding as non-blocking (`certified` in the ledger, with `stated_blocking`); a re-check cannot make a non-blocking finding blocking unless one of its sources changed. A point seen late on unchanged material is still recorded, as a non-blocking finding.
 - **Responses.** Before the next round, answer each open blocking finding with `methods_review.py respond RUN STAGE FINDING fixed|limit|declined NOTE`, the note saying where the reviewed material now has the fix, states the limitation or gives the reason for declining. Put a limitation or a reason in the material itself, where a reader of the plan or report needs it too: a response changes no reviewed input, so on its own it leaves the cached review of that revision standing. A non-blocking finding needs no response.
-- **Cycles and the round cap.** Rounds form cycles. In the plan and presentation stages a cycle has at most `RESEARCHER_MAX_REVIEW_ROUNDS` rounds; a further call exits 5 without a review and prints the last reviewed revision. Start a new cycle (`--new-cycle REASON`, recorded in the ledger) only after a decision by Titus or the automatic approver. The evidence critic runs once per audit round, which R_MAX caps, and the automatic approver allows one design revision (Step 8).
+- **Cycles and the round cap.** Rounds form cycles. In the plan, approval and presentation stages a cycle has at most `RESEARCHER_MAX_REVIEW_ROUNDS` rounds; a further call on a new revision exits 5 without a review and prints the last reviewed revision. The approval or presentation of the revision its last round reviewed also exits 5 while that round asks for revision (Step 8, Step 11). Start a new cycle (`--new-cycle REASON`, recorded in the ledger) only after a decision by Titus or the automatic approver; the approver's request for a revision starts the plan's next cycle itself. The automatic approver's rounds form one cycle per run. The evidence critic runs once per audit round, which R_MAX caps.
 
-At the round cap each stage ends this way:
+At the round cap each stage ends this way. A cap ends a loop; it never stops a run:
 
 | Stage | Exit |
 |---|---|
 | Plan | Present the last reviewed revision, unedited, with its open blocking findings as unresolved objections (Step 7); in automatic mode the approver decides on that revision (Step 8). Approval binds to the reviewed inputs, so first undo any edit made after that round: `reviews/plan/<revision>.json` keeps the reviewed methods text under `methods`. |
+| Approval (automatic) | The experiments run on the revision the approver's last round reviewed, and its open blocking findings and the plan's go into Limitations (Step 8). |
 | Evidence | The audit loop ends at R_MAX (Step 10), and the open findings go to Limitations. |
-| Presentation | Interactive: ask Titus whether to release the last reviewed draft with its open blocking findings listed, or to revise it in a new cycle. Automatic: set `review_hold`; the runner holds delivery. |
+| Presentation | Interactive: ask Titus whether to release the last reviewed draft with its open blocking findings listed, or to revise it in a new cycle. Automatic: release the last reviewed draft, unedited, with its open blocking findings listed in `open-review-findings.md` and the run's outcome, which the email and the issue comment carry. |
 
 ---
 
@@ -484,7 +489,7 @@ shared by every project, and they may want to see the diff first.
 
 `state.md` uses YAML frontmatter for machine-readable state and a narrative body for human readability.
 
-`status` values include: `clarified`, `research_complete`, `decomposition_complete`, `challenge_complete`, `experiments_complete`, `audit_remediating` (the auditor requested another remediation round; the autonomous wrapper re-enters Step 10), `audit_complete` (audit done, ready for the report), `complete`, and `failed`. The audit-remediation loop also carries `audit_round` (int) and `audit_exit_reason` (string).
+`status` values include: `clarified`, `research_complete`, `decomposition_complete`, `challenge_complete`, `methods_revision_requested` (the automatic approver asked for a revision; Step 6 revises the plan), `methods_declined` (the approver stopped the proposal), `methods_reopened` (a resumed run superseded a stop of a former rule; Step 8 decides again, see [AUTONOMOUS.md](AUTONOMOUS.md#a-run-stopped-at-a-review-cap-by-a-former-rule)), `experiments_complete`, `audit_remediating` (the auditor requested another remediation round; the autonomous wrapper re-enters Step 10), `audit_complete` (audit done, ready for the report), `release_pending` (the runner holds a draft for review), `complete`, and `failed`. The audit-remediation loop also carries `audit_round` (int) and `audit_exit_reason` (string).
 
 ```yaml
 ---

@@ -156,6 +156,81 @@ set_review_hold() {
     set_state_field last_pause_reason "$(yaml_quote "$1")"
 }
 
+reopen_declined_methods() {
+    # On a resume: a methods-stop.md that only the automatic approver's former
+    # one-revision limit wrote (methods_review.py reopen-declined decides, and
+    # moves it and the deliverables written after it into superseded/<time>/)
+    # no longer stands: the run re-enters Step 8, which takes the approver's last
+    # decision under the current rule (docs/AUTONOMOUS.md, Resuming a run).
+    # Returns 0 when it reopened the run, 1 when the stop stands or there is none.
+    local out
+    [ -f "${RUN_DIR}/methods-stop.md" ] || return 1
+    if ! out=$(review_run reopen-declined); then
+        log "WARN: could not check whether methods-stop.md came only from the approver's former revision limit (the error is above); resuming the run as it stands."
+        return 1
+    fi
+    if [ "$(jq -r '.reopened' <<< "$out")" != true ]; then
+        log "methods-stop.md stands: $(jq -r '.why' <<< "$out")."
+        return 1
+    fi
+    log "Re-entering Step 8 under the current rule: $(jq -r '.reason' <<< "$out"). The superseded files are in $(jq -r '.moved_to' <<< "$out")."
+    set_state_field methods_reopened "$(yaml_quote "$(jq -r '"\(.reason); superseded files in \(.moved_to)"' <<< "$out")")"
+    set_state_field current_step 7
+    set_status methods_reopened
+    set_state_field review_hold '""'
+    set_state_field audit_round 0
+    set_state_field audit_exit_reason '""'
+}
+
+release_held_report() {
+    # On a resume: a run whose Step 11 held its draft at the final reader's round
+    # cap (the former rule set review_hold there) has finished Step 11 but for the
+    # release. When the current draft is the one the reader's last round read
+    # (verify-presentation exits 5), Step 11 is marked done, and the runner then
+    # releases that draft with its open blocking findings.
+    local rc=0
+    [ "$(get_current_step)" = "$AUDIT_STEP" ] && [ "$(get_status)" = audit_complete ] || return 0
+    review_run verify-presentation > /dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 5 ] || return 0
+    log "Step 11 held its draft at the final reader's round cap; under the current rule that draft is released with its open blocking findings."
+    set_state_field current_step "$REPORT_STEP"
+    set_status complete
+}
+
+release_at_review_cap() {
+    # After the final reader's check exited 5 (its round cap, blocking findings
+    # open): true when the current draft is the one its last round read
+    # (verify-presentation exits 5 as well), which an autonomous run releases with
+    # those findings listed (record_cap_findings); false when the draft changed
+    # after that round, so that no reviewed draft is left to release.
+    local rc=0
+    review_run verify-presentation > /dev/null || rc=$?
+    [ "$rc" -eq 5 ] || return 1
+    log "The final reader reached its round cap with blocking findings open: releasing the draft it read, with those findings listed in open-review-findings.md."
+}
+
+# shellcheck disable=SC2034 # CAP_NOTES is read by researcher-cron.sh (the outcome's notes).
+record_cap_findings() {
+    # Lists the blocking findings the run went past at a round cap (the
+    # automatic approver's, when the experiments ran on the revision it reviewed
+    # last; the final reader's, when its last draft was released) from
+    # methods_review.py cap-findings: in open-review-findings.md, in state.md
+    # (open_review_findings) and in CAP_NOTES, the outcome's notes, which the
+    # email and the issue comment carry. A failure is logged, and the run goes on.
+    local out ids
+    CAP_NOTES=()
+    if ! out=$(review_run cap-findings); then
+        log "WARN: could not list the review findings left open at a round cap (the error is above)."
+        return 0
+    fi
+    [ -n "$(jq -r '.markdown' <<< "$out")" ] || return 0
+    jq -r '.markdown' <<< "$out" > "${RUN_DIR}/open-review-findings.md"
+    ids=$(jq -r '.ids | join(", ")' <<< "$out")
+    set_state_field open_review_findings "$(yaml_quote "$ids")"
+    mapfile -t CAP_NOTES < <(jq -r '.notes[]' <<< "$out")
+    log "Review findings left open at a round cap: ${ids} (open-review-findings.md)."
+}
+
 run_step() {
     local step="$1"
     local prev_step

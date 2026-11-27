@@ -32,8 +32,11 @@ else:
     rechecks = {finding: {"status": os.environ.get("RECHECK", "resolved"), "blocking": True, "text": "Re-checked."}
                 for finding in schema["properties"]["rechecks"]["required"]}
     blocking = os.environ.get("BLOCKING", "false" if decision == "approve" else "true") == "true"
+    # The finding's sources: SOURCES (comma-separated), else every reviewed input.
+    allowed = schema["properties"]["new_findings"]["items"]["properties"]["sources"]["items"]["enum"]
+    sources = [n for n in os.environ["SOURCES"].split(",") if n] if "SOURCES" in os.environ else allowed
     new = [{"blocking": blocking, "title": "Split", "text": "One fixed split",
-            "reopens": os.environ.get("REOPENS", "")}]
+            "reopens": os.environ.get("REOPENS", ""), "sources": sources}]
     output.write_text(json.dumps({"decision": decision, "summary": "Scope justified",
                                   "rechecks": rechecks, "new_findings": new}))
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 20, "output_tokens": 5}}))
@@ -230,6 +233,7 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual([event["by"] for event in finding["events"]], ["reviewer", "hub", "reviewer"])
 
     def test_only_blocking_findings_withhold_a_draft(self):
+        self.env["RESEARCHER_MAX_REVIEW_ROUNDS"] = "5"
         self.draft("Draft one.")
         self.env.update(DECISION="revise", BLOCKING="false")
         revision = self.invoke("presentation")
@@ -248,7 +252,11 @@ class ReviewTest(unittest.TestCase):
         self.draft("Draft one.")
         self.invoke("presentation", code=3)
         self.draft("Draft two.")
-        last = self.invoke("presentation", code=3)
+        # The last round of the cycle still asks for revision: its exit is the stage's exit at the cap.
+        last = self.invoke("presentation", code=5)
+        self.assertIn("This is the last round", self.records()[-1]["prompt"])
+        self.assertEqual(self.invoke("presentation", code=5), last)
+        self.assertEqual(self.invoke("verify-presentation", code=5), last)
         self.draft("Draft three.")
         self.assertEqual(self.invoke("presentation", code=5), last)
         self.assertEqual(len(self.records()), 2)
@@ -304,6 +312,7 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(events[1]["after_round"], 1)
 
     def test_a_settled_finding_reopens_only_as_a_linked_new_finding(self):
+        self.env["RESEARCHER_MAX_REVIEW_ROUNDS"] = "5"
         self.draft("Draft one.")
         self.env["DECISION"] = "revise"
         self.invoke("presentation", code=3)
@@ -331,6 +340,160 @@ class ReviewTest(unittest.TestCase):
         for call in later:
             for finding in owners:
                 self.assertIn(f'"{finding}"', call["prompt"])
+
+    def revise_plan(self, text):
+        self.write("experiments/exp-f02/plan.md", text)
+        return self.invoke("plan")
+
+    def test_approver_revision_below_the_cap_starts_a_new_plan_cycle(self):
+        self.env["DECISION"] = "revise"
+        self.invoke("plan")
+        self.env["RECHECK"] = "resolved"
+        self.revise_plan("Repeat on a new split with a second seed.")
+        settled = [f["id"] for f in self.ledger("plan")["findings"]
+                   if f["events"][-1]["status"] == "resolved"]
+        self.assertEqual(settled, ["plan-1", "plan-2", "plan-3"])
+        self.invoke("approve-auto", code=3)
+        schema = self.records()[-1]["schema"]["properties"]["new_findings"]["items"]["properties"]
+        self.assertEqual(schema["reopens"]["enum"], ["", "plan-1", "plan-2", "plan-3"])
+        self.assertIn("Round 1 of at most 3", self.records()[-1]["prompt"])
+        self.assertEqual(self.ledger("plan")["pending_cycle"],
+                         "the automatic approver requested a revision (approval round 1)")
+        self.invoke("approve-auto", code=3)
+        self.invoke("respond", "approval", "approval-1", "fixed", "exp-f02 now names its second seed")
+        self.env["DECISION"] = "approve"
+        self.revise_plan("Repeat on a new split with a second and third seed.")
+        rounds = self.ledger("plan")["rounds"]
+        self.assertEqual([(r["round"], r["cycle"]) for r in rounds], [(1, 1), (2, 1), (3, 2)])
+        self.assertEqual(rounds[2]["cycle_reason"], "the automatic approver requested a revision (approval round 1)")
+        self.assertNotIn("pending_cycle", self.ledger("plan"))
+        revision = self.invoke("approve-auto")
+        self.assertEqual(self.invoke("verify"), revision)
+
+    def test_approver_revision_at_the_cap_admits_the_reviewed_revision(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="2", DECISION="revise", RECHECK="open")
+        self.invoke("plan")
+        self.invoke("approve-auto", code=3)
+        self.invoke("respond", "approval", "approval-1", "limit", "Stated in exp-f02")
+        reviewed = self.revise_plan("Repeat on a new split with a second seed.")
+        self.assertEqual(self.invoke("approve-auto", code=5), reviewed)
+        self.assertIn("This is the last approval round", self.records()[-1]["prompt"])
+        calls = len(self.records())
+        self.assertEqual(self.invoke("approve-auto", code=5), reviewed)
+        self.assertEqual(self.invoke("verify"), reviewed)
+        self.assertNotIn("pending_cycle", self.ledger("plan"))
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertEqual(report["ids"][:2], ["approval-1", "approval-2"])
+        self.assertIn("plan-1", report["ids"])
+        self.assertIn("Methods approval at its round cap", report["markdown"])
+        self.assertIn("approval-2 (Split)", report["notes"][0])
+        # The evidence critic is told why execution went ahead.
+        self.write("experiments/exp-f01/results.md", "Measured 2 pp on one pilot.")
+        self.invoke("evidence", code=3)
+        self.assertIn("still asked for revision in its last round", self.records()[-1]["prompt"])
+        # No further approval round: an edited plan must go back to the reviewed one.
+        self.write("experiments/exp-f02/plan.md", "Something else.")
+        self.invoke("verify", code=1)
+        self.assertEqual(len(self.records()), calls + 1)
+
+    def test_a_stop_at_the_cap_still_stops(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="stop")
+        self.invoke("plan")
+        self.invoke("approve-auto", code=4)
+        self.invoke("verify", code=4)
+        self.assertEqual(json.loads(self.invoke("cap-findings"))["ids"], [])
+
+    def test_a_later_round_blocks_only_on_changed_material(self):
+        self.draft("Draft one.")
+        self.env["DECISION"] = "revise"
+        self.invoke("presentation", code=3)
+        self.invoke("respond", "presentation", "presentation-1", "fixed", "Reworded")
+        # Round 2: a new blocking finding on review-figures.json, which round 1 reviewed unchanged.
+        self.write("briefing.md", "Draft two.")
+        self.env.update(RECHECK="resolved", SOURCES="review-figures.json")
+        self.invoke("presentation")
+        prompt = self.records()[-1]["prompt"]
+        self.assertIn('"changed": ["briefing.md"]', prompt)
+        self.assertIn('"unchanged": [', prompt)
+        certified = self.ledger("presentation")["findings"][1]
+        event = certified["events"][-1]
+        self.assertEqual((certified["id"], event["blocking"], event["stated_blocking"]), ("presentation-2", False, True))
+        self.assertIn("certified range", event["certified"])
+        self.assertEqual(certified["sources"], ["review-figures.json"])
+        # Round 3: one on the changed briefing blocks; a re-check cannot make the certified one blocking.
+        self.write("briefing.md", "Draft three.")
+        self.env.update(RECHECK="open", SOURCES="briefing.md")
+        self.invoke("presentation", code=5)
+        findings = {f["id"]: f["events"][-1] for f in self.ledger("presentation")["findings"]}
+        self.assertFalse(findings["presentation-2"]["blocking"])
+        self.assertTrue(findings["presentation-3"]["blocking"])
+        # A finding that reopens a settled one blocks whatever its sources.
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="5", SOURCES="", REOPENS="presentation-1")
+        self.write("briefing.md", "Draft four.")
+        self.invoke("presentation", code=3)
+        self.assertTrue(self.ledger("presentation")["findings"][-1]["events"][-1]["blocking"])
+
+    def test_sources_must_name_reviewed_inputs(self):
+        self.draft("Draft one.")
+        self.env.update(DECISION="revise", SOURCES="no-such-file.md")
+        self.invoke("presentation", code=1)
+
+    def declined_run(self, rounds, cap=3):
+        """A run that an older rule stopped after `rounds` approval rounds asking for revision."""
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS=str(cap), DECISION="revise")
+        self.invoke("plan")
+        for n in range(rounds):
+            if n:
+                self.revise_plan(f"Repeat on a new split, revision {n}.")
+            revision = self.invoke("approve-auto", code=5 if n + 1 >= cap else 3)
+        self.write("methods-stop.md", "Stopped at the one-revision limit.")
+        self.write("audit/results-audit.md", "NO-EXPERIMENTS")
+        self.write("paper/paper.tex", "Protocol only.")
+        self.write("next-steps.md", "Apply the repairs.")
+        self.draft("Declined before execution.")
+        self.invoke("presentation", code=3)
+        self.write("success-criteria.md", "Edited by the report step.")
+        return revision
+
+    def test_reopen_supersedes_a_stop_from_the_old_revision_limit(self):
+        revision = self.declined_run(2)
+        calls = len(self.records())
+        result = json.loads(self.invoke("reopen-declined"))
+        self.assertTrue(result["reopened"])
+        self.assertEqual((result["revision"], result["approval_rounds"], result["at_cap"]), (revision, 2, False))
+        self.assertEqual(result["restored"], ["success-criteria.md"])
+        history = self.run / result["moved_to"]
+        for name in ("methods-stop.md", "briefing.md", "next-steps.md", "review-figures.json", "paper/paper.tex",
+                     "audit/results-audit.md"):
+            self.assertTrue((history / name).is_file(), name)
+            self.assertFalse((self.run / name).exists(), name)
+        self.assertIn("one-revision limit", (history / "README.md").read_text())
+        self.assertEqual((self.run / "success-criteria.md").read_text(), "Effects beyond 2 percentage points count.")
+        self.assertIn("approval round 2", self.ledger("plan")["pending_cycle"])
+        self.assertIn("superseded", self.ledger("presentation")["pending_cycle"])
+        # Step 8 takes the approver's last decision again: a revision below the cap.
+        self.assertEqual(self.invoke("approve-auto", code=3), revision)
+        self.assertEqual(len(self.records()), calls)
+        self.assertFalse(json.loads(self.invoke("reopen-declined"))["reopened"])
+
+    def test_reopen_at_the_cap_proceeds_with_the_reviewed_revision(self):
+        revision = self.declined_run(2, cap=2)
+        result = json.loads(self.invoke("reopen-declined"))
+        self.assertTrue(result["reopened"] and result["at_cap"])
+        self.assertNotIn("pending_cycle", self.ledger("plan"))
+        self.assertEqual(self.invoke("approve-auto", code=5), revision)
+        self.assertEqual(self.invoke("verify"), revision)
+
+    def test_reopen_leaves_a_stated_stop_or_a_started_experiment(self):
+        self.declined_run(1)
+        self.write("experiments/exp-f01/started", "")
+        self.assertIn("already started", json.loads(self.invoke("reopen-declined"))["why"])
+        (self.run / "experiments/exp-f01/started").unlink()
+        approval = self.ledger("approval")
+        approval["rounds"][-1]["decisions"]["auto"] = "stop"
+        self.write("reviews/approval/ledger.json", json.dumps(approval))
+        self.assertIn("not revise", json.loads(self.invoke("reopen-declined"))["why"])
+        self.assertTrue((self.run / "methods-stop.md").is_file())
 
     def test_receipts_recorded_before_the_ledger_still_verify(self):
         self.mode("interactive")

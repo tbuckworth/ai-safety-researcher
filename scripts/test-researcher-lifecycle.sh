@@ -227,6 +227,13 @@ if [ "${MOCK_INCOMPLETE_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_INCOMPLETE_ONC
     exit 0
 fi
 
+if [ "$step" = 11 ]; then
+    # The report's files, written before the hub has the draft read.
+    mkdir -p "${run_dir}/paper"
+    printf '%%PDF-1.4 mock\n' > "${run_dir}/paper/paper.pdf"
+    printf '# Proposed Next Steps\n\n**Outcome**: Mock finding holds on the toy setup.\n\n## Ranked Next Steps\n\n### 1. Validate the metric at t=0\n- **Do**: x\n' \
+        > "${run_dir}/next-steps.md"
+fi
 "$(dirname "$0")/mock-methods" "$step" "$run_dir"
 case "$step" in
     9)
@@ -254,12 +261,6 @@ case "$step" in
             echo "dirty" > "${exp}/vendored-lib/output.txt"
         fi
         ;;
-    11)
-        mkdir -p "${run_dir}/paper"
-        printf '%%PDF-1.4 mock\n' > "${run_dir}/paper/paper.pdf"
-        printf '# Proposed Next Steps\n\n**Outcome**: Mock finding holds on the toy setup.\n\n## Ranked Next Steps\n\n### 1. Validate the metric at t=0\n- **Do**: x\n' \
-            > "${run_dir}/next-steps.md"
-        ;;
 esac
 
 if [ "${MOCK_STRIP_FIELDS_AT_STEP:-}" = "$step" ]; then
@@ -276,11 +277,17 @@ if [ "${MOCK_BREAK_STATE_AT_STEP:-}" = "$step" ]; then
     exit 0
 fi
 
+new_step=$step
 new_status="mock_step_complete"
 [ "$step" = "11" ] && new_status="complete"
 # An audit that asks for another round every time, so only the runner's ceiling ends it.
 [ "$step" = "10" ] && [ "${MOCK_AUDIT_REMEDIATE:-false}" = "true" ] && new_status="audit_remediating"
-sed -e "s/^current_step:.*/current_step: ${step}/" -e "s/^status:.*/status: ${new_status}/" \
+# A step and status the planning hub chose (mock-methods, in tests/mocks.sh).
+if [ -f "${run_dir}/.mock-state" ]; then
+    read -r new_step new_status < "${run_dir}/.mock-state"
+    rm -f "${run_dir}/.mock-state"
+fi
+sed -e "s/^current_step:.*/current_step: ${new_step}/" -e "s/^status:.*/status: ${new_status}/" \
     "$state_file" > "${state_file}.tmp"
 mv "${state_file}.tmp" "$state_file"
 echo "Mock step ${step} complete."
@@ -352,6 +359,7 @@ run_researcher() {
         MOCK_STEPS_LOG="${CASE_DIR}/steps.log" \
         MOCK_EMAIL_LOG="${CASE_DIR}/email.log" \
         MOCK_CLAUDE_CALLS="${CASE_DIR}/claude-calls.log" \
+        MOCK_APPROVER_COUNTER="${CASE_DIR}/approver-calls" \
         RESEARCHER_BACKEND=claude \
         RESEARCHER_CLAUDE_BIN="${MOCK_BIN}/claude" \
         RESEARCHER_CLAUDE_MODEL=mock-claude \
@@ -457,25 +465,130 @@ run_researcher -- "Withheld draft"
 assert_eq "$RC" 0 "release of revised draft"
 [ ! -s "${CASE_DIR}/steps.log" ] || fail "release resume repeated an experiment"; ok
 
-# The final reader's round cap ends its loop: once the run's cap is spent, a
-# revised draft gets no further review until a new review cycle starts with a
-# reason, and the hold says so.
+# At the final reader's round cap an autonomous run releases the last draft it
+# read, with the reader's open blocking findings listed beside it, and finishes.
 new_case reader-round-cap
 run_researcher RESEARCHER_MAX_REVIEW_ROUNDS=1 MOCK_READER_DECISION=revise -- "Capped reader"
-assert_eq "$RC" 3 "reader held the draft"
+assert_eq "$RC" 0 "released at the reader's cap"
 runs=("$OUT"/*/state.md)
 RUN=$(dirname "${runs[0]}")
-echo 'Revised explanation.' >> "${RUN}/next-steps.md"
-run_researcher -- "Capped reader"
-assert_eq "$RC" 3 "capped reader holds the revised draft"
-assert_grep '^last_pause_reason: .*round cap' "${RUN}/state.md"
-assert_eq "$(jq '.rounds | length' "${RUN}/reviews/presentation/ledger.json")" 1 "no review beyond the cap"
-python3 "$MOCK_REVIEW_HELPER" presentation "$RUN" --new-cycle "Titus asked for one more reading" \
-    > /dev/null 2>&1 || fail "new review cycle"
-run_researcher -- "Capped reader"
-assert_eq "$RC" 0 "release after the new cycle's review"
-assert_eq "$(jq -r '.rounds[1].cycle_reason' "${RUN}/reviews/presentation/ledger.json")" \
-    "Titus asked for one more reading" "recorded cycle reason"
+assert_eq "$(field status "$RUN")" complete "status"
+assert_eq "$(jq '.rounds | length' "${RUN}/reviews/presentation/ledger.json")" 1 "one reading, the cap"
+assert_grep '^## Final reading at its round cap' "${RUN}/open-review-findings.md"
+assert_grep '^- \*\*presentation-1\*\* \(Mock objection\)' "${RUN}/open-review-findings.md"
+assert_eq "$(field open_review_findings "$RUN")" "presentation-1" "open findings in state.md"
+jq -e '[.reasons[] | select(test("^Released at the final reader.s round cap"))] | length == 1' \
+    "${RUN}/run-outcome.json" > /dev/null || fail "the outcome does not list the open findings"; ok
+assert_grep "Released at the final reader's round cap \(1 rounds\) with blocking findings open: presentation-1" \
+    "${RUN}/.email-prompt.txt"
+assert_grep '^--subject \[Auto-Research\]' "${CASE_DIR}/email.log"
+assert_no_grep 'Holding the run for review' "${CASE_DIR}/stdout.log"
+
+# The automatic approver asks for a revision below its round cap: the hub answers
+# it, a new plan review cycle starts, and the revised plan is approved.
+new_case approver-revise
+run_researcher MOCK_APPROVER_DECISIONS="revise approve" -- "Approver revises"
+assert_eq "$RC" 0 "approved after one revision"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+assert_eq "$(jq -c '[.rounds[].decisions.auto]' "${RUN}/reviews/approval/ledger.json")" '["revise","approve"]' "approval rounds"
+assert_eq "$(jq -c '[.rounds[].cycle]' "${RUN}/reviews/plan/ledger.json")" '[1,2]' "plan cycles"
+assert_eq "$(jq -r '.rounds[1].cycle_reason' "${RUN}/reviews/plan/ledger.json")" \
+    "the automatic approver requested a revision (approval round 1)" "plan cycle reason"
+assert_eq "$(jq -r '[.findings[0].events[] | select(.by == "hub") | .response] | join(" ")' \
+    "${RUN}/reviews/approval/ledger.json")" fixed "answered finding"
+assert_eq "$(paste -sd' ' "${CASE_DIR}/steps.log")" "1 2 3 4 5 6 7 8 6 7 8 9 10 11" "steps"
+[ ! -e "${RUN}/open-review-findings.md" ] || fail "an approved run listed open findings"; ok
+
+# At the approver's round cap, a request for revision no longer ends the study:
+# the experiments run on the reviewed revision and the approver's open blocking
+# findings are reported with the results.
+new_case approver-cap
+run_researcher RESEARCHER_MAX_REVIEW_ROUNDS=2 MOCK_APPROVER_DECISIONS="revise revise" -- "Approver at its cap"
+assert_eq "$RC" 0 "ran at the approver's cap"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+assert_grep '^9$' "${CASE_DIR}/steps.log"
+[ -s "${RUN}/experiments/exp-001/results.md" ] || fail "no experiment ran"; ok
+[ ! -e "${RUN}/methods-stop.md" ] || fail "the cap stopped the study"; ok
+assert_grep '^## Methods approval at its round cap' "${RUN}/open-review-findings.md"
+assert_grep '^- \*\*approval-2\*\*' "${RUN}/open-review-findings.md"
+jq -e '[.reasons[] | select(test("automatic approver still asked to revise at its round cap \\(2 rounds\\); open blocking findings: approval-2"))] | length == 1' \
+    "${RUN}/run-outcome.json" > /dev/null || fail "the outcome does not report the approver's open findings"; ok
+assert_eq "$(field final_outcome "$RUN")" complete "outcome"
+
+# A stated stop still ends the proposal before any experiment runs.
+new_case approver-stop
+run_researcher MOCK_APPROVER_DECISIONS="stop" -- "Approver stops"
+assert_eq "$RC" 4 "no results after a stop"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+assert_no_grep '^9$' "${CASE_DIR}/steps.log"
+[ -s "${RUN}/methods-stop.md" ] || fail "no methods-stop.md"; ok
+assert_eq "$(field final_outcome "$RUN")" no-results "outcome"
+assert_grep '^--subject ' "${CASE_DIR}/email.log"
+
+# A run the former one-revision rule stopped (methods-stop.md after the
+# approver's second request for revision, no experiment started), whose Step 11
+# then held its draft at the final reader's round cap, on a Claude login: the
+# Neon run of 27 Nov 2026. Resumed under the current rule, it re-enters Step 8,
+# answers the approver and revises the plan in a new cycle, runs the experiments
+# the approver accepts, and releases a new report; what the stop led to is kept
+# in superseded/.
+new_case resume-declined
+run_researcher RESEARCHER_CLAUDE_LOGIN=gemini RESEARCHER_CLAUDE_MODEL="$MOCK_LOGIN_MODEL" MOCK_OLD_RULE=true \
+    MOCK_APPROVER_DECISIONS="revise revise approve" MOCK_STEP11_HOLD=true MOCK_READER_DECISION=revise \
+    -- "Declined by the old rule"
+assert_eq "$RC" 3 "held, as the former rule held it"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+[ -s "${RUN}/methods-stop.md" ] || fail "no methods-stop.md"; ok
+assert_eq "$(field status "$RUN")" audit_complete "held status"
+assert_no_grep '^9$' "${CASE_DIR}/steps.log"
+assert_eq "$(jq -r .settings.RESEARCHER_CLAUDE_LOGIN "${RUN}/run-config.json")" gemini "saved login"
+# Step 11 edited a reviewed plan input after the approval, as Neon's did.
+echo 'Edited by the report step.' >> "${RUN}/success-criteria.md"
+: > "${CASE_DIR}/steps.log"
+: > "${CASE_DIR}/claude-calls.log"
+run_researcher RESEARCHER_RUN_DIR="$RUN" RESEARCHER_CLAUDE_MODEL="$MOCK_LOGIN_MODEL" \
+    MOCK_APPROVER_DECISIONS="revise revise approve"
+assert_eq "$RC" 0 "resumed under the current rule"
+assert_grep 'Re-entering Step 8 under the current rule' "${CASE_DIR}/stdout.log"
+assert_eq "$(paste -sd' ' "${CASE_DIR}/steps.log")" "8 6 7 8 9 10 11" "steps after the resume"
+[ ! -e "${RUN}/methods-stop.md" ] || fail "the old stop still stands"; ok
+HISTORY=$(find "${RUN}/superseded" -mindepth 1 -maxdepth 1 -type d)
+[ -s "${HISTORY}/methods-stop.md" ] && [ -s "${HISTORY}/briefing.md" ] && [ -s "${HISTORY}/README.md" ] \
+    || fail "the stop and its draft were not kept in superseded/"; ok
+assert_grep '^methods_reopened: ".*one-revision limit' "${RUN}/state.md"
+assert_eq "$(field status "$RUN")" complete "status"
+assert_eq "$(jq -c '[.rounds[].decisions.auto]' "${RUN}/reviews/approval/ledger.json")" '["revise","revise","approve"]' \
+    "approval rounds"
+jq -e '.rounds[-1].cycle_reason | test("approval round 2")' "${RUN}/reviews/plan/ledger.json" > /dev/null \
+    || fail "no new plan cycle for the approver's request"; ok
+jq -e '.rounds[-1].cycle_reason | test("superseded")' "${RUN}/reviews/presentation/ledger.json" > /dev/null \
+    || fail "the new draft was not read in a new cycle"; ok
+[ -s "${RUN}/experiments/exp-001/results.md" ] || fail "no experiment ran"; ok
+assert_eq "$(grep -cv "^${TEST_ROOT}/logins/gemini " "${CASE_DIR}/claude-calls.log")" 0 "every session on the gemini login"
+assert_grep "Agent backend: claude; model: ${MOCK_LOGIN_MODEL} \(login gemini\)" "${CASE_DIR}/stdout.log"
+assert_eq "$(field final_outcome "$RUN")" complete "outcome"
+assert_grep '^--subject \[Auto-Research\]' "${CASE_DIR}/email.log"
+
+# A run whose Step 11 held its draft at the final reader's round cap, as the
+# former rule did: resumed, it releases that draft with the open findings
+# listed, without running a step again.
+new_case resume-held-draft
+run_researcher MOCK_STEP11_HOLD=true MOCK_READER_DECISION=revise -- "Held at the reader's cap"
+assert_eq "$RC" 3 "held, as the former rule held it"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+: > "${CASE_DIR}/steps.log"
+run_researcher RESEARCHER_RUN_DIR="$RUN"
+assert_eq "$RC" 0 "released on resume"
+[ ! -s "${CASE_DIR}/steps.log" ] || fail "a step ran again"; ok
+assert_grep "Step 11 held its draft at the final reader's round cap" "${CASE_DIR}/stdout.log"
+assert_grep '^- \*\*presentation-3\*\*' "${RUN}/open-review-findings.md"
+assert_eq "$(field status "$RUN")" complete "status"
+assert_grep '^--subject \[Auto-Research\]' "${CASE_DIR}/email.log"
 
 # =============================================================================
 # 1. Publish: private repo, main branch even with init.defaultBranch=master,

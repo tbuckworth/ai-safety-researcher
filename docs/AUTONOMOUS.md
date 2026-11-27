@@ -109,7 +109,7 @@ and `scripts/kb-init.sh` exit 1, as on their other errors.
 | `RESEARCHER_EXPERIMENT_MINUTES` | Per-experiment time target, in minutes of compute |
 | `RESEARCHER_MAX_FILE_MB` | Files at or above this size stay local instead of being committed (GitHub rejects files over 100 MB, failing the whole push); experiments keep files under it |
 | `RESEARCHER_MAX_AUDIT_ROUNDS` | R_MAX, the most Step 10 audit rounds; the runner forces the report one round later if a step ignores it |
-| `RESEARCHER_MAX_REVIEW_ROUNDS` | The most plan or final-reader review rounds in one review cycle ([Review Ledger](WORKFLOW.md#review-ledger)) |
+| `RESEARCHER_MAX_REVIEW_ROUNDS` | The most review rounds in one cycle of the plan critics or the final reader, and the automatic approver's rounds in a run; at the cap the run goes on with the last reviewed revision ([Review Ledger](WORKFLOW.md#review-ledger)) |
 
 The runtime header of every step prompt gives the first four limits and the
 code directory; the review helper applies the round cap itself. The limits are
@@ -254,7 +254,9 @@ spending limit on the provider account or project.
 
 The hub clarifies scope from the topic or issue, conducts the search, checks novelty and sets decision-relevant success criteria. Before execution it writes the actual per-experiment methods. Three independent reviewers assess them and a separate automatic approver decides whether that revision can run. A disproof experiment also goes through approval. A theoretical rethink can finish with a rationale and zero experiments. The full criteria, revision rules and approval commands are in [Steps 6–8 of the workflow](WORKFLOW.md#step-6-write-and-challenge-the-methods).
 
-Each critique and approval is saved under `reviews/` in the run directory. The plan receipt preserves the text of the reviewed methods. Approval records when it was given and which experiments already had results. Model review receipts record the decision, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision. Each review stage also keeps a ledger of its findings, which every later round of that stage sees ([Review Ledger](WORKFLOW.md#review-ledger)). When the final reader reaches its round cap with a blocking finding open, the runner holds delivery and says so in `last_pause_reason`.
+Each critique and approval is saved under `reviews/` in the run directory. The plan receipt preserves the text of the reviewed methods. Approval records when it was given and which experiments already had results. Model review receipts record the decision, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision. Each review stage also keeps a ledger of its findings, which every later round of that stage sees, and a later round blocks only on material changed since an earlier one reviewed it ([Review Ledger](WORKFLOW.md#review-ledger)).
+
+A review cap ends a loop, never the run. The automatic approver may ask for a revision in each of its `RESEARCHER_MAX_REVIEW_ROUNDS` rounds; each request is answered and the plan reviewed again in a new cycle. When it still asks for revision in its last round, the experiments run on the revision it reviewed, and its open blocking findings are reported as limitations. When the final reader reaches its round cap with blocking findings open, the runner releases the last draft it read and lists those findings in `open-review-findings.md` and in the outcome, which the email and the issue comment carry; the run finishes and sends its email. Only a stated stop, an error, a timeout, a budget or a guard hold stops or pauses a run, and results stop experiments only through the stopping rules the approver accepted (WORKFLOW.md Step 9).
 
 ## Compute Profile (hardware-agnostic)
 
@@ -303,6 +305,10 @@ the job-wait command, the knowledge base); `launches` lists every launch with
 its start, timeout, owner and the plugin's commit; `changes` lists the settings
 resumes changed.
 
+A paused run resumes with `RESEARCHER_RUN_DIR=<run dir> scripts/researcher-cron.sh`
+from the checkout that runs autonomous runs, and continues the step it paused
+at, on the backend, models and Claude login it saved.
+
 A resumed run takes each setting its launch does not set from `run-config.json`,
 not from the configuration or the resuming shell. A setting the launch gives
 with another value is a change, which only the run's owner (a launch whose
@@ -315,6 +321,37 @@ accepted change and adds it to `changes`; it refuses any other one, naming the
 setting, and exits 2. A run that predates `run-config.json` keeps the
 backend in its `state.md` and takes its other settings from the launch that
 first resumes it, which then records them.
+
+### A run stopped at a review cap by a former rule
+
+Before 27 Nov 2026 the automatic approver allowed one design revision, and a
+second request for revision ended the proposal (`methods-stop.md`, status
+`methods_declined`, no experiments); and Step 11 held a draft at the final
+reader's round cap (`review_hold`, the run paused). A resume applies the current
+rule to such a run:
+
+- **A stop from the one-revision limit.** When `methods-stop.md` exists, no
+  experiment has started, and the approver's last round asked for revision
+  rather than stopping, the runner calls `methods_review.py reopen-declined`. It
+  moves `methods-stop.md` and what was written after it (`briefing.md`,
+  `next-steps.md`, `review-figures.json`, `paper/`, `audit/results-audit.md`)
+  into `superseded/<time>/` with a README saying why, restores any reviewed plan
+  file edited since the approver's last round from that round's plan receipt,
+  and arms a new presentation cycle for the new draft and, below the cap, the
+  plan cycle the approver's request starts. The runner sets `status:
+  methods_reopened` (with `methods_reopened` naming the reason and the folder)
+  and resumes at Step 8, which takes the approver's last decision under the
+  current rule: it answers the findings and revises the plan, or, when the
+  approver has had its rounds, runs the experiments on the reviewed revision.
+  The later steps then run as usual. A stated stop, or a run with any
+  experiment started, keeps its `methods-stop.md`.
+- **A draft held at the final reader's cap.** When the run paused after Step 10
+  (`audit_complete`) and the current draft is the one the reader's last round
+  read with blocking findings open, the runner marks Step 11 done and releases
+  that draft with the findings listed, without running a step again.
+
+The runner logs which applies. On a Claude login the resume runs on the login
+the run saved, like any resume.
 
 ## Limitation Triage & Future Work
 
@@ -359,9 +396,12 @@ never fails a step.
 - **Compute profile**: experiments must fit the run's `compute_profile`; do not exceed it silently
 - **Limits**: at most `RESEARCHER_MAX_EXPERIMENTS` experiments per run, each
   targeting `RESEARCHER_EXPERIMENT_MINUTES`
-- **All loops capped at 1 iteration**, except the Step 10 audit-remediation
-  loop, which allows up to `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a runner-owned
-  ceiling one round higher and the configured wall-clock timeout as backstops)
+- **Loops are capped**: the novelty loop at one repeat; the review loops (plan
+  critics, automatic approver, final reader) at `RESEARCHER_MAX_REVIEW_ROUNDS`
+  rounds, after which the run goes on with the last reviewed revision; and the
+  Step 10 audit-remediation loop at `RESEARCHER_MAX_AUDIT_ROUNDS` rounds (a
+  runner-owned ceiling one round higher and the configured wall-clock timeout as
+  backstops)
 - **Run timeout**: `RESEARCHER_TIMEOUT_HOURS` (default 8); what happens when it
   passes depends on the step reached (see `RESEARCHER_TIMEOUT_HOURS` above)
 - **Lockfile**: `RESEARCHER_LOCKFILE` keeps one run at a time

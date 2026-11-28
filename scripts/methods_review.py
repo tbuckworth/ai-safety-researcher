@@ -591,10 +591,11 @@ def load_receipt(path: Path, revision: str, roles) -> dict:
 def cap_findings(run: Path) -> int:
     """Print, as JSON, the blocking findings the run went past at a round cap: the
     automatic approver's (and the plan critics' open ones) for a revision the
-    approver still asked to revise in its last round, and the
-    final reader's when its last round left the current draft with blocking
-    findings open, with the open ones of every stage whose receipts were recorded
-    after that round (reviewed_draft), which the reader did not see. `markdown`
+    approver still asked to revise in its last round; the final reader's when its
+    last round left the current draft with blocking findings open; and, at the
+    reader's cap, whatever it decided, the open ones of every stage whose receipts
+    were recorded after that round (reviewed_draft), which the reader did not see.
+    `markdown`
     lists them for the report and the run directory, `notes` gives one line per
     stage for the run's outcome, and `ids` names them."""
     sections, notes, ids = [], [], []
@@ -629,7 +630,7 @@ def cap_findings(run: Path) -> int:
         rounds = ledger.rounds_in_cycle()
         listed = named(open_findings)
         ids.extend(f["id"] for f in open_findings)
-        ids.extend(f["id"] for f in late_open if f["id"] not in ids)
+        ids.extend(f["id"] for f in late_open)   # each id carries its stage's prefix
         if stage == "approval":
             plan_open = Ledger.load(run, "plan").open_blocking()
             ids.extend(f["id"] for f in plan_open)

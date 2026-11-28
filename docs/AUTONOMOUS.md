@@ -256,7 +256,7 @@ The hub clarifies scope from the topic or issue, conducts the search, checks nov
 
 Each critique and approval is saved under `reviews/` in the run directory. The plan receipt preserves the text of the reviewed methods. Approval records when it was given and which experiments already had results. Model review receipts record the decision, elapsed time and token usage when the CLI provides it. With one audit round and no revisions, the three initial reviewer calls run in parallel. The automatic approver and final reader are sequential gates. The evidence reviewer can run alongside the empirical auditor. A cache hit reuses the receipt for the same revision. Each review stage also keeps a ledger of its findings, which every later round of that stage sees, and a later round blocks only on material changed since an earlier one reviewed it ([Review Ledger](WORKFLOW.md#review-ledger)).
 
-A review cap ends a loop, never the run. The automatic approver may ask for a revision in each of its `RESEARCHER_MAX_REVIEW_ROUNDS` rounds; each request is answered and the plan reviewed again in a new cycle. When it still asks for revision in its last round, the experiments run on the revision it reviewed, and its open blocking findings are reported as limitations. When the final reader reaches its round cap with blocking findings open, the runner releases the last draft it read and lists those findings in `open-review-findings.md` and in the outcome, which the email and the issue comment carry; the run finishes and sends its email. Only a stated stop, an error, a timeout, a budget or a guard hold stops or pauses a run, and results stop experiments only through the stopping rules the approver accepted (WORKFLOW.md Step 9).
+A review cap ends a loop, never the run. The automatic approver may ask for a revision in each of its `RESEARCHER_MAX_REVIEW_ROUNDS` rounds; each request is answered and the plan reviewed again in a new cycle. When it still asks for revision in its last round, the experiments run on the revision it reviewed, and its open blocking findings are reported as limitations. When the final reader reaches its round cap with blocking findings open, the runner releases the last draft it read and lists those findings in `open-review-findings.md` and in the outcome, which the email and the issue comment carry; the run finishes and sends its email. The evidence round the runner records at release still runs at that cap, since a report step may have edited the evidence after the last one: its receipt changes no draft, so the draft released is still the one the reader read, and that round's open blocking findings, which the reader did not see, are listed with the reader's. Only a stated stop, an error, a timeout, a budget or a guard hold stops or pauses a run, and results stop experiments only through the stopping rules the approver accepted (WORKFLOW.md Step 9).
 
 ## Compute Profile (hardware-agnostic)
 
@@ -349,8 +349,9 @@ rule to such a run:
   and leaves the run as it was.
 - **A draft held at the final reader's cap.** When the run paused after Step 10
   (`audit_complete`) and the current draft is the one the reader's last round
-  read with blocking findings open, the runner marks Step 11 done and releases
-  that draft with the findings listed, without running a step again.
+  read with blocking findings open (review receipts recorded since aside), the
+  runner marks Step 11 done and releases that draft with the findings listed,
+  without running a step again.
 
 The runner logs which applies. On a Claude login the resume runs on the login
 the run saved, like any resume.

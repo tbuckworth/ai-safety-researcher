@@ -735,6 +735,27 @@ assert_grep "Released at the final reader's round cap \(1 rounds\) with blocking
 assert_grep '^--subject \[Auto-Research\]' "${CASE_DIR}/email.log"
 assert_no_grep 'Holding the run for review' "${CASE_DIR}/stdout.log"
 
+# An evidence round the runner records at release, after the reader's capped
+# round, changes no draft: the run releases the draft the reader read, listing
+# that round's open blocking findings beside the reader's.
+new_case reader-cap-late-evidence
+run_researcher RESEARCHER_MAX_REVIEW_ROUNDS=1 MOCK_READER_DECISION=revise MOCK_EVIDENCE_DECISION=revise \
+    MOCK_STEP11_EVIDENCE_EDIT=true -- "Evidence reviewed after the cap"
+assert_eq "$RC" 0 "released at the reader's cap after a later evidence round"
+runs=("$OUT"/*/state.md)
+RUN=$(dirname "${runs[0]}")
+assert_eq "$(field status "$RUN")" complete "status"
+assert_eq "$(jq '.rounds | length' "${RUN}/reviews/presentation/ledger.json")" 1 "one reading, the cap"
+late=$(jq -r '[.findings[] | ([.events[] | select(.by == "reviewer")] | last) as $e
+                | select($e.status == "open" and $e.blocking) | .id] | join(", ")' \
+    "${RUN}/reviews/evidence/ledger.json")
+[ -n "$late" ] || fail "the release-time evidence round left no open blocking finding"; ok
+assert_eq "$(field open_review_findings "$RUN")" "presentation-1, ${late}" "open findings in state.md"
+assert_grep "^- \*\*${late%%,*}\*\*" "${RUN}/open-review-findings.md"
+assert_grep "from the evidence review recorded after its last round, ${late%%,*}" "${RUN}/.email-prompt.txt"
+assert_grep '^--subject \[Auto-Research\]' "${CASE_DIR}/email.log"
+assert_no_grep 'Holding the run for review' "${CASE_DIR}/stdout.log"
+
 # A draft changed after the reader's capped round has no reviewed form to
 # release: the run is held, and says why.
 new_case reader-cap-edited

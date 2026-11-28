@@ -305,6 +305,42 @@ class ReviewTest(unittest.TestCase):
         self.invoke("presentation", "--new-cycle", "again", code=1)
         self.invoke("evidence", "--new-cycle", "no cap here", code=2)
 
+    def test_receipts_recorded_after_the_capped_reading_leave_the_draft_it_read(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="revise")
+        self.write("experiments/exp-f01/results.md", "Measured 2 pp on one pilot.")
+        self.draft("One pilot measured 2 pp.")
+        last = self.invoke("presentation", code=5)
+        # The runner's release-time evidence round adds its receipt to the presentation packet.
+        self.invoke("evidence", code=3)
+        calls = len(self.records())
+        self.assertEqual(self.invoke("presentation", code=5), last)
+        self.assertEqual(self.invoke("verify-presentation", code=5), last)
+        self.assertEqual(len(self.records()), calls)
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertEqual(report["ids"], ["presentation-1", "evidence-1"])
+        self.assertIn("- **evidence-1** (Split)", report["markdown"])
+        self.assertIn("reviews/evidence/", report["markdown"])
+        self.assertIn("presentation-1 (Split); and, from the evidence review recorded after its last round, "
+                      "evidence-1 (Split)", report["notes"][0])
+        # A change to the draft itself is not the draft the reader read.
+        self.write("briefing.md", "One pilot measured 2 pp, edited after the last reading.")
+        self.invoke("verify-presentation", code=1)
+        self.assertEqual(self.invoke("presentation", code=5), last)
+        self.assertEqual(json.loads(self.invoke("cap-findings"))["ids"], [])
+
+    def test_an_approved_capped_reading_carries_the_findings_of_a_later_evidence_round(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="approve")
+        self.write("experiments/exp-f01/results.md", "Measured 2 pp on one pilot.")
+        self.draft("One pilot measured 2 pp.")
+        last = self.invoke("presentation")
+        self.env["DECISION"] = "revise"
+        self.invoke("evidence", code=3)
+        self.assertEqual(self.invoke("presentation"), last)
+        self.assertEqual(self.invoke("verify-presentation"), last)
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertEqual(report["ids"], ["evidence-1"])
+        self.assertIn("The final reader approved this draft", report["markdown"])
+
     def test_plan_cap_exit_approves_the_last_reviewed_revision_once_restored(self):
         self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="revise")
         reviewed = self.invoke("plan")

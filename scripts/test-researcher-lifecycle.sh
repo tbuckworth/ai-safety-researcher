@@ -232,6 +232,88 @@ if [ "${MOCK_INCOMPLETE_AT_STEP:-}" = "$step" ] && [ ! -e "${MOCK_INCOMPLETE_ONC
     exit 0
 fi
 
+if [ -n "${MOCK_REPAIR_CASE:-}" ]; then
+    repair="${run_dir}/audit/measurement-repair"
+    if [ "$step" = 10 ]; then
+        mkdir -p "${run_dir}/audit"
+        reason=all-supported
+        next=10
+        status=audit_complete
+        if grep -q '^status: experiments_done_with_failure' "$state_file"; then
+            [[ "$prompt" == *"One measurement repair after a fail-fast stop"* ]]
+            [[ "$prompt" == *"partial, guessed or coerced label"* ]]
+            reason=botched-run-noted
+            finding="FIXABLE-DEFECT on exp-001: the grader accepted malformed JSON."
+            printf '# Audit\n\n%s\n' "$finding" > "${run_dir}/audit/results-audit.md"
+            python3 "$MOCK_REVIEW_HELPER" evidence "$run_dir"
+            # The hub checks whether the approved remedy fits the run budget.
+            cost=3
+            budget=1000
+            slots=3
+            time_left=20
+            remedy_seconds=10
+            [ "$MOCK_REPAIR_CASE" != cost ] || budget=2
+            [ "$MOCK_REPAIR_CASE" != slots ] || slots=2
+            [ "$MOCK_REPAIR_CASE" != time ] || time_left=1
+            if [ "$MOCK_REPAIR_CASE" != fresh ] && [ "$cost" -le "$budget" ] && [ "$slots" -gt 2 ] \
+                && [ "$remedy_seconds" -le "$time_left" ] \
+                && grep -q 'reparse the retained responses once' "${run_dir}/experiments/exp-001/plan.md" \
+                && python3 "$MOCK_REVIEW_HELPER" verify "$run_dir" \
+                && python3 "$(dirname "$MOCK_REVIEW_HELPER")/measurement_repair.py" "$run_dir" --reserve exp-001; then
+                [ "$(cat "${repair}/experiment")" = exp-001 ]
+                printf 'launch at $%s against $%s budget\n' "$cost" "$budget" >> "${run_dir}/repair-calls"
+                if [ "$MOCK_REPAIR_CASE" = interrupted ]; then
+                    sed -i '2i review_hold: Connection lost after repair dispatch.' "$state_file"
+                    exit 1
+                fi
+                responses="${run_dir}/experiments/exp-001/grader-responses.jsonl"
+                mapfile -t labels < <(jq -r '.response | fromjson? | objects | select(length == 1)
+                    | .label | select(. == "pass" or . == "fail")' "$responses")
+                invalid=$(( $(wc -l < "$responses") - ${#labels[@]} ))
+                verdict=INCONCLUSIVE
+                check=FAIL
+                if [ "${#labels[@]}" -gt 0 ]; then
+                    verdict=${labels[0]^^}
+                    check=PASS
+                fi
+                printf '## Verdict: %s\n' "$verdict" > "${repair}/results.md"
+                printf '| metric-separation | %s | strict parsing |\n' "$check" > "${repair}/preflight.md"
+                printf 'Valid responses: %s\nInvalid/missing responses: %s\n' "${#labels[@]}" "$invalid" > "${repair}/run.log"
+            fi
+            if [ -s "${repair}/results.md" ]; then
+                printf '# Repair audit\n\n## Measurement repair disposition: VERIFIED\n' > "${run_dir}/audit/results-audit.md"
+                python3 "$MOCK_REVIEW_HELPER" evidence "$run_dir"
+                if [ "$MOCK_REPAIR_CASE" = interrupted-install ] && [ ! -e "${repair}/install-interrupted" ]; then
+                    # Simulate a stop after installing the reviewed verdict and
+                    # before replacing the old failed pre-flight.
+                    cp "${repair}/results.md" "${run_dir}/experiments/exp-001/results.md"
+                    touch "${repair}/install-interrupted"
+                    sed -i '2i review_hold: Connection lost during installation.' "$state_file"
+                    exit 1
+                fi
+                verdict=$(python3 "$(dirname "$MOCK_REVIEW_HELPER")/measurement_repair.py" "$run_dir") || verdict=
+                if [ "$verdict" = PASS ]; then
+                    next=8
+                    status=measurement_repair_accepted
+                    reason=measurement-repair-verified
+                fi
+            fi
+        fi
+        sed -i -e "s/^current_step:.*/current_step: ${next}/" -e "s/^status:.*/status: ${status}/" \
+            -e '/^audit_exit_reason:/d' -e "2i audit_exit_reason: ${reason}" "$state_file"
+        exit 0
+    fi
+    if [ "$step" = 9 ]; then
+        cmp "${repair}/results.md" "${run_dir}/experiments/exp-001/results.md"
+        grep -q 'PASS' "${run_dir}/experiments/exp-001/results.md"
+        grep -q 'INCONCLUSIVE' "${repair}/original-results.md"
+        printf '## Verdict: PASS\n' > "${run_dir}/experiments/exp-002/results.md"
+        printf '| metric-separation | PASS | downstream fixture |\n' > "${run_dir}/experiments/exp-002/preflight.md"
+        sed -i -e 's/^current_step:.*/current_step: 9/' -e 's/^status:.*/status: experiments_complete/' "$state_file"
+        exit 0
+    fi
+fi
+
 if [ "$step" = 11 ]; then
     # The report's files, written before the hub has the draft read.
     mkdir -p "${run_dir}/paper"
@@ -488,6 +570,135 @@ for approval in missing stale; do
     assert_grep '^## Verdict: PASS$' "${EXP}/results.md"
     find "${RUN}/reviews/evidence" -name '*.json' ! -name ledger.json | grep -q . || fail "no evidence receipt"; ok
 done
+
+prepare_repair_case() {
+    new_case "measurement-repair-$1"
+    write_run 2026-01-28-repair 9 experiments_done_with_failure
+    RUN="${OUT}/2026-01-28-repair"
+    local exp="${RUN}/experiments"
+    mkdir -p "${exp}/exp-002"
+    printf '%s\n' '["exp-001","exp-002"]' > "${RUN}/methods-order.json"
+    printf '%s\n' 'Downstream approved comparison.' > "${exp}/exp-002/plan.md"
+    if [ "$1" != unapproved ]; then
+        printf '%s\n' 'If the grader output is malformed, reparse the retained responses once.' \
+            >> "${exp}/exp-001/plan.md"
+    fi
+    python3 "$MOCK_REVIEW_HELPER" plan "$RUN"
+    if [ "$1" = approval-cap ]; then
+        local approval_rc=0
+        RESEARCHER_MAX_REVIEW_ROUNDS=2 MOCK_APPROVER_DECISIONS=revise \
+            MOCK_APPROVER_COUNTER="${CASE_DIR}/approver-calls" python3 "$MOCK_REVIEW_HELPER" approve-auto "$RUN" \
+            || approval_rc=$?
+        assert_eq "$approval_rc" 5 "revision request reached the approval cap"
+        RESEARCHER_MAX_REVIEW_ROUNDS=2 python3 "$MOCK_REVIEW_HELPER" verify "$RUN"
+    else
+        python3 "$MOCK_REVIEW_HELPER" approve-auto "$RUN"
+    fi
+    printf '## Verdict: %s\n' "${2:-INCONCLUSIVE}" > "${exp}/exp-001/results.md"
+    printf '| metric-separation | %s | original fixture |\n' "${3:-FAIL}" > "${exp}/exp-001/preflight.md"
+    jq -cn --arg malformed '{"label":"pass"' '{response: $malformed}' > "${exp}/exp-001/grader-responses.jsonl"
+    if [ "$1" != still-invalid ]; then
+        local label=pass
+        [ "$1" != fail ] || label=fail
+        jq -cn --arg label "$label" '{response: ({label: $label} | tojson)}' >> "${exp}/exp-001/grader-responses.jsonl"
+    fi
+    touch "${exp}/exp-001/started"
+}
+
+prepare_repair_case pass
+run_researcher MOCK_REPAIR_CASE=pass RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" 0 "repair, re-audit and report completed"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 9 10 11 " "triage with repair, remaining experiments, final audit and report"
+assert_eq "$(cat "${RUN}/repair-calls")" "launch at \$3 against \$1000 budget" "repair dispatches once"
+assert_grep 'PASS' "${RUN}/experiments/exp-001/results.md"
+assert_grep 'INCONCLUSIVE' "${RUN}/audit/measurement-repair/original-results.md"
+assert_grep '^Valid responses: 1$' "${RUN}/experiments/exp-001/run.log"
+assert_grep '^Invalid/missing responses: 1$' "${RUN}/experiments/exp-001/run.log"
+assert_grep 'PASS' "${RUN}/experiments/exp-002/results.md"
+
+assert_eq "$(jq -r '.counts.PASS' "${RUN}/run-outcome.json")" 2 "repaired verdict is reported"
+
+for repair_case in unapproved fresh cost slots time negative fail still-invalid; do
+    if [ "$repair_case" = negative ]; then
+        prepare_repair_case "$repair_case" FAIL PASS
+    else
+        prepare_repair_case "$repair_case"
+    fi
+    run_researcher "MOCK_REPAIR_CASE=${repair_case}" RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+    assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 11 " "no downstream execution after ${repair_case}"
+    if [[ "$repair_case" == fail || "$repair_case" == still-invalid ]]; then
+        assert_eq "$(cat "${RUN}/repair-calls")" "launch at \$3 against \$1000 budget" "one repair before ${repair_case}"
+    else
+        [ ! -e "${RUN}/repair-calls" ] || fail "repair should have been denied: ${repair_case}"; ok
+    fi
+    if [[ "$repair_case" == negative || "$repair_case" == fail ]]; then
+        assert_eq "$(jq -r '.counts.FAIL' "${RUN}/run-outcome.json")" 1 "valid negative is reported"
+    fi
+done
+
+# The ordinary execution verifier admits a revision at the cap. Its signed
+# decision is still revise, so it cannot authorize a bounded repair.
+prepare_repair_case approval-cap
+run_researcher MOCK_REPAIR_CASE=approval-cap RESEARCHER_MAX_REVIEW_ROUNDS=2 \
+    RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" 4 "cap-only admission kept the inconclusive result"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 11 " "audit and report after refused repair"
+assert_grep 'measurement repair requires an explicit methods approval' "${CASE_DIR}/stdout.log"
+[ ! -e "${RUN}/audit/measurement-repair" ] || fail "an unapproved repair was reserved"; ok
+assert_grep 'INCONCLUSIVE' "${RUN}/experiments/exp-001/results.md"
+
+prepare_repair_case interrupted
+run_researcher MOCK_REPAIR_CASE=interrupted RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" 3 "repair session interruption leaves a resumable hold"
+run_researcher MOCK_REPAIR_CASE=interrupted RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$(cat "${RUN}/repair-calls")" "launch at \$3 against \$1000 budget" "resume cannot launch a second repair"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 11 " "resume only audits existing artifacts"
+
+prepare_repair_case interrupted-install
+run_researcher MOCK_REPAIR_CASE=interrupted-install RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" 3 "interrupted installation leaves a resumable audit"
+assert_eq "$(jq -r '.counts.INCONCLUSIVE' "${RUN}/run-outcome.json")" 1 "partial install retains inconclusive verdict"
+run_researcher MOCK_REPAIR_CASE=interrupted-install RESEARCHER_SKIP_PUBLISH=true RESEARCHER_SKIP_EMAIL=true -- "Ignored topic"
+assert_eq "$RC" 0 "resume re-audits recovered output and finishes"
+assert_eq "$(cat "${RUN}/repair-calls")" "launch at \$3 against \$1000 budget" "recovered output is never relaunched"
+assert_eq "$(tr '\n' ' ' < "${CASE_DIR}/steps.log")" "10 10 9 10 11 " "resume re-audits before remaining experiments"
+
+prepare_repair_case stale
+mkdir -p "${RUN}/audit"
+printf '# Audit\n\nFIXABLE-DEFECT on exp-001.\n' > "${RUN}/audit/results-audit.md"
+REPAIR_HELPER="${SCRIPT_DIR}/measurement_repair.py"
+python3 "$REPAIR_HELPER" "$RUN" --reserve exp-001
+printf 'A different method.\n' >> "${RUN}/experiments/exp-001/plan.md"
+if python3 "$REPAIR_HELPER" "$RUN" > "${CASE_DIR}/stdout.log" 2>&1; then
+    fail "a repair was installed under stale methods"
+fi
+assert_grep 'reviews/plan/' "${CASE_DIR}/stdout.log"
+assert_grep 'INCONCLUSIVE' "${RUN}/experiments/exp-001/results.md"
+
+prepare_repair_case handoff
+EXP="${RUN}/experiments/exp-001"
+revision=$(python3 "$MOCK_REVIEW_HELPER" verify "$RUN")
+mv "${EXP}/results.md" "${CASE_DIR}/original-result.md"
+sed -i 's/^mode: autonomous$/mode: interactive/' "${RUN}/state.md"
+python3 "$MOCK_REVIEW_HELPER" approve-human "$RUN" "$revision"
+mv "${CASE_DIR}/original-result.md" "${EXP}/results.md"
+mkdir -p "${RUN}/audit"
+printf '# Audit\n\nFIXABLE-DEFECT on exp-001.\n' > "${RUN}/audit/results-audit.md"
+python3 "$REPAIR_HELPER" "$RUN" --reserve exp-001
+REPAIR_DIR="${RUN}/audit/measurement-repair"
+printf '## Verdict: PASS\n' > "${REPAIR_DIR}/results.md"
+printf '| metric-separation | PASS | held-out fixture |\n' > "${REPAIR_DIR}/preflight.md"
+python3 "$MOCK_REVIEW_HELPER" evidence "$RUN"
+cp "${REPAIR_DIR}/results.md" "${CASE_DIR}/reviewed-result.md"
+printf '\nUnreviewed change.\n' >> "${REPAIR_DIR}/results.md"
+if python3 "$REPAIR_HELPER" "$RUN" > "${CASE_DIR}/stdout.log" 2>&1; then
+    fail "a repair was installed from stale evidence"
+fi
+assert_grep 'reviews/evidence/' "${CASE_DIR}/stdout.log"
+assert_grep 'INCONCLUSIVE' "${EXP}/results.md"
+mv "${CASE_DIR}/reviewed-result.md" "${REPAIR_DIR}/results.md"
+assert_eq "$(python3 "$REPAIR_HELPER" "$RUN")" PASS "repair accepts verified human handoff"
+assert_grep 'PASS' "${EXP}/results.md"
 
 # A returned draft is retained locally. On resume its revised bytes receive a
 # new review and the original scientific status is delivered without re-training.

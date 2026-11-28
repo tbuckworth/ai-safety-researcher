@@ -42,7 +42,7 @@ import tempfile
 import time
 
 from researcher_files import digest, file_digest, write_json
-from researcher_lib import RUN_CONFIG_FILE, log, read_frontmatter
+from researcher_lib import MEASUREMENT_REPAIR_DIR, RUN_CONFIG_FILE, log, read_frontmatter
 from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -53,9 +53,8 @@ ROUND_CAP_EXIT = 5
 MODEL_KEY = "RESEARCHER_REVIEW_MODEL"
 EFFORT_KEY = "RESEARCHER_REVIEW_REASONING"
 ROUNDS_KEY = "RESEARCHER_MAX_REVIEW_ROUNDS"
-# Stages whose loop only the hub ends get a round cap per cycle. The evidence
-# critic runs once per audit round, which RESEARCHER_MAX_AUDIT_ROUNDS caps. The
-# automatic approver's rounds form one cycle, so its revisions are capped per run.
+# Stages with their own review cycle caps. The automatic approver has one
+# cycle per run. For audit limits, see docs/WORKFLOW.md's Review Ledger.
 CAPPED_STAGES = ("plan", "approval", "presentation")
 # The stages a decision may start a new cycle of (--new-cycle).
 CYCLE_STAGES = ("plan", "presentation")
@@ -104,10 +103,11 @@ class Packet:
         path = run / name
         if not path.resolve().is_relative_to(run) or not path.is_file():
             raise ValueError(f"missing or external review input: {name}")
+        is_log = path.name in {"run.log", "original-run.log"}
         with path.open("rb") as source:
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg"} or path.name == "run.log":
+            if path.suffix.lower() in {".png", ".jpg", ".jpeg"} or is_log:
                 self.hashes[name] = file_digest(source)
-                if path.name != "run.log":
+                if not is_log:
                     self.figures.append(path)
                     return
                 source.seek(0)
@@ -121,9 +121,9 @@ class Packet:
             else:
                 data = source.read()
                 self.hashes[name] = digest(data)
-        text = data.decode("utf-8", errors="replace" if path.name == "run.log" else "strict")
+        text = data.decode("utf-8", errors="replace" if is_log else "strict")
         if not text.strip():
-            if path.name in {"preflight.md", "run.log", "results.md"}:
+            if path.name.removeprefix("original-") in {"preflight.md", "run.log", "results.md"}:
                 text = "[This file is empty. It supplies no evidence.]"
             else:
                 raise ValueError(f"empty review input: {name}")
@@ -186,6 +186,10 @@ def packet(run: Path, phase: str) -> Packet:
                     required.append(relative)
                 else:
                     p.documents[relative] = "[Missing from this run; the corresponding checks cannot be verified.]"
+        optional.extend(f"{MEASUREMENT_REPAIR_DIR}/{name}" for name in (
+            "experiment", "methods-revision", "original-results.md", "original-preflight.md",
+            "original-run.log", "original-audit.md", "results.md", "preflight.md", "run.log",
+        ))
         optional.extend(str(f.relative_to(run)) for f in sorted(run.glob("prior/experiments/exp-*/results.md")))
     if phase == "presentation":
         if completed:

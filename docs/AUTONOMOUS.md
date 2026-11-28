@@ -610,6 +610,29 @@ output/<date>-followup-<slug>/
 └── ...                         # Other artifacts as normal
 ```
 
+## Measurement repairs after fail-fast
+
+An inconclusive prerequisite can receive one repair per run when the auditor
+identifies a defect and the current approved experiment plan explicitly
+permits the remedy. Admission at the approval cap authorizes the original
+experiments as reviewed. A repair requires an explicit approval decision.
+The approval must record which experiments already had results.
+The hub checks the remaining time, experiment slots and approved budget.
+Fresh measurements require a procedure covered by the approved plan. A
+genuine negative goes directly to the report.
+
+Step 10 saves the original result and pre-flight, and stages the repair
+under `audit/measurement-repair/`. A retry can recover an existing attempt.
+The re-audited result replaces the experiment's standard result.
+A verified PASS makes Step 9 resume the remaining approved experiments.
+A verified FAIL stops the sequence and is reported alongside the original.
+
+`python3 scripts/measurement_repair.py RUN --reserve EXP` reserves the attempt
+for experiment ID `EXP`. Omitting `--reserve` installs the reviewed result
+and prints `PASS` or `FAIL`. Exit 0 means the requested action succeeded.
+Exit 1 means the action was refused or an input could not be read, with
+the reason on stderr. Exit 2 means the command-line arguments are invalid.
+
 ## The results email
 
 The email leads with what the reviewed evidence changes for the original research question. A pilot, an inconclusive primary comparison and a decision to stop can coexist in the first paragraph. When asking the recipient for a decision, the writer adds one agent-mail choices object in `email-choices.json`. The helper appends it to the plain report and lets the Mail tab render buttons. Informational mail uses the HTML draft.

@@ -218,7 +218,9 @@ release_at_review_cap() {
 record_cap_findings() {
     # Lists the blocking findings the run went past at a round cap (the
     # automatic approver's, when the experiments ran on the revision it reviewed
-    # last; the final reader's, when its last draft was released) from
+    # last; the final reader's, when its last draft was released; and those of any
+    # review recorded after the reader's last round, which it did not see, even
+    # when the reader approved at its cap) from
     # methods_review.py cap-findings: in open-review-findings.md, in state.md
     # (open_review_findings) and in CAP_NOTES, the outcome's notes, which the
     # email and the issue comment carry. When the listing fails, the run goes on

@@ -72,8 +72,6 @@ LAST_ROUND = {
 CAP_EXIT_STAGES = tuple(LAST_ROUND)
 # The drafts a final reader reads; any one of them makes a presentation packet.
 DRAFTS = ("briefing.md", "next-steps.md", "paper/paper.tex")
-# The packet inputs this helper writes itself, the review receipts. Every other
-# input of a presentation packet is the reader's material (reviewed_draft).
 # What a resumed run moves into superseded/<time>/ when reopen-declined supersedes
 # a methods-stop.md: the stop and the deliverables written after it.
 SUPERSEDED = ("methods-stop.md", "briefing.md", "next-steps.md", "review-figures.json", "paper",
@@ -432,7 +430,7 @@ def reviewed_draft(run: Path, p: Packet) -> tuple[str, list[str]]:
     revision = p.revision()
     ledger = Ledger.load(run, "presentation")
     if (receipt_path(run, "presentation", revision).is_file() or not ledger.rounds
-            or ledger.rounds_in_cycle() < settings(run).max_rounds):
+            or not at_round_cap(run, "presentation", ledger.rounds[-1]["revision"])):
         return revision, []
     last = ledger.rounds[-1]["revision"]
     read = json.loads(receipt_path(run, "presentation", last).read_text())["inputs"]

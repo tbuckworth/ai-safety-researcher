@@ -166,7 +166,7 @@ MOCK_NEXT_STEPS_WRITER
 # step or status of its own writes them to <run>/.mock-state ("STEP STATUS"),
 # which the lifecycle test's provider applies. With MOCK_STEP11_HOLD=true Step 11
 # writes a draft, has it read until the final reader's round cap, and holds it
-# there with review_hold, as the former rule did. With MOCK_STEP11_EVIDENCE_EDIT=true
+# there with review_hold. With MOCK_STEP11_EVIDENCE_EDIT=true
 # Step 11 edits exp-001's results after the step's evidence round, then has its
 # draft read until the reader's round cap and finishes the step, so that the
 # runner's release-time evidence round adds a receipt the reader never saw.

@@ -217,7 +217,7 @@ JOB_WAIT_CMD="${RESEARCHER_JOB_WAIT_CMD:-}"
 # RESEARCHER_CLAUDE_LOGIN puts every Claude session of the run on that login,
 # looked up once here (use_claude_login), and the model of a login that runs
 # only its own replaces the configured or saved one.
-select_backend
+select_backend launch
 
 PROCESSING_LABEL=$(python3 "$LIB" status-label "$BACKEND" researching)
 PROCESSED_LABEL=$(python3 "$LIB" status-label "$BACKEND" processed)

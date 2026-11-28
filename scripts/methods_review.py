@@ -165,9 +165,10 @@ def packet(run: Path, phase: str) -> Packet:
         # A missing or stale design precludes new execution. The same condition
         # is a finding for a retrospective audit of existing observations.
         try:
-            plan_revision = packet(run, "plan").revision()
-            approval_path = receipt_path(run, "approval", plan_revision)
-            approval = checked_approval(run, plan_revision, "human" if mode == "interactive" else "auto")
+            actor = "human" if mode == "interactive" else "auto"
+            plan, approval_path = approval_target(run, packet(run, "plan"))
+            plan_revision = plan.revision()
+            approval = checked_approval(run, plan_revision, actor, approval_path)
             provenance = f"Recorded methods decision: {approval['reviews'][0]['decision']}."
             if approval["reviews"][0]["decision"] == "revise" and at_round_cap(run, "approval", plan_revision):
                 provenance += (" The automatic approver still asked for revision in its last round (the round cap), "
@@ -407,10 +408,30 @@ def receipt_path(run: Path, phase: str, revision: str) -> Path:
     return run / "reviews" / phase / f"{revision}.json"
 
 
-def checked_approval(run: Path, revision: str, actor: str) -> dict:
+def approval_target(run: Path, plan: Packet, requested: str | None = None) -> tuple[Packet, Path]:
+    revision = plan.revision()
+    path = receipt_path(run, "approval", revision)
+    study = json.loads(plan.documents["study"])
+    if study["mode"] != "interactive" or requested == revision or (requested is None and path.is_file()):
+        return plan, path
+
+    # An automatic-to-human handoff may name the existing panel. Recompute
+    # its revision from the current plan with only the workflow mode changed.
+    study["mode"] = "autonomous"
+    data = json_bytes(study)
+    offered = Packet({**plan.documents, "study": data.decode()},
+                     {**plan.hashes, "study": digest(data)}, plan.figures)
+    offered_revision = offered.revision()
+    handoff = receipt_path(run, "approval", offered_revision).with_suffix(".human.json")
+    if requested == offered_revision or (requested is None and handoff.is_file()):
+        return offered, handoff
+    return plan, path
+
+
+def checked_approval(run: Path, revision: str, actor: str, path: Path) -> dict:
     panel = receipt_path(run, "plan", revision)
     load_receipt(panel, revision, ROLES)
-    saved = load_receipt(receipt_path(run, "approval", revision), revision, (actor,))
+    saved = load_receipt(path, revision, (actor,))
     if saved.get("panel_digest") != digest(panel.read_bytes()):
         raise ValueError("approval does not match the recorded independent critiques")
     return saved
@@ -421,12 +442,16 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
         action, action.removeprefix("verify-"))
     source_phase = "plan" if phase == "approval" else phase
     p = packet(run, source_phase)
-    rev = p.revision()
-    path = receipt_path(run, phase, rev)
+    source_revision = p.revision()
     mode = json.loads(p.documents["study"])["mode"]
     actor = "human" if mode == "interactive" else "auto"
+    if phase == "approval":
+        p, path = approval_target(run, p, approved_revision)
+    else:
+        path = receipt_path(run, phase, source_revision)
+    rev = p.revision()
     if action == "approve-human" and (actor != "human" or approved_revision != rev):
-        raise ValueError("explicit human approval must name the current interactive revision")
+        raise ValueError("explicit human approval must name the current reviewed revision in interactive mode")
     if action == "approve-auto" and actor != "auto":
         raise ValueError("auto approval requires autonomous mode")
 
@@ -435,7 +460,7 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
         panel = load_receipt(panel_file, rev, ROLES)
         p.documents["independent critiques"] = json_bytes(panel["reviews"]).decode()
     if action.startswith("verify") or path.is_file():
-        saved = (checked_approval(run, rev, actor) if phase == "approval"
+        saved = (checked_approval(run, rev, actor, path) if phase == "approval"
                  else load_receipt(path, rev, ROLES if phase == "plan" else (phase,)))
         decision = saved["reviews"][0]["decision"]
         if new_cycle:
@@ -458,7 +483,7 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
                 plan = Ledger.load(run, "plan")
                 plan.arm_cycle(approver_cycle_reason(len(ledger.rounds)))
                 plan.save()
-        if packet(run, source_phase).revision() != rev:
+        if packet(run, source_phase).revision() != source_revision:
             raise ValueError("review inputs changed during review; rerun on the current revision")
         record = {"revision": rev, "inputs": p.hashes, "reviews": reviews,
                   "recorded_at": datetime.now(timezone.utc).isoformat()}
@@ -520,8 +545,8 @@ def load_receipt(path: Path, revision: str, roles) -> dict:
 
 def cap_findings(run: Path) -> int:
     """Print, as JSON, the blocking findings the run went past at a round cap: the
-    automatic approver's (and the plan critics' open ones) when the experiments ran
-    on a revision the approver still asked to revise in its last round, and the
+    automatic approver's (and the plan critics' open ones) for a revision the
+    approver still asked to revise in its last round, and the
     final reader's when its last round left the current draft with blocking
     findings open. `markdown` lists them for the report and the run directory,
     `notes` gives one line per stage for the run's outcome, and `ids` names them."""
@@ -553,15 +578,26 @@ def cap_findings(run: Path) -> int:
         if stage == "approval":
             plan_open = Ledger.load(run, "plan").open_blocking()
             ids.extend(f["id"] for f in plan_open)
+            authorization = f"The cap permits autonomous execution on revision {revision}."
+            if read_frontmatter(run / "state.md").get("mode") == "interactive":
+                authorization = f"Human approval could not be verified for revision {revision}."
+                try:
+                    plan, path = approval_target(run, packet(run, "plan"))
+                    if plan.revision() == revision:
+                        human = checked_approval(run, revision, "human", path)
+                        if human["reviews"][0]["decision"] == "approve":
+                            authorization = f"Titus explicitly approved revision {revision}."
+                except (FileNotFoundError, ValueError) as error:
+                    log(f"Could not verify human approval for capped revision {revision}: {error}")
             sections.append("\n".join([
                 "## Methods approval at its round cap", "",
-                f"The automatic approver still asked for revision in its last round ({rounds} rounds, the cap), so "
-                f"the experiments ran on revision {revision} as reviewed. Its open blocking findings:", "",
+                f"The automatic approver still asked for revision in its last round ({rounds} rounds, the cap). "
+                f"{authorization} Its open blocking findings:", "",
                 *listing(open_findings),
                 *(["", "The plan critics' blocking findings open at that revision:", "", *listing(plan_open)]
                   if plan_open else [])]))
-            notes.append(f"The experiments ran on a design the automatic approver still asked to revise at its "
-                         f"round cap ({rounds} rounds); open blocking findings: {listed} (open-review-findings.md)")
+            notes.append(f"The automatic approver still asked to revise at its round cap ({rounds} rounds); "
+                         f"open blocking findings: {listed} (open-review-findings.md). {authorization}")
         else:
             sections.append("\n".join([
                 "## Final reading at its round cap", "",

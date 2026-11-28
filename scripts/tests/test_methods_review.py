@@ -89,6 +89,8 @@ class ReviewTest(unittest.TestCase):
         self.invoke("verify", code=1)
         self.invoke("approve-auto", code=1)
         rev = self.invoke("plan")
+        # Persisted autonomous plan identifiers must survive a handoff to a human.
+        self.assertEqual(rev, "d52f66df9cd42df3f0c9b70a16498126e6b8a1afa71bed345fe1c49fb1c15f5d")
         self.assertEqual(rev, self.invoke("plan"))
         calls = self.records()
         self.assertEqual(len(calls), 3)
@@ -135,6 +137,42 @@ class ReviewTest(unittest.TestCase):
         self.invoke("approve-human", rev)
         self.invoke("verify")
         self.write("prior/success-criteria.md", "New inherited anchor")
+        self.invoke("verify", code=1)
+        self.assertEqual(len(self.records()), 3)
+
+    def test_human_can_approve_unchanged_autonomous_panel(self):
+        rev = self.invoke("plan")
+        self.invoke("approve-auto")
+        auto_path = self.run / "reviews/approval" / f"{rev}.json"
+        original = auto_path.read_bytes()
+
+        self.mode("interactive")
+        self.invoke("verify", code=1)
+        self.invoke("approve-auto", code=1)
+        self.assertEqual(self.invoke("approve-human", rev), rev)
+        self.assertEqual(self.invoke("verify"), rev)
+        self.assertEqual(auto_path.read_bytes(), original)
+        self.assertEqual(len(self.records()), 4)
+        self.write("experiments/exp-f01/results.md", "## Verdict: PASS")
+        self.invoke("evidence")
+        self.assertIn("Explicit approval of this revision.", self.records()[-1]["prompt"])
+
+        self.mode("autonomous")
+        self.assertEqual(self.invoke("verify"), rev)
+        self.assertEqual(auto_path.read_bytes(), original)
+
+    def test_human_handoff_requires_the_identical_reviewed_methods(self):
+        rev = self.invoke("plan")
+        self.mode("interactive")
+        self.write("success-criteria.md", "Use a different effect threshold.")
+        self.invoke("approve-human", rev, code=1)
+        self.invoke("verify", code=1)
+
+        self.write("success-criteria.md", "Effects beyond 2 percentage points count.")
+        self.assertEqual(self.invoke("approve-human", rev), rev)
+        self.write("state.md", (self.run / "state.md").read_text().replace("topic: calibration", "topic: another study"))
+        self.invoke("verify", code=1)
+        self.mode("autonomous")
         self.invoke("verify", code=1)
         self.assertEqual(len(self.records()), 3)
 
@@ -398,6 +436,38 @@ class ReviewTest(unittest.TestCase):
         # The approver's open findings are still listed for the report after the edit.
         self.assertEqual(json.loads(self.invoke("cap-findings"))["ids"][:2], ["approval-1", "approval-2"])
 
+    def test_cap_findings_preserve_human_authority_after_an_automatic_cap(self):
+        self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="revise")
+        rev = self.invoke("plan")
+        self.assertEqual(self.invoke("approve-auto", code=5), rev)
+        self.mode("interactive")
+        self.invoke("verify", code=1)
+        self.assertEqual(self.invoke("approve-human", rev), rev)
+        self.assertEqual(self.invoke("verify"), rev)
+
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertIn("Titus explicitly approved", report["markdown"])
+        self.assertIn("Titus explicitly approved", report["notes"][0])
+        self.assertNotIn("experiments ran", report["markdown"])
+        self.assertIn("approval-1", report["ids"])
+        self.assertIn("plan-1", report["ids"])
+
+        handoff = self.run / "reviews/approval" / f"{rev}.human.json"
+        saved = handoff.read_text()
+        self.mode("autonomous")
+        self.assertEqual(self.invoke("verify"), rev)
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertIn("The cap permits autonomous execution", report["markdown"])
+        self.assertNotIn("Titus explicitly approved", report["markdown"])
+        self.mode("interactive")
+        handoff.write_text(saved.replace('"human"', '"auto"'))
+        self.invoke("verify", code=1)
+        report = json.loads(self.invoke("cap-findings"))
+        self.assertIn("Human approval could not be verified", report["markdown"])
+        self.assertNotIn("Titus explicitly approved", report["markdown"])
+        self.assertNotIn("experiments ran", report["markdown"])
+        self.assertIn("approval-1", report["ids"])
+
     def test_a_stop_at_the_cap_still_stops(self):
         self.env.update(RESEARCHER_MAX_REVIEW_ROUNDS="1", DECISION="stop")
         self.invoke("plan")
@@ -522,6 +592,7 @@ class ReviewTest(unittest.TestCase):
     def test_receipts_recorded_before_the_ledger_still_verify(self):
         self.mode("interactive")
         revision = self.invoke("plan")
+        self.assertEqual(revision, "84fc56dd512d7a8851350cca492f29258598dc5d0e6fa69d16cb97f326a1aca7")
         path = self.run / "reviews/plan" / f"{revision}.json"
         receipt = json.loads(path.read_text())
         for report in receipt["reviews"]:

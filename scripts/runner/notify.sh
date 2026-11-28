@@ -15,7 +15,7 @@ email_settings() {
     # draft), REPORT_LIB, the mailroom's commands (AGENT_MAIL, AGENT_USAGE,
     # AGENT_STATUS; mailroom_tool), the Claude writers' CLI and the model of
     # those of the mailroom's order (a Claude run's own model, unless its login
-    # runs only its own, else RESEARCHER_EMAIL_CLAUDE_MODEL) and each writer's
+    # is unavailable or runs only its own, else RESEARCHER_EMAIL_CLAUDE_MODEL), and each writer's
     # time limit, EMAIL_TIMEOUT_SECONDS. Needs select_backend first; exits 2,
     # saying why, when a setting is missing or the time limit is not a whole
     # number of at least 1.
@@ -32,8 +32,8 @@ email_settings() {
     AGENT_USAGE=$(mailroom_tool agent-usage)
     AGENT_STATUS=$(mailroom_tool agent-status)
     EMAIL_CLAUDE_BIN="$RESEARCHER_CLAUDE_BIN"
-    # Another login cannot run the model of a login that runs only its own.
-    if [ "$BACKEND" = "claude" ] && [ -z "$CLAUDE_LOGIN_MODEL" ]; then
+    # An unavailable login's model may also be specific to that login.
+    if [ "$BACKEND" = "claude" ] && [ -z "$CLAUDE_LOGIN_MODEL" ] && [ -z "$CLAUDE_LOGIN_FAILURE" ]; then
         EMAIL_CLAUDE_MODEL="$MODEL"
     else
         EMAIL_CLAUDE_MODEL="$RESEARCHER_EMAIL_CLAUDE_MODEL"
@@ -68,11 +68,13 @@ send_email() {
     if [ -n "$CLAUDE_LOGIN" ]; then
         writers+=("login"$'\t'"${CLAUDE_LOGIN}"$'\t'"${CLAUDE_LOGIN_DIR}")
         log "The run's own login, ${CLAUDE_LOGIN}, writes the results email first."
+    elif [ -n "$CLAUDE_LOGIN_FAILURE" ]; then
+        email_failed "$RESEARCHER_CLAUDE_LOGIN" "$CLAUDE_LOGIN_FAILURE"
     fi
     if read_report_logins; then
         for entry in ${REPORT_LOGINS[@]+"${REPORT_LOGINS[@]}"}; do
             IFS=$'\t' read -r kind name config_dir <<< "$entry"
-            [ "$name" = "$CLAUDE_LOGIN" ] || writers+=("$entry")
+            [ "$name" = "${RESEARCHER_CLAUDE_LOGIN:-}" ] || writers+=("$entry")
         done
     fi
     for entry in ${writers[@]+"${writers[@]}"}; do

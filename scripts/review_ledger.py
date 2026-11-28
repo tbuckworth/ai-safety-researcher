@@ -30,6 +30,7 @@ from pathlib import Path
 
 from researcher_files import write_json
 
+REVIEWS = "reviews"   # the run folder holding each stage's ledger and receipts: reviews/<stage>/
 STAGES = ("plan", "approval", "evidence", "presentation")
 STATUSES = ("open", "resolved")
 DISPOSITIONS = ("fixed", "limit", "declined")
@@ -86,7 +87,7 @@ class Ledger:
         Raises ValueError for a file that is not a ledger of this stage."""
         if stage not in STAGES:
             raise ValueError(f"unknown review stage: {stage}")
-        path = run / "reviews" / stage / "ledger.json"
+        path = run / REVIEWS / stage / "ledger.json"
         if not path.is_file():
             return cls(path, stage, [], [])
         data = json.loads(path.read_text(encoding="utf-8"))

@@ -45,7 +45,7 @@ import time
 
 from researcher_files import digest, file_digest, write_json
 from researcher_lib import MEASUREMENT_REPAIR_DIR, RUN_CONFIG_FILE, log, read_frontmatter
-from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger
+from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger, REVIEWS
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "templates" / "review"
@@ -74,7 +74,6 @@ CAP_EXIT_STAGES = tuple(LAST_ROUND)
 DRAFTS = ("briefing.md", "next-steps.md", "paper/paper.tex")
 # The packet inputs this helper writes itself, the review receipts. Every other
 # input of a presentation packet is the reader's material (reviewed_draft).
-RECEIPTS = "reviews/"
 # What a resumed run moves into superseded/<time>/ when reopen-declined supersedes
 # a methods-stop.md: the stop and the deliverables written after it.
 SUPERSEDED = ("methods-stop.md", "briefing.md", "next-steps.md", "review-figures.json", "paper",
@@ -414,7 +413,13 @@ def at_round_cap(run: Path, stage: str, revision: str) -> bool:
 
 
 def receipt_path(run: Path, phase: str, revision: str) -> Path:
-    return run / "reviews" / phase / f"{revision}.json"
+    return run / REVIEWS / phase / f"{revision}.json"
+
+
+def receipt_stage(name: str) -> str | None:
+    """The stage of a packet input that is a review receipt (REVIEWS/<stage>/...), or None for any other input."""
+    parts = Path(name).parts
+    return parts[1] if len(parts) > 2 and parts[0] == REVIEWS else None
 
 
 def reviewed_draft(run: Path, p: Packet) -> tuple[str, list[str]]:
@@ -433,11 +438,12 @@ def reviewed_draft(run: Path, p: Packet) -> tuple[str, list[str]]:
     read = json.loads(receipt_path(run, "presentation", last).read_text())["inputs"]
 
     def material(hashes: dict[str, str]) -> dict[str, str]:
-        return {name: value for name, value in hashes.items() if not name.startswith(RECEIPTS)}
+        return {name: value for name, value in hashes.items() if receipt_stage(name) is None}
 
     if material(read) != material(p.hashes):
         return revision, []
-    return last, sorted(name for name, value in p.hashes.items() if name.startswith(RECEIPTS) and read.get(name) != value)
+    return last, sorted(name for name, value in p.hashes.items()
+                        if receipt_stage(name) is not None and read.get(name) != value)
 
 
 def approval_target(run: Path, plan: Packet, requested: str | None = None) -> tuple[Packet, Path]:
@@ -617,7 +623,7 @@ def cap_findings(run: Path) -> int:
         decision = json.loads(receipt.read_text())["reviews"][0]["decision"]
         # The stages whose receipts the reader's last round did not see, and their open blocking findings.
         later = [s for s in STAGES if stage == "presentation" and decision != "stop"
-                 and any(Path(name).parts[1] == s for name in late)]
+                 and any(receipt_stage(name) == s for name in late)]
         late_open = [f for s in later for f in Ledger.load(run, s).open_blocking()]
         if decision != "revise" and not late_open:
             continue

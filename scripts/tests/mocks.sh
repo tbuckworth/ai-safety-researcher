@@ -155,7 +155,8 @@ MOCK_NEXT_STEPS_WRITER
 
 # The real methods helper still hashes inputs, validates the structured response
 # and persists receipts. Only the external model and the planning hub are mocked.
-# The final reader decides MOCK_READER_DECISION (default approve). The automatic
+# The final reader decides MOCK_READER_DECISION (default approve), the evidence
+# critic MOCK_EVIDENCE_DECISION (default approve). The automatic
 # approver decides the next word of MOCK_APPROVER_DECISIONS (space-separated, one
 # per round, counted in the file MOCK_APPROVER_COUNTER; approve once they run out).
 # Every other reviewer approves. A new finding's sources are every reviewed input.
@@ -165,7 +166,10 @@ MOCK_NEXT_STEPS_WRITER
 # step or status of its own writes them to <run>/.mock-state ("STEP STATUS"),
 # which the lifecycle test's provider applies. With MOCK_STEP11_HOLD=true Step 11
 # writes a draft, has it read until the final reader's round cap, and holds it
-# there with review_hold, as the former rule did.
+# there with review_hold. With MOCK_STEP11_EVIDENCE_EDIT=true
+# Step 11 edits exp-001's results after the step's evidence round, then has its
+# draft read until the reader's round cap and finishes the step, so that the
+# runner's release-time evidence round adds a receipt the reader never saw.
 install_mock_reviews() {
     local bin="$1"
     cat > "${bin}/mock-review" <<'MOCK_REVIEW'
@@ -183,6 +187,8 @@ prompt=$(cat)
 decision=approve
 if [[ "$prompt" == *"Read the draft as a scientist"* ]]; then
     decision=${MOCK_READER_DECISION:-approve}
+elif [[ "$prompt" == *"Check the main experiment claims"* ]]; then
+    decision=${MOCK_EVIDENCE_DECISION:-approve}
 elif [[ "$prompt" == *"Act as the independent methodology approver"* ]] && [ -n "${MOCK_APPROVER_COUNTER:-}" ]; then
     echo x >> "$MOCK_APPROVER_COUNTER"
     read -r -a decisions <<< "${MOCK_APPROVER_DECISIONS:-}"
@@ -263,6 +269,12 @@ case "$step" in
             sed -i 's/^status:.*/&\nreview_hold: "The final reader reached its round cap with blocking findings open."/' \
                 "${run}/state.md"
             echo "10 audit_complete" > "${run}/.mock-state"
+        elif [ "${MOCK_STEP11_EVIDENCE_EDIT:-false}" = true ]; then
+            echo 'Restated in the report step.' >> "${run}/experiments/exp-001/results.md"
+            printf '# Briefing\n\nA mock draft.\n' > "${run}/briefing.md"
+            rc=0
+            python3 "$MOCK_REVIEW_HELPER" presentation "$run" || rc=$?
+            [ "$rc" -eq 5 ] || exit "$rc"
         fi
         ;;
 esac

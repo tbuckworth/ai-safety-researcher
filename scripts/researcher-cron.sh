@@ -575,7 +575,10 @@ if ! is_true "$PAUSED" && { [ -s "${RUN_DIR}/next-steps.md" ] || [ -s "${RUN_DIR
         review_run presentation || REVIEW_RC=$?
     fi
     # At the final reader's round cap the last draft it read goes out, with its
-    # open blocking findings listed (docs/WORKFLOW.md, Review Ledger).
+    # open blocking findings listed (docs/WORKFLOW.md, Review Ledger). The
+    # evidence round above runs even then: a report step may have edited the
+    # evidence after its last round, and the receipt it adds changes no draft,
+    # so the release lists its open blocking findings too (cap-findings).
     if [ "$REVIEW_RC" -eq 5 ] && release_at_review_cap; then
         REVIEW_RC=0
     fi

@@ -17,7 +17,9 @@ reviewed revision; and the approval or presentation of the revision reviewed at
 the cap, when its reviewer still asks for revision, exits 5 too, for the stage's
 exit at the cap (docs/WORKFLOW.md, Review Ledger): the experiments run on that
 revision, or the draft is released, with the open blocking findings reported
-(cap-findings lists them). `verify` admits such an approval (exit 0). Errors use
+(cap-findings lists them). A presentation packet that differs from the one read
+at the cap only in review receipts written since (inputs under reviews/) is that
+draft still. `verify` admits such an approval (exit 0). Errors use
 exit 1. Each stage keeps a review ledger (review_ledger.py) that every later round
 of it sees; a later round's new blocking finding must concern an input changed
 since the round that last reviewed it (the certified range). respond records the
@@ -43,7 +45,7 @@ import time
 
 from researcher_files import digest, file_digest, write_json
 from researcher_lib import MEASUREMENT_REPAIR_DIR, RUN_CONFIG_FILE, log, read_frontmatter
-from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger
+from review_ledger import DISPOSITIONS, RECEIPT_FINDING_KEYS, STAGES, Ledger, REVIEWS
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "templates" / "review"
@@ -409,7 +411,37 @@ def at_round_cap(run: Path, stage: str, revision: str) -> bool:
 
 
 def receipt_path(run: Path, phase: str, revision: str) -> Path:
-    return run / "reviews" / phase / f"{revision}.json"
+    return run / REVIEWS / phase / f"{revision}.json"
+
+
+def receipt_stage(name: str) -> str | None:
+    """The stage of a packet input that is a review receipt (REVIEWS/<stage>/...), or None for any other input."""
+    parts = Path(name).parts
+    return parts[1] if len(parts) > 2 and parts[0] == REVIEWS else None
+
+
+def reviewed_draft(run: Path, p: Packet) -> tuple[str, list[str]]:
+    """The presentation revision whose review covers the draft of packet `p`, and the
+    review receipts in `p` added or changed since that review. A receipt of `p`'s own
+    revision covers it. Failing that, at the round cap, the last round's does when
+    `p` differs from what that round read only in receipts this helper wrote (inputs
+    under reviews/, such as an evidence round recorded at release): the draft is the
+    one the reader read, and those receipts are what it did not see."""
+    revision = p.revision()
+    ledger = Ledger.load(run, "presentation")
+    if (receipt_path(run, "presentation", revision).is_file() or not ledger.rounds
+            or not at_round_cap(run, "presentation", ledger.rounds[-1]["revision"])):
+        return revision, []
+    last = ledger.rounds[-1]["revision"]
+    read = json.loads(receipt_path(run, "presentation", last).read_text())["inputs"]
+
+    def material(hashes: dict[str, str]) -> dict[str, str]:
+        return {name: value for name, value in hashes.items() if receipt_stage(name) is None}
+
+    if material(read) != material(p.hashes):
+        return revision, []
+    return last, sorted(name for name, value in p.hashes.items()
+                        if receipt_stage(name) is not None and read.get(name) != value)
 
 
 def approval_target(run: Path, plan: Packet, requested: str | None = None) -> tuple[Packet, Path]:
@@ -449,11 +481,15 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
     source_revision = p.revision()
     mode = json.loads(p.documents["study"])["mode"]
     actor = "human" if mode == "interactive" else "auto"
+    late: list[str] = []
     if phase == "approval":
         p, path = approval_target(run, p, approved_revision)
+        rev = p.revision()
     else:
-        path = receipt_path(run, phase, source_revision)
-    rev = p.revision()
+        # At the reader's cap, review receipts recorded since its last round leave the draft it read.
+        rev, late = (reviewed_draft(run, p) if phase == "presentation" and not new_cycle
+                     else (source_revision, []))
+        path = receipt_path(run, phase, rev)
     if action == "approve-human" and (actor != "human" or approved_revision != rev):
         raise ValueError("explicit human approval must name the current reviewed revision in interactive mode")
     if action == "approve-auto" and actor != "auto":
@@ -508,6 +544,11 @@ def run_action(action: str, run: Path, approved_revision: str | None, new_cycle:
             ledger.save()
         decision = reviews[0]["decision"]
     log(f"{phase} review: {path}")
+    if rev != source_revision:
+        log(f"{phase} review: the draft is the one the last round of its cycle read (revision {rev}, the cap); "
+            f"only review receipts this helper wrote changed since ({', '.join(late) or 'removed ones'}), so that "
+            "round's decision stands. cap-findings lists their stages' open blocking findings, which the reader "
+            "did not see.")
     if action == "verify-evidence":
         print(f"{decision} {path}")
         return 0
@@ -550,35 +591,46 @@ def load_receipt(path: Path, revision: str, roles) -> dict:
 def cap_findings(run: Path) -> int:
     """Print, as JSON, the blocking findings the run went past at a round cap: the
     automatic approver's (and the plan critics' open ones) for a revision the
-    approver still asked to revise in its last round, and the
-    final reader's when its last round left the current draft with blocking
-    findings open. `markdown` lists them for the report and the run directory,
-    `notes` gives one line per stage for the run's outcome, and `ids` names them."""
+    approver still asked to revise in its last round; the final reader's when its
+    last round left the current draft with blocking findings open; and, at the
+    reader's cap, whatever it decided, the open ones of every stage whose receipts
+    were recorded after that round (reviewed_draft), which the reader did not see.
+    `markdown`
+    lists them for the report and the run directory, `notes` gives one line per
+    stage for the run's outcome, and `ids` names them."""
     sections, notes, ids = [], [], []
 
     def listing(findings: list[dict]) -> list[str]:
         return [f"- **{f['id']}** ({f['title']}): {Ledger.current(f)['text']}" for f in findings]
 
     # The approver's capped round is its last one, whatever the plan files hold now
-    # (a report step may have edited one since); the reader's is the current draft's.
-    stages = []
+    # (a report step may have edited one since); the reader's is the current draft's
+    # (reviewed_draft: review receipts recorded since its last round leave it the same).
+    stages, late = [], []
     approval = Ledger.load(run, "approval")
     if approval.rounds:
         stages.append(("approval", approval.rounds[-1]["revision"]))
     if any((run / name).is_file() for name in DRAFTS):
-        stages.append(("presentation", packet(run, "presentation").revision()))
+        revision, late = reviewed_draft(run, packet(run, "presentation"))
+        stages.append(("presentation", revision))
     for stage, revision in stages:
         ledger = Ledger.load(run, stage)
         receipt = receipt_path(run, stage, revision)
         # the current draft may not have been reviewed yet; every approval round has its receipt
         if (stage == "presentation" and not receipt.is_file()) or not at_round_cap(run, stage, revision):
             continue
-        if json.loads(receipt.read_text())["reviews"][0]["decision"] != "revise":
+        decision = json.loads(receipt.read_text())["reviews"][0]["decision"]
+        # The stages whose receipts the reader's last round did not see, and their open blocking findings.
+        later = [s for s in STAGES if stage == "presentation" and decision != "stop"
+                 and any(receipt_stage(name) == s for name in late)]
+        late_open = [f for s in later for f in Ledger.load(run, s).open_blocking()]
+        if decision != "revise" and not late_open:
             continue
-        open_findings = ledger.open_blocking()
+        open_findings = ledger.open_blocking() if decision == "revise" else []
         rounds = ledger.rounds_in_cycle()
         listed = named(open_findings)
         ids.extend(f["id"] for f in open_findings)
+        ids.extend(f["id"] for f in late_open)   # each id carries its stage's prefix
         if stage == "approval":
             plan_open = Ledger.load(run, "plan").open_blocking()
             ids.extend(f["id"] for f in plan_open)
@@ -603,13 +655,25 @@ def cap_findings(run: Path) -> int:
             notes.append(f"The automatic approver still asked to revise at its round cap ({rounds} rounds); "
                          f"open blocking findings: {listed} (open-review-findings.md). {authorization}")
         else:
-            sections.append("\n".join([
-                "## Final reading at its round cap", "",
-                f"The final reader still asked for revision in its last round ({rounds} rounds, the cap), so this "
-                f"draft (revision {revision}) was released as reviewed, with these blocking findings open:", "",
-                *listing(open_findings)]))
-            notes.append(f"Released at the final reader's round cap ({rounds} rounds) with blocking findings open: "
-                         f"{listed} (open-review-findings.md)")
+            reviews = " and ".join(later) + " review" + ("s" if len(later) > 1 else "")
+            if decision == "revise":
+                read = [f"The final reader still asked for revision in its last round ({rounds} rounds, the cap), so "
+                        f"this draft (revision {revision}) was released as reviewed, with these blocking findings "
+                        "open:", "", *listing(open_findings)]
+                note = f"Released at the final reader's round cap ({rounds} rounds) with blocking findings open: {listed}"
+                if late_open:
+                    note += f"; and, from the {reviews} recorded after its last round, {named(late_open)}"
+            else:
+                read = [f"The final reader approved this draft (revision {revision}) in its last round ({rounds} "
+                        "rounds, the cap)."]
+                note = (f"Released as the final reader approved it at its round cap ({rounds} rounds), with blocking "
+                        f"findings open from the {reviews} recorded after its last round: {named(late_open)}")
+            if late_open:
+                read += ["", f"The runner recorded the {reviews} after that round ({', '.join(late)}). The draft did "
+                         f"not change, so it was released as the reader read it, with these blocking findings of the "
+                         f"{reviews} open as well, which the reader did not see:", "", *listing(late_open)]
+            sections.append("\n".join(["## Final reading at its round cap", "", *read]))
+            notes.append(note + " (open-review-findings.md)")
     markdown = ""
     if sections:
         markdown = "# Review findings left open at a round cap\n\n" + "\n\n".join(sections) + "\n"

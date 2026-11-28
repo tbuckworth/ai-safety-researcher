@@ -203,20 +203,24 @@ release_held_report() {
 release_at_review_cap() {
     # After the final reader's check exited 5 (its round cap, blocking findings
     # open): true when the current draft is the one its last round read
-    # (verify-presentation exits 5 as well), which an autonomous run releases with
-    # those findings listed (record_cap_findings); false when the draft changed
-    # after that round, so that no reviewed draft is left to release.
+    # (verify-presentation exits 5 as well; a review receipt recorded since, such
+    # as the release-time evidence round's, leaves it the draft the reader read),
+    # which an autonomous run releases with those findings listed, and the open
+    # ones of such a later review (record_cap_findings); false when the draft
+    # changed after that round, so that no reviewed draft is left to release.
     local rc=0
     review_run verify-presentation > /dev/null || rc=$?
     [ "$rc" -eq 5 ] || return 1
-    log "The final reader reached its round cap with blocking findings open: releasing the draft it read, with those findings listed in open-review-findings.md."
+    log "The final reader reached its round cap with blocking findings open: releasing the draft it read, with those findings (and those of any review recorded since) listed in open-review-findings.md."
 }
 
 # shellcheck disable=SC2034 # CAP_NOTES is read by researcher-cron.sh (the outcome's notes).
 record_cap_findings() {
     # Lists the blocking findings the run went past at a round cap (the
     # automatic approver's, when the experiments ran on the revision it reviewed
-    # last; the final reader's, when its last draft was released) from
+    # last; the final reader's, when its last draft was released; and those of any
+    # review recorded after the reader's last round, which it did not see, even
+    # when the reader approved at its cap) from
     # methods_review.py cap-findings: in open-review-findings.md, in state.md
     # (open_review_findings) and in CAP_NOTES, the outcome's notes, which the
     # email and the issue comment carry. When the listing fails, the run goes on
